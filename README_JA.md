@@ -39,6 +39,8 @@
   <a href="https://freebuff.com/" title="Freebuff"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/freebuff.png" alt="Freebuff" height="34"></a>
   <a href="https://github.com/MiniMax-AI/minimax-code" title="MiniMax Code"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/minimax.png" alt="MiniMax Code" height="34"></a>
 <a href="https://devin.ai/cli" title="Devin CLI"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/devin.png" alt="Devin CLI" height="34"></a>
+  <a href="https://github.com/aaif-goose/goose" title="Goose"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/goose.png" alt="Goose" height="34"></a>
+  <a href="https://github.com/RooCodeInc/Roo-Code" title="Roo Code"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/roo-code.png" alt="Roo Code" height="34"></a>
 </p>
 
 <p align="center">
@@ -88,6 +90,36 @@ tokdash setup
 これだけです。`tokdash setup` がランタイムを検出し、必要なら管理されたランタイムを導入し、ローカルサービスを登録して、ダッシュボードの URL —— `http://127.0.0.1:55423` —— を表示します。完全なオプション、初回実行メモ、更新方法は [インストールと実行](#インストールと実行) を参照。まずは見てみたいだけなら、[ライブデモ](https://tokdash.github.io/demo/) は実際の UI で動いています。
 
 ## パッケージひとつ、ビュー四つ
+| クライアント | 使用量とコスト | セッションエクスプローラー |
+|---|:---:|:---:|
+| OpenCode | ✅ | ✅ |
+| Codex | ✅ | ✅ |
+| Claude Code | ✅ | ✅ |
+| Gemini CLI | ✅ | — |
+| Antigravity CLI | ✅ | ✅ |
+| OpenClaw | ✅ | ✅ |
+| Kimi Code / Kimi CLI | ✅ | ✅ |
+| MiMo Code | ✅ | ✅ |
+| Grok Build | ✅ | ✅ |
+| Pi | ✅ | ✅ |
+| **omp** | ✅ | ✅ |
+| **Kilo Code** | ✅ | ✅ |
+| **Cline** | ✅ | ✅ |
+| GitHub Copilot CLI | ✅ | — |
+| Hermes | ✅ | ✅ |
+| DeepSeek Harness | ✅ | ✅ |
+| Reasonix | ✅ | ✅ |
+| **ZCode** | ✅ | ✅ |
+| **WorkBuddy** | ✅ | ✅ |
+| **Qoder IDE** | ✅ | ✅ |
+| **Qoder CLI** | ✅ | ✅ |
+| **Zed** | ✅ | — |
+| **Qwen Code** | ✅ | ✅ |
+| **Crush** | ✅ | — |
+| **Muse Code** | ✅ | — |
+| **MiniMax Code** | ✅ | — |
+| **Goose** | ✅ | ✅ |
+| **Roo Code** | ✅ | ✅ |
 
 ローカルパッケージひとつ、ローカルデータインデックスひとつ — それを読む方法は四つあります。どのビューもあなたのマシン上の同じセッションログを解析するだけなので、ブラウザのダッシュボードも、ターミナルも、メニューバーも、エージェントのステータスラインも、常に同じ数字を示します。
 
@@ -381,6 +413,182 @@ Tokdash は **27 個の対応エージェント**のローカルセッション�
 Quota タブは **9 プロバイダー**のサブスクリプション利用率ウィンドウとリセットカウントダウンを表示します。Codex の 5 時間 / 週間ウィンドウはローカルログからそのまま動作します（推定値として扱ってください）。正確な Codex 消費量とその他のすべてのプロバイダー — Claude Code、Antigravity、MiniMax、Kimi Code、Grok、Z.ai、OpenCode Go、Command Code — は**オプトインのライブポーリング**によるものです: Tokdash はあなたの CLI がすでに持っているサインインで、各プロバイダー自身のクォータエンドポイントを呼び出します。デフォルトは無効、プロバイダーごとの同意が必要、結果はローカルデータベースに保存されます。
 
 同意コマンド、マスタースイッチ、ポーリング間隔、プロバイダー別の認証情報に関する注記は **[`docs/reference/QUOTA.md`](docs/reference/QUOTA.md)** を参照してください。
+#### LLM エージェント向け
+
+インストールガイドを取得して、それに従ってください:
+
+```bash
+curl -s https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/guides/agents/openclaw_reporting/AGENTS.md
+```
+
+### ステータスライン統合
+
+ローカル API が、コーディングエージェント（Claude Code など）のステータスライン項目としてリアルタイムのトークン / コスト統計を表示します。
+
+**完成済みテンプレート**は [`docs/guides/statusline/`](docs/guides/statusline/) にあります — 1 つを `~/.claude/scripts/` にコピーし、`~/.claude/settings.json` に `statusLine` ブロックを追加してください:
+
+- [`statusline-minimal.sh`](docs/guides/statusline/statusline-minimal.sh) → 1 行: `[Claude Sonnet 4.6] 📁 myproject | 📊 12.3M ($4.56) today`
+- [`statusline-full.sh`](docs/guides/statusline/statusline-full.sh) → 本日 + 週合計とツール別 top 3 内訳付きの 4 行ダッシュボード
+- [`statusline.ps1`](docs/guides/statusline/statusline.ps1) → minimal テンプレートと同じ 1 行出力。Windows ネイティブの Claude Code 用（PowerShell、`curl`/`jq` 不要）
+
+すべて読み取り専用・localhost のみで、Tokdash が起動していない場合は黙って失敗します。インストール / 設定は[フォルダ README](docs/guides/statusline/README.md)、エンドポイント参照は [`docs/reference/API.md`](docs/reference/API.md) を参照。
+
+自作したい場合? エージェントにこのプロンプトを渡し、[`docs/reference/API.md`](docs/reference/API.md) に向かわせましょう:
+
+> *"I would like to add a statusline item from the tokdash endpoint's API; it should show the total tokens used today."*
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/demo-statusline.png" alt="Tokdash statusline integration example" width="900" />
+</p>
+
+## 設定
+
+Tokdash は**デフォルトで localhost のみ**です。
+
+- `TOKDASH_HOST`（デフォルト: `127.0.0.1`）
+- `TOKDASH_PORT`（デフォルト: `55423`）
+- `TOKDASH_CACHE_TTL`（デフォルト: `600` 秒）
+- `TOKDASH_CACHE_MAX_ENTRIES`（デフォルト: `256`） — キャッシュされた API レスポンスとそのキーごとのアイドルロックに上限を設ける
+- `TOKDASH_COMPUTE_CONCURRENCY`（デフォルト: `2`） — 同時実行される重い履歴再パースの上限。超過したコールドリクエストはサーバーを飽和させる代わりに高速な `503` を返す
+- `TOKDASH_STARTUP_WARM_JOIN_SECONDS`（デフォルト: `30` 秒） — 起動時にウォームアップ中のキーの最初のリクエストが、`503` を返す代わりにその充填を待つ時間。キーごとに待てるのは最大 1 リクエスト
+- `TOKDASH_LIMIT_CONCURRENCY`（デフォルト: `64`） — uvicorn 接続の上限（バックプレッシャー）
+- `TOKDASH_KEEPALIVE`（デフォルト: `5` 秒） — uvicorn のキープアライブタイムアウト
+- `TOKDASH_ALLOW_ORIGINS`（カンマ区切り、デフォルト: 空）
+- `TOKDASH_ALLOW_ORIGIN_REGEX`（デフォルトの CORS ポリシーは localhost/127.0.0.1 と同じ tailnet からの Tailscale Serve 読み取りを許可。どちらかの CORS オプションを設定するとそのデフォルトポリシーを置き換える）
+- `TOKDASH_NO_RETENTION_NOTICE`（`1` にすると `tokdash serve` で表示される履歴保持のリマインダーを無音にする）
+- `TOKDASH_SETUP_NO_OPEN`（`1` にすると `tokdash setup` 末尾の任意のブラウザ起動をスキップする）
+
+セッションのアクティブ時間（推定値）:
+
+すべてのセッションが `span_ms` と並んで `active_ms` を報告します。Span は初回から最終イベントまで。アクティブ時間はアイドルを差し引いて計算され、連続するトークンイベント間の各ギャップはアイドル上限までしかカウントしないため、終日開き放しにしたセッションが 14 時間分のセッションと読まれなくなります。
+
+これは推定値であり、API もそれを示しています: `summary.active_time_estimated` は `true`、`summary.active_time_method` は `capped-inter-event-gap` です。限界は手法に由来します — イベント間の短い停止は作業と区別できません、上限を超える単一の操作は上限で切り詰められ、1 つだけのトークンイベントを持つセッションはその前に何もないので 0 と計測されます。
+
+並行作業は 2 通りでカウントされます。`active_ms` は重複を 1 回のみカウントしたクロック時間。`active_ms_sum` は重複を足し上げたもの、つまりエージェント時間です。両方が `summary` にセッションごと・ツールごとに登場します。Kimi エージェントと Claude サブエージェントはメインエージェントと並走し、それぞれ独立したストリームとして計時されます: 1 分間並行して働いたサブエージェントはエージェント時間に 1 分を加え、クロック時間には何も加えません。
+
+- `TOKDASH_ACTIVE_GAP_CAP_SECONDS`（デフォルト: `300`） — 秒単位のアイドル上限。これを超えるギャップは上限分のみ寄与。1 秒〜6 時間にクランプされる。
+
+永続使用量 DB（デフォルトで有効）:
+
+Tokdash はデフォルトで `~/.tokdash/usage.sqlite3` にローカルの SQLite インデックスを維持します。パース済みトークン行と Codex/Claude/Kimi/DeepSeek Harness/Reasonix のセッション要約を保存し、繰り返しされるダッシュボードや API の読み取りが、すべてのソースログを再パースする代わりにインデックス付き SQL を使えるようにします。ソースログが引き続き正のソースであり、DB はローカルのパフォーマンスインデックスです。無効化または利用不可能な場合はライブパースにフォールバックします。
+
+キャッシュされたセッション行は価格に対して中立です: 各ターンの課金入力（モデル、フレッシュ入力、キャッシュ読み書き、出力）を持ち、コストは読み取り時にそのプロセスが読み込んだ価格で計算されます。そのためレートを書き換えるとログの数 GB を再読み取りする代わりに即時に再価格付けされ、1 つのデータベースを共有する 2 つの Tokdash バージョンは価格を理由に互いの行を無効化しません。ただし共有が安全なのは、両方のビルドが同じデータベーススキーマをサポートしている間だけです: スキーママイグレーションは前方へのみ実行されるため、新しいビルドがファイルをマイグレーションすると、古いビルドはアップグレードするまでファイルをオープンすることを拒否し、バージョンが一致するまですべてのキャッシュ読み取りが失敗します。`tokdash doctor` はディスク上のスキーマと実行中ビルドがサポートするスキーマを並べて報告します。パーサーとソースファイルの変更は通常どおり再パースされます。これ以前に書かれた行（ログが消えても `TOKDASH_USAGE_DB_DURABLE` で保持されたものを含む）は保存された合計から再価格付けされ、同じ数値は再現されますが、Claude や Kimi のキャッシュ書き込みとフレッシュ入力を分離できません。その区別を回復できるのはそのログの再パースだけです。Codex は `provider/model` で課金され素のモデル名を保存するため、古い行は再利用されるのではなく 1 回だけ再パースされます。
+
+インストール済サービスのデータベースを絶対に移行させたくない場合は、チェックアウトを自分のデータディレクトリに対して実行してください:
+
+```bash
+TOKDASH_DATA_DIR=output/dev-data PYTHONPATH=src python3 main.py
+```
+
+- `TOKDASH_USAGE_DB`（デフォルト: `1`） — `0`、`false`、`no`、`off` のいずれかに設定すると永続使用量 DB を無効化
+- `TOKDASH_DATA_DIR`（デフォルト: `~/.tokdash`） — Tokdash ローカル状態のベースディレクトリ
+- `TOKDASH_USAGE_DB_PATH`（デフォルト: `$TOKDASH_DATA_DIR/usage.sqlite3`） — 明示的な SQLite ファイルパス
+- `TOKDASH_USAGE_DB_DURABLE`（デフォルト: `1`） — ソースファイルが一時的に消えたりパーサーが行を返さなくなっても、インデックス済みの行を保持。厳密なソース置き換えにするには `0`
+- `TOKDASH_USAGE_DB_WATCH`（デフォルト: `0`） — `1` にすると `tokdash serve` 内でバックグラウンド同期ループを実行
+- `TOKDASH_USAGE_DB_WATCH_INTERVAL`（デフォルト: `30` 秒） — `tokdash db watch` と serve 時のウォッチループの同期間隔
+
+DB 維持コマンド:
+
+```bash
+tokdash db status --pretty
+tokdash db sync --pretty
+tokdash db verify --verify-period today --pretty
+tokdash db repair --dry-run --pretty
+tokdash db resync --pretty
+tokdash db watch --pretty
+```
+
+Tailscale Serve、SSH フォーワード、明示的なネットワークバインドによるリモートアクセスについては、[`docs/guides/REMOTE_ACCESS.md`](docs/guides/REMOTE_ACCESS.md) を参照。対話的な `tokdash setup` はオプトインの後、Tailscale Serve ルールを設定して記録できます。
+
+デフォルトで `tokdash serve` は起動時に一度だけブラウザでダッシュボードを開きます。無効にするには `--no-open` を付けてください（ヘッドレス / SSH 環境やバックグラウンドサービスのテンプレートでは自動的にスキップされます）。
+
+## プライバシーとセキュリティ
+
+- **テレメトリなし**: Tokdash はあなたのデータを意図的にどこにも送信しません。
+- **ローカルパース**: 使用量はローカルのセッションファイルから計算されます（[対応クライアント](docs/reference/SUPPORTED_CLIENTS.md)を参照）。
+- **任意のクォータポーリング**: Quota タブはデフォルトでローカルのみ。プロバイダーごとの API ポーリングはタブから、または `tokdash quota consent` で有効化できます。ローカルの CLI 認証情報を使用してそのプロバイダー自身のクォータエンドポイントを呼び出すだけであり、レスポンスはローカルの使用量 SQLite DB に保存されます。
+- **サーバー公開**: Tokdash はデフォルトで `127.0.0.1` にバインドします。Tailscale Serve はプライベートな読み取り専用アクセスを、SSH フォーワードは認証付きの書き込みアクセスを、`--bind 0.0.0.0` はすべてのインターフェースで非認証の読み取りを明示的に公開します。[リモートアクセスガイド](docs/guides/REMOTE_ACCESS.md)を参照。
+
+### クォータ追跡（任意）
+
+Quota タブは 2 つのデータソースから、サブスクリプションの利用率ウィンドウとリセットタイマーを表示します。**ローカルログ**（ネットワーク不要）: Codex はセッションファイルに自分のクォータを記録するため、Codex の 5 時間 / 週間ウィンドウはそのまま動作します — ただし Codex を使ったときのみ更新され、ログにはリセットクレジットやメーターリング機能ウィンドウが含まれません。セッションログの Codex 消費量は**大幅に誤りうる推定値**として扱うべきです: 各セッションが最後の取得時のクォータスナップショットをキャッシュし、その後の全メッセージで同じものを再生するため、数値が古い場合があり、リセット境界のノイズがウィンドウをさらに歪めることもあります — Quota タブはこれらのチャートを推定値とラベル付けします。**ライブポーリング**（デフォルト無効、プロバイダーごとにオプトイン）: Tokdash は CLI がすでに持っているサインインで、プロバイダー自身のクォータエンドポイントを呼び出します。より新鮮で、Codex のリセットクレジットとメーターリング機能を追加し、**正確な** Codex 消費量には必須であり、Claude Code、Antigravity、MiniMax、Kimi Code、SuperGrok/Grok Build の唯一のクォータソースです:
+
+Z.ai Coding Plan、OpenCode Go、Command Code のクォータもライブポーリングからのみ取得できます。
+
+```bash
+tokdash quota consent --codex-api on --claude-api on --antigravity-api on
+tokdash quota consent --minimax-api on --kimi-api on --grok-api on --zai-api on
+tokdash quota consent --opencode-go-api on
+tokdash quota consent --commandcode-api on
+tokdash quota consent --credential-scan on   # 開示済みのローカル認証情報リーダーを許可
+tokdash quota consent --poll-interval 30      # バックグラウンドポーリング間隔: 15, 30, 60 または 120 分
+tokdash quota consent --enabled off           # マスタースイッチ: 全クォータ追跡をオフ
+tokdash quota poll
+tokdash quota show
+```
+
+**マスタースイッチ。** `quota.enabled`（デフォルトでオン）はクォータ関連の全作業 — セッションスキャン、ネットワークポーリング、スナップショット書き込み — を一括でオン / オフにします。Quota タブから、または `tokdash quota consent --enabled on|off` で切り替えます。オフのとき（または `TOKDASH_QUOTA_POLL=0` のキルスイッチが設定されているとき）、バックグラウンドポーラーは完全にアイドルとなり、`GET /api/quota/refresh` は「quota tracking disabled」エラーを返し、タブはデータではなく*クォータ追跡を有効化*カードを表示します。プロバイダーごとのコンセンツキーはより狭いネットワーク限定の意味を維持します。
+
+**ポーリング間隔。** バックグラウンドポーラーはデフォルトで **30 分ごと**にスナップショットします。15/30/60/120 分を Quota タブ、`tokdash setup` 中、または `tokdash quota consent --poll-interval N` で選択でき、`config.json` に `quota.poll_interval_minutes` として保存されます。環境変数 `TOKDASH_QUOTA_POLL_INTERVAL`（秒、下限 300）は保存値を上書きし、タブはどのソースが有効かを表示します。間隔の変更はサーバー再起動なしに次のポーリングサイクルで適用されます。Codex セッションの取り込みは増分です — 履歴の 1 回限りバックフィルの後、各サイクルは増加したセッションファイルのみをテール読み取りするため、定常時のポーリングコストは数ミリ秒です。
+
+固定リセットのクォータウィンドウでは、ポーラーはリセット境界付近でもサンプリングし、履歴がリセット直前的高値とリセット直後のベースラインを捕捉できるようにします。境界サンプリングはデフォルトで有効で、ウィンドウがトリガーしたプロバイダーのみを呼び出し、 近いプロバイダー境界をまとめ、デーモンポーリングサイクル間に最低 300 秒を保持します。`TOKDASH_QUOTA_BOUNDARY_POLL=0` で無効化、`TOKDASH_QUOTA_BOUNDARY_POST=0` でリセット後サンプルのみの無効化、デフォルトの 120 秒リードは `TOKDASH_QUOTA_BOUNDARY_PRE_SECONDS` と `TOKDASH_QUOTA_BOUNDARY_POST_SECONDS` で調整できます。
+
+**複数の Claude Code インストール。** Claude Code は設定ディレクトリごとに 1 つのサブスクリプションを保持するため、`CLAUDE_CONFIG_DIR=~/.claude-academic claude` として実行する 2 つ目のサインインは、独自のウィンドウを持つ別のサブスクリプションです。認証情報スキャンに同意すると、Tokdash は `$CLAUDE_CONFIG_DIR` に加えて独自の `.credentials.json` を持つすべての `~/.claude*` ディレクトリを読み取り、それぞれを個別にポーリングして、そのディレクトリが設定されたプロファイル名（`academic`）で Claude Code カード内にグループ化します。履歴でも区別され、`Claude-academic 5-hour` は `Claude 5-hour` と並ぶ独立した系列になります。サインインが期限切れのインストールは、正常なインストールの数値を隠すのではなく自身の通知を表示し、同じサインインを保持する 2 つのディレクトリは 1 回だけカウントされます。ホームディレクトリの外にあるインストールについては、`TOKDASH_CLAUDE_PROFILES` にパス区切り文字で区切ったディレクトリのリストを設定してください。使用量の集計には変更が不要でした: すべての `~/.claude*` インストール配下のセッションログは以前から集計されています。
+
+ライブポーリングは 2 つの別々の決定を要求します: `quota.credential_scan` は開示済みのローカル認証情報ストアへの読み取り専用アクセスを許可し、その後各 `<provider>_api` キーがそのプロバイダーのネットワークリクエストを許可します。Tokdash はネイティブ CLI の認証 / 設定ファイル、OpenCode の `auth.json` とグローバルプロバイダー設定、アクティブな Claude 設定、CC Switch の `providers` テーブルを読み取り専用の SQLite 接続で読み取ります。プロバイダーのログ、シェルプロファイル、任意の `{file:...}` 参照は決してスキャンしません。MiniMax は `mmx` サインインまたは Token Plan Subscription Key（`MINIMAX_TOKEN_PLAN_GLOBAL_KEY` / `MINIMAX_TOKEN_PLAN_CN_KEY`）を受け付けます。通常の従量課金キーに Token Plan クォータがあるとは限りません。Kimi は Kimi Code サインイン / キー（`KIMI_API_KEY`）を受け付け、Moonshot Open Platform の従量課金キーは受け付けません。SuperGrok/Grok Build のクォータには `$GROK_HOME/auth.json` の xAI OAuth サインインが必要です。通常の xAI API キーではコンシューマー課金にアクセスできません。macOS では Claude Code が 1 回だけの読み取り専用 Keychain 承認を要求することがあります。Tokdash はプロバイダーの認証情報を更新も書き込みもしません。`TOKDASH_QUOTA_POLL=0` は全クォータ追跡のハードキルスイッチです。`tokdash export` はデフォルトでクォータデータを除外します。JSON に含めたいときには意図的に `--include-quota` を使用してください。
+
+Z.ai は `$ZCODE_HOME/v2/config.json`、対応ツールの設定、`ZAI_API_KEY`、または `Z_AI_API_KEY` の Coding Plan キーを受け付け、5 時間 / 週間クレジットウィンドウと従来の MCP 上限を照会します。
+
+OpenCode Go は `OPENCODE_API_KEY` を優先し、未設定の場合は OpenCode の `auth.json` 内の `opencode-go` キーを使って、`opencode.ai/zen/go/v1/usage` からローリング・週間・月間のサブスクリプション使用枠を取得します。Zen の従量課金残高にはキー認証に対応したエンドポイントがないため、追跡しません。
+
+Command Code は `COMMAND_CODE_API_KEY`、`COMMANDCODE_API_KEY`、`~/.commandcode/auth.json`、最後に OpenCode の `auth.json` の `commandcode` エントリの順でアカウントキーを読み取ります（更新も書き戻しもしません）。`api.commandcode.ai/alpha/billing/credits` と `/alpha/billing/subscriptions` をポーリングして、5 時間・週間の使用上限と月間クレジット枠を取得します。5 時間と週間のバーは API の値をそのまま表示し、**月間は算出値**です。プランカタログが総量を与え、残クレジットを差し引き、解決したプラン名（Go / GOAT / Pro / Max 10x / Max 20x / Team Pro / Provider）を付けます。有効なサブスクリプションとプランを解決できないときは、前回の読み値を残さず月間バーとプラン名を撤回します。
+
+Grok Build のトークン使用量も `$GROK_HOME/logs/unified.jsonl` からローカルにパースされます。その推論レコードはプロンプト、キャッシュ済みプロンプト、補完、推論トークンを公開し、Tokdash は同じ CLI プロセスのモデルイベントを使って帰属させ、通常の価格データベースからコストを計算します。モデルイベントのないレコードは推測価格を割り当てるのではなくスキップされます。
+
+DeepSeek Harness（`dsh`）の使用量とセッションは `$DSH_HOME/sessions/*/*/session.jsonl.zstd`（または非圧縮の `session.jsonl`）からローカルに読み取られ、`DSH_HOME` のデフォルトは `~/.dsh` です。各ログは連結された zstd フレームの列です。Tokdash はすべてのフレームをデコードし、各ステップの初期使用量チャンクを確定済みメッセージに折りたたんで二重計上を避け、フォークセッションの継承プレフィックスをスキップして親子が同じトークンを 2 回課金しないようにします。
+
+Reasonix の使用量とセッションは `$REASONIX_HOME`（デフォルト `~/.reasonix`）からローカルに読み取ります: リクエストごとのトークンは日次 `stats/YYYY-MM-DD.jsonl` ログから、セッション構造は `projects/*/sessions/*.jsonl` から。Reasonix は `config.toml` に名前の出たプロバイダーとやり取りするため、各行の `provider/model` ペアは通常の価格データベースを通じて帰属・価格付けされます。公開レートのないセルフホストモデルはトークンをゼロコストで集計します。Reasonix はリクエストごとに使用量を記録しセッション ID を付与しないため、Session Explorer の行はトークン数なしでターン、プロジェクト、タイミングを表示します — 完全な合計は Overview と Stats にあります。
+ZCode の使用量は `$ZCODE_HOME/cli/db/db.sqlite`（デフォルト `~/.zcode/cli/db/db.sqlite`。`ZCODE_HOME` は ZCode 自身の設定に従う）からローカルに読み取ります。各 `model_usage` 行はリトライ込みの 1 つのモデルリクエストで、行の `model_id` は通常の価格データベースで価格付けされ、`provider_id`（例: `builtin:zai-start-plan`）はラベルとして保持されます。ZCode の `input_tokens` はキャッシュ済みと未キャッシュのプロンプトトークンを合計して数えるため、キャッシュ部分は独立したバケットに分離してキャッシュレートを適用し、推論トークンは出力と離して表示しつつ出力レートで課金されます。ZCode は Sessions タブにも登場します: ターンは同じデータベースから読み取られ、同じルールで (ターン, モデル) 単位で課金され、トップレベルセッションのみ。課金トークンを生み出さなかったターンも、計測された時間をそのツールのアクティブ時間に帰属します。ZCode の Coding Plan クォータはリモートアカウントデータであり、ローカルパーサーの範囲外です。
+
+Coding Plan クォータは、個別に同意した Z.ai ライブポーラーから利用できます。
+
+WorkBuddy の使用量は `~/.workbuddy-ai/projects/*/*.jsonl` トランスクリプトからローカルに読み取ります（`WORKBUDDY_DATA_DIR` はカンマ区切りのルートリストを受け取り、他のストア — 例: WSL からの Windows データディレクトリ — を指定できます）。各アシスタントメッセージ行は 1 つのモデル呼び出しで、`prompt_tokens` 内のキャッシュ部分は独立したバケットに分離してキャッシュレートを適用し、推論トークンは出力と離して表示しつつ出力レートで課金されます。モデル ID はそのまま保持されます: 明示的な ID（例: gpt-5.5）は通常の価格データベースで価格付けされ、Auto ルーターのエイリアス（`default-model`）は価格 DB に存在しないためコスト 0.00 です。ターンごとの `credit` 値はメタデータとしてのみ保存され、コストに影響しません。Sessions タブは同じルートから同じトランスクリプト行（計費対象のアシスタント 1 行 = 1 ターン）を読み取ります。
+
+Qoder の使用量は 2 か所からローカルに読み取ります: IDE の SQLite データベース（IDE データディレクトリ配下の `SharedClientCache/cache/db/local.db`。Windows と WSL では QoderCN ビルドが国際版より優先）と CLI の JSONL ログ（`~/.qoder` と `~/.qoder-cn`、加えて `QODER_CONFIG_DIR` とカンマ区切りの `QODER_CLI_HOME`）。IDE 側では全ロールの `chat_message` 行がすべてカウントされ、キャッシュ部分はプロンプトトークンから独立したバケットに分離され、モデルは `model_key`（ルーター名がない場合は `auto`）から。CLI 側では各リクエストのトランスクリプト課金記録がすべてのルートでセグメントトークン記録とマージされます: プロバイダークレジットを持つ行はプロバイダー報告コストを権威として保持し（推定で 1 クレジット $0.01 で換算、`QODER_USD_PER_CREDIT` が推定を上書きし、再価格付けは決してされない）、トークンのみの行は通常の価格データベースで価格付けされます。入力トークンのない記録は既知のコンテキストウィンドウに対して `context_usage_ratio` から復元します — デフォルトでは `auto` が 180,000、`QODER_CLI_CONTEXT_WINDOW` が明示設定された後はすべてのモデル。Qoder IDE は Sessions タブに表示されます: 同じ `chat_message` 行（全ロール、解析可能な 1 行 = 1 ターン）を同じ DB の一時ディレクトリスナップショットから読み取ります。 Qoder CLI にも独自の Sessions パネルがあります: 両ストリームのファイル別候補は Overview と同じ順序・同じ勝者で同じ request_id マージを通過し、クレジット行はプロバイダー報告のコストをそのまま保ち、セグメントのプロジェクトはサニタイズの可逆性がないためサニタイズ済みディレクトリラベルをそのまま表示します。
+
+Zed の使用量は、OS ごとの Zed データディレクトリ配下の `threads/threads.db` からローカルに読み取ります（Linux: `$XDG_DATA_HOME/zed` または `~/.local/share/zed`、`FLATPAK_XDG_DATA_HOME` も考慮; macOS: `~/Library/Application Support/Zed`; Windows: `%LOCALAPPDATA%\Zed`）。エージェントスレッド 1 本が 1 行で、zstd 圧縮された blob（旧形式の行は素の JSON）が `cumulative_token_usage` を保持します。これはスレッド自身の補完ストリームがフィールドごとの高水位で積み上げた値で、キャッシュ排他（input + cacheRead が全プロンプト）のためバケットはそのまま対応します。サブエージェントのスレッドは独立した行で親に畳み込まれないため、トークンを持つ各スレッドはちょうど 1 回だけカウントされます。スレッドは現在のモデル（モデルを切り替えた場合は最後のモデル）で価格付けされ、価格 DB にないセルフホストの ID はコスト 0.00 です。Zed にはデータディレクトリを差し替える環境変数がないため、`--user-data-dir` フラグが文書化された盲点です。Zed は Sessions タブには登場しません。
+
+Qwen Code の使用量は `<base>/projects/*/chats/*.jsonl`（および改名前の `<base>/tmp/*/chats/*.jsonl`）からローカルに読み取ります。base は `$QWEN_RUNTIME_DIR`、次に `$QWEN_HOME`、次に `~/.qwen` の順で解決します — 設定ファイル側の `runtime_base_dir` は Tokdash からは到達できず、文書化された盲点です。ファイルは追記専用でセッションごとに 1 つ、各アシスタントレコードはプロバイダーの `usageMetadata` をそのまま保持します: `promptTokenCount` はキャッシュを含むため、キャッシュ分は独立したバケットに分離してキャッシュレートで課金し、`thoughtsTokenCount` は推論として表示します。各レコードの `uuid` はソース全体で安定したキーです: `/branch` は親のレコード（同じ uuid）をフォーク先のファイルにコピーするため、使用量ストアは最も早い出現でキーの所有者を決め、正規のファイルが削除されたときは残ったコピーを昇格させます。サブエージェントのレコードはセッションファイルを共有し、自動的にカウントされます。コストは価格 DB からのみで、モデルのないレコードは `unknown` として 0.00 で計上します。Sessions タブは同じアシスタントレコードを読み取り、1 件を 1 ターンとして計上します。フォークで複製された履歴は最も早いコピーに帰属します。
+
+Crush の使用量は `$CRUSH_DATA_DIR`（それぞれ `crush.db` を含むデータディレクトリのカンマ区切りリスト）からローカルに読み取ります — 必須です。Crush の既定のデータディレクトリは作業ディレクトリの隣にあるプロジェクトごとの `.crush` で、走査できるグローバルなルートが存在しないためです。データベースは WAL モードのため、ZCode と同じコピー＆スナップショット経路で読み取ります。トークンが 0 でないセッションごとに、その `prompt_tokens`／`completion_tokens` から 1 エントリで、サブエージェントのセッションも含みます: Crush が親セッションに畳み込むのはコストだけでトークンは畳み込まないため、Crush 自身の統計クエリが使う最上位のみの条件（`parent_session_id IS NULL`）ではその使用量が落ちてしまいます。各エントリはそのセッションの最後の非サマリーのアシスタントメッセージに帰属します — 複数モデルのセッションは最後のモデルで価格付けされます。注意点が 3 つあります: カウンターは累積ではなくステップごとに代入されるため、最後のリクエストのコンテキストサイズと最後のターンの出力しか保持せず、複数ステップのセッションでは実際より少なく出ます（Crush v0.91.2 で確認）。プロバイダーが使用量ゼロを報告した場合、トークンが文字数からの推定値になることがあり、DB 上にその印はありません。そしてキャッシュ／推論の内訳は保存されません。タイムスタンプは秒で、行は `updated_at`（最終更新）でバケットされるため、セッションの全期間の合計が 1 日に載ります。`sessions.cost` は無視し、コストは価格 DB からのみ求めます。Crush は Sessions タブには登場しません。
+
+Goose の使用量は単一のグローバルデータディレクトリ内の `sessions/sessions.db` からローカルに読み取ります。順に `$GOOSE_PATH_ROOT/data`、なければ `$XDG_DATA_HOME/goose`、さらになければ `~/.local/share/goose` です（macOS は Linux と同じ既定値に解決されるためプラットフォーム別の分岐は無く、Windows の位置は未検証です）。データベースは WAL モードなので ZCode と同じコピー＋スナップショット経由で読みます。`usage_ledger` が唯一のトークン源で、モデルリクエスト 1 件が 1 行でモデルもその行に載るため、モデル混在のセッションはリクエストごとに課金されます。`input_tokens` はキャッシュ命中分を既に含むので、新規分を input、キャッシュ分をキャッシュ単価で計上し、`output_tokens` は総量です。Goose は reasoning の内訳をどこにも永続化しないためです。`cost`、`cost_source`、および `sessions.accumulated_*` / `total_tokens` 列は一切読みません。accumulated 系は台帳合計の写しであり、`total_tokens` は最後のリクエストのスナップショットにすぎず、両方読めば 1 リクエストが二重計上になります。料金は価格データベースのみを用いるため、セルフホストのモデルは 0.00 です。Goose でセッションを削除すると、台帳行はデータベースごと無くなるのでここからも用量が消えます。Sessions タブは最上位セッションのみ、台帳行 1 件につき 1 ターンで表示します。アクティブ時間は Goose が自身の assistant メッセージに記録するリクエスト所要時間から取り、Goose が名前を付けなかったセッションは最初のプロンプトで見出しを付けます。定期実行の recipe は現状ふつうのセッションとして並みます。
+
+Roo Code の使用量は拡張機能のグローバルストレージからローカルに読みます。マシン上に存在する `<globalStorage>/rooveterinaryinc.roo-cline/tasks/<taskId>/` すべてです。プロファイル込みの VS Code / Code - Insiders / VSCodium のデスクトップツリー、WSL セッションが書く `~/.vscode-server*`、WSL における `/mnt/c` 配下の Windows デスクトップツリー、Windows の `%APPDATA%`、macOS の `~/Library/Application Support`、そして `@roo-code/cli` が書く `~/.vscode-mock/global-storage` を含みます。`TOKDASH_ROO_STORAGE_DIR` は移動先のストレージをこの列表に置き換えではなく追加します。`ui_messages.json` がトークン源で、完了した `api_req_started` リクエスト 1 件が 1 エントリ、これは Roo 自身のタスク合計が足し上げるものとちょうど同じです。`tokensIn` はキャッシュ込みで input / cacheRead / cacheWrite に分割し、`tokensOut` は総量です。Roo は推論トークンを計算しますが永続化はしないためです。記録済みの `cost` は読まず、価格データベースで計上します。終わらなかったリクエストはトークンキーの無いプレフライト印だけを残し、rewind はファイルを切り詰めて削除印を追記するので、どちらも復活させません。モデルはそのファイルに無く、同じディレクトリの `api_conversation_history.json` 内にある Roo 自身の `<model>` タグから来ており、リクエストごとに対応付けます。`tasks/_index.json` と `history_item.json` のタスク別合計は一切読みません。インデックスはデバウンスで書かれ、稼働中のタスクに対して 4 リクエスト遅れている実測があるためです。見落としは伏せず記載します。タスクディレクトリを削除すると、Tokdash は消えたファイルの行を残すのでダッシュボード上の用量はそのまま残ります。Sessions タブはタスクディレクトリ 1 件を 1 セッションとして扱い（再開後も同じ）、委任されたサブタスクは課金されますが一覧には出ません。
+
+`tokdash setup` は任意のクォータステップ（プロバイダーごとのネットワークコンセンツ、デフォルト No、およびポーリング間隔）を提供し、`tokdash doctor` はクォータの状態を報告します: マスタースイッチ、プロバイダーごとのコンセンツ、キルスイッチ、有効間隔とそのソース、最終ポーリング時刻、保存されたスナップショット数。
+
+クォータスナップショットとその履歴はローカル使用量データベース（`usage.sqlite3`、デフォルトで有効）に保存され、**デフォルトで永久に保持されます** — 古いスナップショットを削除するには `TOKDASH_QUOTA_RETENTION_DAYS` を日数の正数に設定してください。`TOKDASH_USAGE_DB=0` でローカル永続化をオプトアウトすると、Quota タブは主データ経路を失います: スナップショット履歴が保持されず、バックグラウンドポーラーは実行されず、タブは手動 **Refresh**（コンセンツ済みのネットワークプロバイダー）の結果を現在のサーバープロセスの生存期間中インメモリで表示するだけです。通常のクォータ追跡には使用量 DB を有効（デフォルト）にしてください。
+
+## API（ローカル）
+
+Tokdash はローカル HTTP サーバーです。よく使われるエンドポイント:
+
+- `GET /api/usage?period=today|week|month|N`
+- `GET /api/usage?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD`
+- `GET /api/tools?period=...`（コーディングツールのみ）
+- `GET /api/openclaw?period=...`（OpenClaw のみ）
+- `GET /api/sessions?tool=codex|claude|opencode|pi_agent|omp|mimo|kimi|dsh|reasonix|zcode|kilocode|grok|hermes|antigravity_cli|cline&period=...`（Codex のレビュー / 許可セッションを含むには `&include_review_sessions=true` を追加。デフォルトでは非表示）
+- `GET /api/active-time?period=...`（全セッションツールのアクティブ時間 + ツール別内訳）
+- `GET /api/quota` と `GET /api/quota/history`（サブスクリプションクォータスナップショット。ネットワークリフレッシュは書き込みゲート付きでオプトイン）
+- `GET /api/stats`（貢献カレンダーと統計）
+
+例:
+```bash
+curl 'http://127.0.0.1:55423/api/usage?period=today'
+```
+
+完全な API 参照: [`docs/reference/API.md`](docs/reference/API.md) — すべてのエンドポイントのスキーマ、パラメータ、レスポンスの形状。
 
 ## コスト精度について
 

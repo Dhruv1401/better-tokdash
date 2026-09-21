@@ -39,6 +39,8 @@
   <a href="https://freebuff.com/" title="Freebuff"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/freebuff.png" alt="Freebuff" height="34"></a>
   <a href="https://github.com/MiniMax-AI/minimax-code" title="MiniMax Code"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/minimax.png" alt="MiniMax Code" height="34"></a>
 <a href="https://devin.ai/cli" title="Devin CLI"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/devin.png" alt="Devin CLI" height="34"></a>
+  <a href="https://github.com/aaif-goose/goose" title="Goose"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/goose.png" alt="Goose" height="34"></a>
+  <a href="https://github.com/RooCodeInc/Roo-Code" title="Roo Code"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/roo-code.png" alt="Roo Code" height="34"></a>
 </p>
 
 <p align="center">
@@ -91,6 +93,36 @@ tokdash setup
 运行在真实界面上。
 
 ## 一个包，四种视图
+| 客户端 | 用量与费用 | 会话浏览器 |
+|---|:---:|:---:|
+| OpenCode | ✅ | ✅ |
+| Codex | ✅ | ✅ |
+| Claude Code | ✅ | ✅ |
+| Gemini CLI | ✅ | — |
+| Antigravity CLI | ✅ | ✅ |
+| OpenClaw | ✅ | ✅ |
+| Kimi Code / Kimi CLI | ✅ | ✅ |
+| MiMo Code | ✅ | ✅ |
+| Grok Build | ✅ | ✅ |
+| Pi | ✅ | ✅ |
+| **omp** | ✅ | ✅ |
+| **Kilo Code** | ✅ | ✅ |
+| **Cline** | ✅ | ✅ |
+| GitHub Copilot CLI | ✅ | — |
+| Hermes | ✅ | ✅ |
+| DeepSeek Harness | ✅ | ✅ |
+| Reasonix | ✅ | ✅ |
+| **ZCode** | ✅ | ✅ |
+| **WorkBuddy** | ✅ | ✅ |
+| **Qoder IDE** | ✅ | ✅ |
+| **Qoder CLI** | ✅ | ✅ |
+| **Zed** | ✅ | — |
+| **Qwen Code** | ✅ | ✅ |
+| **Crush** | ✅ | — |
+| **Muse Code** | ✅ | — |
+| **MiniMax Code** | ✅ | — |
+| **Goose** | ✅ | ✅ |
+| **Roo Code** | ✅ | ✅ |
 
 一个本地包，一个本地数据索引 —— 四种读取方式。每个界面解析的都是你自己机器上的同一批会话日志，因此浏览器仪表盘、终端、菜单栏，以及你 Agent 的状态栏永远口径一致。
 
@@ -424,6 +456,199 @@ Go、Command Code —— 来自**选择启用的实时轮询**：Tokdash 使用�
 
 授权命令、总开关、轮询频率与按服务商的凭据说明见
 **[`docs/reference/QUOTA.md`](docs/reference/QUOTA.md)**。
+
+完整 onboarding 说明，包括运行时选择、WSL/systemd 行为、macOS launchd、Tailscale、bundle
+集成、更新检查和安全卸载语义，见 **[`docs/guides/ONBOARDING.md`](docs/guides/ONBOARDING.md)**。
+
+
+### OpenClaw 摘要（定时报表）
+
+Tokdash 可以通过定时查询本地 API，生成 OpenClaw 的日报 / 周报 / 月报。
+
+#### 面向人类用户
+
+把下面这段提示词复制给你的 LLM 代理（Claude Code、AmpCode、Cursor 等）：
+
+```text
+Install and configure scheduled Tokdash usage reports for OpenClaw by following the instructions here:
+https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/guides/agents/openclaw_reporting/AGENTS.md
+
+Or read the guide yourself, but seriously, let an agent do it.
+```
+
+#### 面向 LLM 代理
+
+拉取安装指南并按照其说明执行：
+
+```bash
+curl -s https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/guides/agents/openclaw_reporting/AGENTS.md
+```
+
+### 状态栏集成（Statusline integration）
+
+本地 API 可为编程 Agent（如 Claude Code）提供实时 token/费用状态栏。
+
+**开箱即用的模板**位于 [`docs/guides/statusline/`](docs/guides/statusline/)：把其中一个脚本复制到 `~/.claude/scripts/`，再把 `statusLine` 配置块加入 `~/.claude/settings.json` 即可。
+
+- [`statusline-minimal.sh`](docs/guides/statusline/statusline-minimal.sh) → 单行：`[Claude Sonnet 4.6] 📁 myproject | 📊 12.3M ($4.56) today`
+- [`statusline-full.sh`](docs/guides/statusline/statusline-full.sh) → 四行面板，含今日 + 本周合计，以及按工具的 Top-3 明细
+- [`statusline.ps1`](docs/guides/statusline/statusline.ps1) → 输出与 minimal 模板相同的单行，供在原生 Windows 上运行 Claude Code 的用户使用（PowerShell 原生实现，无需 `curl`/`jq`）
+
+三者均为只读、仅本地访问，Tokdash 未运行时会静默隐藏 📊 段。安装与配置见[该目录的 README](docs/guides/statusline/README.md)，端点细节见 [`docs/reference/API.md`](docs/reference/API.md)。
+
+想自己定制？把下面这段提示词发给你的 Agent，并把 [`docs/reference/API.md`](docs/reference/API.md) 一起给它：
+
+> *"I would like to add a statusline item from the tokdash endpoint's API; it should show the total tokens used today."*
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/demo-statusline.png" alt="Tokdash 状态栏集成示例" width="900" />
+</p>
+
+## 配置
+
+Tokdash 默认**只监听 localhost**。
+
+- `TOKDASH_HOST`（默认：`127.0.0.1`）
+- `TOKDASH_PORT`（默认：`55423`）
+- `TOKDASH_CACHE_TTL`（默认：`600` 秒）
+- `TOKDASH_CACHE_MAX_ENTRIES`（默认：`256`）——限制 API 响应缓存及其空闲键锁的数量
+- `TOKDASH_COMPUTE_CONCURRENCY`（默认：`2`）——同时进行的重型历史重解析数量上限；超出的冷请求会立即返回 `503`，而不是在高负载下耗尽服务线程
+- `TOKDASH_STARTUP_WARM_JOIN_SECONDS`（默认：`30` 秒）——启动预热某个键期间，第一个请求该键的请求最多等待该次预热多久，而不是直接返回 `503`；每个键最多只有一个请求等待
+- `TOKDASH_LIMIT_CONCURRENCY`（默认：`64`）——uvicorn 接受的最大并发连接数（背压）
+- `TOKDASH_KEEPALIVE`（默认：`5` 秒）——uvicorn keep-alive 超时
+- `TOKDASH_ALLOW_ORIGINS`（逗号分隔，默认：空）
+- `TOKDASH_ALLOW_ORIGIN_REGEX`（默认 CORS 策略允许 localhost/127.0.0.1，以及同一 tailnet 内的 Tailscale Serve 读取；设置任一 CORS 选项会替换该默认策略）
+- `TOKDASH_NO_RETENTION_NOTICE`（设为 `1` 可静默 `tokdash serve` 启动时打印的历史保留提醒）
+- `TOKDASH_SETUP_NO_OPEN`（设为 `1` 可跳过 `tokdash setup` 结束时可选的浏览器打开）
+
+会话活跃时长（估算）：
+
+每个会话除 `span_ms` 外还会给出 `active_ms`。span 是首末事件之间的跨度；活跃时长则把相邻 token 事件之间的间隔按空闲上限截断后累加，因此一个开着过夜的会话不再显示成 14 小时。
+
+这是估算值，API 中已明确标注：`summary.active_time_estimated` 为 `true`，`summary.active_time_method` 为 `capped-inter-event-gap`。其局限来自方法本身——事件之间的短暂停顿与真实工作无法区分，单次超过上限的操作会被截断到上限，只有一个 token 事件的会话则记为 0（前面没有可比较的事件）。
+
+并行工作会给出两个口径：`active_ms` 是时钟时长，重叠只计一次；`active_ms_sum` 把重叠也累加，即智能体时长。两者在单个会话和按工具汇总（`summary`）中都会出现。Kimi 的 agent 与 Claude 的子智能体都与主智能体并行运行，各自按独立事件流计时：一个子智能体并行工作一分钟，只增加一分钟智能体时长，不增加时钟时长。
+
+- `TOKDASH_ACTIVE_GAP_CAP_SECONDS`（默认：`300`）——空闲上限（秒）；超过该值的间隔只按上限计入。取值范围限制在 1 秒至 6 小时。
+
+持久化使用量数据库（默认开启）：
+
+Tokdash 默认会在 `~/.tokdash/usage.sqlite3` 维护一个本地 SQLite 索引。它保存解析后的 token 行以及 Codex/Claude/Kimi/DeepSeek Harness/Reasonix 会话摘要，让仪表盘和 API 的重复读取可以走索引 SQL，而不是每次重新解析所有源日志。源日志仍然是事实来源；这个 DB 是本地性能索引，禁用或不可用时 Tokdash 会回退到实时解析。
+
+缓存的会话行不含价格：它们只保存每轮的计费输入（模型、新增输入、缓存读取与写入、输出），费用在读取时按当前进程加载的价格计算。因此修改价格会立即重算，而不需要重新读取数 GB 日志；共用同一个数据库的两个 Tokdash 版本也不会因价格不同而互相作废对方的行。但只有在两个版本支持同一 DB schema 时共用才安全：schema 迁移只能向前，一旦较新的版本迁移了该文件，较旧的版本在升级前就无法再打开它，期间所有缓存读取都会失败。`tokdash doctor` 会同时报告磁盘上的 schema 与当前构建支持的 schema。解析器变更与源文件变更仍会照常触发重新解析。此前写入的行（包括 `TOKDASH_USAGE_DB_DURABLE` 在源日志消失后保留的行）会按存储的合计值重算，结果一致，但无法再区分 Claude/Kimi 的缓存写入与新增输入；只有重新解析这些日志才能恢复该区分。Codex 按 `provider/model` 计费但只存裸模型名，因此它的旧行不会被复用，而是重新解析一次。
+
+源码检出请使用独立的数据目录运行，避免迁移已安装服务所用的数据库：
+
+```bash
+TOKDASH_DATA_DIR=output/dev-data PYTHONPATH=src python3 main.py
+```
+
+- `TOKDASH_USAGE_DB`（默认：`1`）——设为 `0`、`false`、`no` 或 `off` 可禁用持久化使用量 DB
+- `TOKDASH_DATA_DIR`（默认：`~/.tokdash`）——Tokdash 本地状态目录
+- `TOKDASH_USAGE_DB_PATH`（默认：`$TOKDASH_DATA_DIR/usage.sqlite3`）——显式指定 SQLite 文件路径
+- `TOKDASH_USAGE_DB_DURABLE`（默认：`1`）——当源文件临时消失或解析器返回空结果时保留已索引行；设为 `0` 则严格按源文件替换
+- `TOKDASH_USAGE_DB_WATCH`（默认：`0`）——设为 `1` 后，`tokdash serve` 内部会启动后台同步循环
+- `TOKDASH_USAGE_DB_WATCH_INTERVAL`（默认：`30` 秒）——`tokdash db watch` 和 serve-time watch 循环的同步间隔
+
+DB 维护命令：
+
+```bash
+tokdash db status --pretty
+tokdash db sync --pretty
+tokdash db verify --verify-period today --pretty
+tokdash db repair --dry-run --pretty
+tokdash db resync --pretty
+tokdash db watch --pretty
+```
+
+通过 Tailscale Serve、SSH 转发或显式网络绑定进行远程访问的说明见
+[`docs/guides/REMOTE_ACCESS.md`](docs/guides/REMOTE_ACCESS.md)。交互式 `tokdash setup` 可在用户选择启用后，
+配置并记录 Tailscale Serve 规则。
+
+默认情况下，`tokdash serve` 会在启动时自动在浏览器中打开仪表盘一次。使用 `--no-open` 可禁用此行为（在无界面/SSH 环境以及后台服务模板中也会自动跳过）。
+
+## 隐私与安全
+
+- **无遥测**：Tokdash 不会主动把你的数据发送到任何地方。
+- **本地解析**：使用量由本机会话文件计算得出（见[支持的客户端](docs/reference/SUPPORTED_CLIENTS.md)）。
+- **可选额度轮询**：「额度」标签页默认仅使用本地数据。可在标签页内或用 `tokdash quota consent` 按服务商开启 API 轮询；它只用你本机的 CLI 凭据去调用对应服务商自己的额度接口，并把响应存入本地 SQLite 数据库。
+- **服务暴露**：Tokdash 默认绑定 `127.0.0.1`。Tailscale Serve 提供私有只读访问，SSH 转发提供经过认证的写入访问；`--bind 0.0.0.0` 会在所有接口上显式暴露未经认证的只读访问。详见[远程访问指南](docs/guides/REMOTE_ACCESS.md)。
+
+### 额度跟踪（可选）
+
+「额度」标签页展示订阅用量窗口与重置倒计时，来自两类数据源。**本地日志**（无网络）：Codex 会在会话文件里记录自己的额度，因此 Codex 的 5 小时 / 每周窗口可开箱即用；但它只会在你使用 Codex 时更新，且本地日志永远不包含重置额度或按量功能窗口。请把基于 Codex 会话日志的消耗视为**可能明显出错的估算值**：每个会话会缓存上一次获取到的额度快照，并在后续消息中原样重放，因此数字可能过期，重置边界附近的噪声也可能进一步扭曲某个窗口。「额度」标签页会把这些图表标记为估算。**实时轮询**（默认关闭，按服务商授权）：Tokdash 使用你本机 CLI 已登录的身份调用服务商自己的额度接口；数据更新、更完整，会加入 Codex 重置额度与按量功能窗口，是获得**准确** Codex 消耗所需的数据源，也是 Claude Code、Antigravity、MiniMax、Kimi Code、SuperGrok/Grok Build、Z.ai Coding Plan、OpenCode Go 与 Command Code 额度的唯一来源。可在标签页内或用 CLI 按服务商单独开启：
+
+```bash
+tokdash quota consent --codex-api on --claude-api on --antigravity-api on
+tokdash quota consent --minimax-api on --kimi-api on --grok-api on --zai-api on
+tokdash quota consent --opencode-go-api on
+tokdash quota consent --commandcode-api on
+tokdash quota consent --credential-scan on   # 允许读取已披露的本地凭据存储
+tokdash quota consent --poll-interval 30      # 后台轮询周期：15、30、60 或 120 分钟
+tokdash quota consent --enabled off           # 总开关：关闭全部额度跟踪
+tokdash quota poll
+tokdash quota show
+```
+
+**总开关。** `quota.enabled`（默认开启）控制*所有*额度工作——会话扫描、网络轮询与快照写入。可在「额度」标签页或用 `tokdash quota consent --enabled on|off` 切换。关闭后（或设置了 `TOKDASH_QUOTA_POLL=0` 终止开关时），后台轮询会完全停摆，`GET /api/quota/refresh` 会返回「额度跟踪已禁用」错误，标签页也会显示「启用额度跟踪」卡片而非数据。按服务商的授权键仍保留其更窄的、仅网络的含义。
+
+**轮询间隔。** 后台轮询默认每 **30 分钟** 记录一次快照。可在「额度」标签页、`tokdash setup` 过程中或用 `tokdash quota consent --poll-interval N` 选择 15/30/60/120 分钟，它会保存为 `config.json` 中的 `quota.poll_interval_minutes`。环境变量 `TOKDASH_QUOTA_POLL_INTERVAL`（单位秒，下限 300）会覆盖保存的值，标签页会显示当前生效的来源。间隔调整会在下一个轮询周期生效，无需重启服务。Codex 会话摄取采用增量方式——首次一次性回填历史后，每个周期只对增长过的会话文件做尾部读取，因此稳态轮询只需个位数毫秒。
+
+对于固定重置时间的额度窗口，轮询器还会在重置边界附近采样，以便历史记录捕获重置前的峰值和重置后的基线。边界采样默认开启，只调用触发边界的服务商接口，合并时间相近的多个服务商边界，并保证后台轮询周期之间至少间隔 300 秒。设置 `TOKDASH_QUOTA_BOUNDARY_POLL=0` 可关闭边界采样；设置 `TOKDASH_QUOTA_BOUNDARY_POST=0` 可只关闭重置后采样；还可通过 `TOKDASH_QUOTA_BOUNDARY_PRE_SECONDS` 和 `TOKDASH_QUOTA_BOUNDARY_POST_SECONDS` 调整默认 120 秒的提前量与延后量。
+
+**多个 Claude Code 安装。** Claude Code 每个配置目录对应一个订阅，因此以 `CLAUDE_CONFIG_DIR=~/.claude-academic claude` 运行的第二份登录就是另一个订阅，拥有自己的额度窗口。在授予凭据扫描许可后，Tokdash 会读取 `$CLAUDE_CONFIG_DIR` 以及每个自带 `.credentials.json` 的 `~/.claude*` 目录，分别轮询，并在 Claude Code 卡片内按目录所用的 profile 名称（例如 `academic`）分组展示。历史记录同样区分两者：`Claude-academic 5-hour` 是与 `Claude 5-hour` 并列的独立序列。登录过期的那份安装只在自己的分组里提示，不会掩盖正常安装的数据；持有同一份登录的两个目录只计算一次。若安装位于主目录之外，可用 `TOKDASH_CLAUDE_PROFILES` 指定以系统路径分隔符分隔的目录列表。用量统计无需改动：每个 `~/.claude*` 安装下的会话日志早已被计入。
+
+实时轮询需要两层独立授权：`quota.credential_scan` 允许只读访问已披露的本地凭据存储，然后每个 `<provider>_api` 键允许向该服务商发起网络请求。Tokdash 只读取原生 CLI 认证/配置文件、OpenCode 的 `auth.json` 与全局供应商配置、当前 Claude 设置，以及通过只读 SQLite 连接读取 CC Switch 的 `providers` 表；不会扫描服务商日志、shell 配置或任意 `{file:...}` 引用。MiniMax 可使用 `mmx` 登录或 Token Plan Subscription Key（`MINIMAX_TOKEN_PLAN_GLOBAL_KEY` / `MINIMAX_TOKEN_PLAN_CN_KEY`）；普通按量 API key 不保证能读取 Token Plan。Kimi 需要 Kimi Code 登录或 key（`KIMI_API_KEY`），Moonshot Open Platform 的按量 key 不适用。SuperGrok/Grok Build 需要 `$GROK_HOME/auth.json` 中的 xAI OAuth 登录，普通 xAI API key 无法读取消费者账单额度。Z.ai 可读取 `$ZCODE_HOME/v2/config.json`、受支持工具配置、`ZAI_API_KEY` 或 `Z_AI_API_KEY` 中的 Coding Plan key，并查询 5 小时 / 每周额度及旧版 MCP 限额。Tokdash 从不刷新或写入服务商凭据。`TOKDASH_QUOTA_POLL=0` 是关闭全部额度跟踪的硬终止开关。`tokdash export` 默认排除额度数据；只有当你确实想把它写入 JSON 时才使用 `--include-quota`。
+
+OpenCode Go 优先使用 `OPENCODE_API_KEY`，未设置时读取 OpenCode 的 `auth.json` 中的 `opencode-go` key，并从 `opencode.ai/zen/go/v1/usage` 查询滚动 / 每周 / 每月订阅额度窗口。Zen 按量付费余额没有支持 key 认证的接口，因此不跟踪。
+
+Command Code 依次从 `COMMAND_CODE_API_KEY`、`COMMANDCODE_API_KEY`、`~/.commandcode/auth.json`，再到 OpenCode `auth.json` 中的 `commandcode` 条目读取账号密钥（不会刷新或写回）。它轮询 `api.commandcode.ai/alpha/billing/credits` 与 `/alpha/billing/subscriptions`，获取 5 小时 / 每周用量上限以及每月额度窗口。5 小时与每周进度条直接来自接口；**每月窗口是推算的**：套餐目录给出额度池，减去剩余额度并套用解析出的套餐名（Go / GOAT / Pro / Max 10x / Max 20x / Team Pro / Provider）。当无法解析出有效订阅及套餐时，每月进度条与其套餐名会被撤回，而不是继续显示上一次的读数。
+
+Tokdash 还会从 `$GROK_HOME/logs/unified.jsonl` 本地统计 Grok Build token。推理记录会提供 prompt、缓存 prompt、completion 与 reasoning token；Tokdash 使用同一 CLI 进程的模型事件完成归属，并通过常规价格数据库计算费用。缺少模型事件的记录会被跳过，不会猜测价格。
+
+DeepSeek Harness（`dsh`）的用量与会话从 `$DSH_HOME/sessions/*/*/session.jsonl.zstd`（或未压缩的 `session.jsonl`）本地读取，`DSH_HOME` 默认为 `~/.dsh`。每个日志由多个独立 zstd 帧拼接而成；Tokdash 会解码全部帧，把每个 step 的早期 usage chunk 折叠进最终消息而不是重复计数，并跳过 fork 会话继承自父会话的前缀，确保父会话与子会话不会对同一批 token 重复计费。
+
+Reasonix 的用量与会话从 `$REASONIX_HOME`（默认 `~/.reasonix`）本地读取：逐次请求的 token 来自每日 `stats/YYYY-MM-DD.jsonl` 日志，会话结构来自 `projects/*/sessions/*.jsonl`。Reasonix 连接的是其 `config.toml` 中配置的任意供应商，因此每行的 `provider/model` 会照常归因并按现有价格库计价；没有公开价格的自建模型只统计 token，费用为 0。Reasonix 按请求记录用量，且不会写入会话 ID，所以会话浏览器中的行只有轮次、项目与时长，没有 token 数 —— 完整总量在概览与统计中。
+ZCode 的用量从 `$ZCODE_HOME/cli/db/db.sqlite`（默认 `~/.zcode/cli/db/db.sqlite`，`ZCODE_HOME` 跟随 ZCode 自身设置）本地读取。`model_usage` 表中每行是一次模型请求（含重试），该行的 `model_id` 照常按现有价格库计价，`provider_id`（如 `builtin:zai-start-plan`）只作标签。ZCode 的 `input_tokens` 把已缓存与未缓存的提示词 token 合在一起计数，因此缓存部分单独分桶、按缓存费率计费；reasoning token 与 output 分开显示，但按 output 费率计费。ZCode 也会出现在 Sessions 标签页：turn 从同一数据库读取，按 (turn, model) 用相同规则计费，只读顶层会话；没有可计费 token 的 turn 仍会将其测量时长计入该工具的活跃时间。Coding Plan 额度属于远程账户数据，可通过单独授权的 Z.ai 实时轮询器读取。
+
+WorkBuddy 的用量从 `~/.workbuddy-ai/projects/*/*.jsonl` 会话日志本地读取（`WORKBUDDY_DATA_DIR` 可指定逗号分隔的根目录列表，指向其他存储位置，例如 WSL 下的 Windows 数据目录）。每条 assistant 消息行对应一次模型调用；`prompt_tokens` 中包含缓存部分，缓存部分单独分桶、按缓存费率计费；reasoning token 与 output 分开显示，但按 output 费率计费。模型 ID 原样保留：显式模型 ID（如 gpt-5.5）照常按现有价格库计价，Auto 路由别名（`default-model`）不在价格库中，费用为 0.00。每轮的 `credit` 值仅作为元数据存储，不计入费用。Sessions 标签页从相同的根目录读取相同的会话日志行（每个计费的 assistant 行对应一个 turn）。
+
+Qoder 的用量从两处本地读取：IDE 的 SQLite 数据库（IDE 数据目录下 `SharedClientCache/cache/db/local.db`，Windows 与 WSL 下 QoderCN 版优于国际版）和 CLI 的 JSONL 日志（`~/.qoder` 与 `~/.qoder-cn`，另支持 `QODER_CONFIG_DIR` 和逗号分隔的 `QODER_CLI_HOME`）。IDE 侧对 `chat_message` 表中每个角色的行都计数：提示词 token 中的缓存部分单独分入缓存桶，模型取自 `model_key`（路由器未暴露名称时为 `auto`）。CLI 侧按请求将会话 transcript 中的计费记录与 segment 日志中的 token 记录合并（覆盖全部 CLI 根目录）：带 provider credits 的行直接使用 provider 报告的成本作为权威值，按估算的 $0.01/credit 换算（可用 `QODER_USD_PER_CREDIT` 覆盖该估算值）且永不重新计价；仅含 token 的行按常规价格库计价。记录没有 input token 时，用 `context_usage_ratio` 乘上已知的上下文窗口恢复 input——除非显式设置 `QODER_CLI_CONTEXT_WINDOW`，否则窗口只对 `auto` 已知（180,000）。Qoder IDE 出现在 Sessions 标签页：相同的 `chat_message` 行（所有角色，每个可解析的行对应一个 turn）从同一数据库的临时目录快照读取。 Qoder CLI 也拥有自己的 Sessions 面板：两条流的逐文件候选按与 Overview 完全相同的顺序、同一胜出规则经由同一个 request_id 合并折叠，credit 行原样保留提供方上报的成本，段项目以净化后的目录标签原样展示，因为该净化不可逆。
+
+Zed 的用量从 Zed 各操作系统数据目录下的 `threads/threads.db` 本地读取（Linux：`$XDG_DATA_HOME/zed` 或 `~/.local/share/zed`，支持 `FLATPAK_XDG_DATA_HOME`；macOS：`~/Library/Application Support/Zed`；Windows：`%LOCALAPPDATA%\Zed`）。每个 agent 线程是一行，带一个 zstd 压缩的 blob（旧行是纯 JSON），其中的 `cumulative_token_usage` 是线程自身完成流以高水位方式累加的总量——缓存独占（input + cacheRead = 完整提示词），各桶直接映射；子代理线程是独立的行，其用量绝不并入父线程，因此每个非零线程恰好计一次。线程按其当前模型计价（中途换过模型的线程按最后一个模型计价）；不在价格库中的自托管模型 id 计 0.00。Zed 没有环境变量形式的目录覆盖，`--user-data-dir` 启动参数是文档中记载的盲区。Zed 不出现在 Sessions 标签页。
+
+Qwen Code 的用量从 `<base>/projects/*/chats/*.jsonl`（另含改名前的 `<base>/tmp/*/chats/*.jsonl`）本地读取，base 依次取 `$QWEN_RUNTIME_DIR`、`$QWEN_HOME`、`~/.qwen`——settings 级的 `runtime_base_dir` 覆盖项 Tokdash 无法感知，是文档中记载的盲区。文件为 append-only、每会话一个文件；每条 assistant 记录原样携带 provider 的 `usageMetadata`：`promptTokenCount` 含缓存部分，缓存份额单独分入缓存桶并按缓存价计费，`thoughtsTokenCount` 显示为 reasoning。每条记录的 `uuid` 是稳定的、跨文件全局的去重键：`/branch` 会把父会话的记录（uuid 不变）复制进 fork 的文件，因此用量存储以最早出现的时间戳拥有每个键，规范文件被删除时由幸存副本接管。子代理记录与主记录同文件，自动计入。成本按价格库计价；没有模型的记录按 `unknown` 计 token、成本 0.00。Sessions 标签页读取同一批 assistant 记录，每条记录一个 turn；fork 复制的历史归最早的一份所有。
+
+Crush 的用量从 `$CRUSH_DATA_DIR`（逗号分隔的数据目录列表，每个目录内含 `crush.db`）本地读取——必填，因为 Crush 默认的数据目录是工作目录旁的按项目 `.crush`，没有全局根目录可扫描。数据库为 WAL 模式，Tokdash 通过与 ZCode 相同的复制快照路径读取。每个 token 非零的会话按其 `prompt_tokens`/`completion_tokens` 贡献一条记录（含子 agent 会话）：Crush 只把 cost 汇总进父会话，从不汇总 token，因此若沿用其自身统计查询的顶层口径（`parent_session_id IS NULL`），子 agent 的用量会被整体丢弃。每条记录归因于所属会话最后一条非 summary 的 assistant 消息——混合模型的会话按最后一个模型计价。三处注意事项与来源并列记载：计数器按步赋值而非累加，因此只保留最后一次请求的上下文大小与最后一轮的输出，多步会话会偏低（针对 Crush v0.91.2 核实）；provider 报告零用量时 token 可能是字符数估算（数据库中无标记）；缓存/reasoning 拆分未被持久化。时间戳为秒；行按 `updated_at`（最后触碰时间）分桶，一个会话的整个生命周期总量落在同一天。`sessions.cost` 被忽略，成本只来自价格库。Crush 不出现在 Sessions 标签页。
+
+Goose 的用量从一个全局数据目录下的 `sessions/sessions.db` 本地读取——依次为 `$GOOSE_PATH_ROOT/data`、`$XDG_DATA_HOME/goose`、`~/.local/share/goose`（macOS 与 Linux 解析出同一个默认目录，因此没有按平台分支；Windows 位置未核实）。数据库为 WAL 模式，故通过与 ZCode 相同的复制快照路径读取。`usage_ledger` 是唯一的 token 来源：每次模型请求一行，模型就在该行上，因此混合模型的会话按请求逐条计价。`input_tokens` 已包含缓存命中部分，故新增部分按 input 计价、缓存部分按 cache 价计价；`output_tokens` 为总量，因为 Goose 在任何地方都没有持久化 reasoning 拆分。`cost`、`cost_source` 以及 `sessions.accumulated_*` / `total_tokens` 列全部忽略：accumulated 系列列只是账本求和的副本，而 `total_tokens` 只保存最后一次请求的快照，同时读取会把一次请求算两遍。成本只来自价格库，因此自建端点的模型计为 0.00。在 Goose 中删除会话确实会从这里移除其用量，因为账本行随会话一起离开数据库。Sessions 标签页只列出顶层会话，每个账本行一个轮次；活跃时间取自 Goose 写在自己 assistant 消息上的请求耗时，未命名的会话按其第一条 prompt 命名；定时 recipe 运行目前会作为普通会话列出。
+
+Roo Code 的用量从扩展的全局存储本地读取：机器上所有存在的 `<globalStorage>/rooveterinaryinc.roo-cline/tasks/<taskId>/`——含各配置文件的 VS Code、Code - Insiders 与 VSCodium 桌面树、WSL 会话写入的 `~/.vscode-server*` 根、WSL 下 `/mnt/c` 的 Windows 桌面树、Windows 的 `%APPDATA%`、macOS 的 `~/Library/Application Support`，以及 `@roo-code/cli` 写入的 `~/.vscode-mock/global-storage`。`TOKDASH_ROO_STORAGE_DIR` 是往该列表里追加迁移后的存储路径，而不是替换它。`ui_messages.json` 是 token 来源：每个完成的 `api_req_started` 请求一条记录，这正是 Roo 自身任务合计所累加的内容。`tokensIn` 含缓存，拆成 input / cacheRead / cacheWrite；`tokensOut` 为总量——Roo 会计算 reasoning token 却从不持久化；记录的 `cost` 被忽略，计价一律走价格库。未完成的请求只会留下一个没有任何 token 键的预检标记；rewind 会截短文件并追加删除标记，因此两者都不会被加回来。模型不在该文件里：它来自同目录 `api_conversation_history.json` 中 Roo 自己写的 `<model>` 标签，并按请求配对。`tasks/_index.json` 与 `history_item.json` 里的按任务合计从不读取——索引是防抖写入的，实测比进行中的任务落后四条请求。一处盲区是明说而非掩盖的：删除任务目录后，其用量仍会留在看板上，因为 Tokdash 会为消失的文件保留其记录。Sessions 标签页把一个任务目录当作一个会话（恢复之后同样如此），被委派的子任务会计价但不出现在列表里。
+
+`tokdash setup` 会提供一个可选的额度步骤（按服务商的网络授权，默认为否，以及轮询间隔），`tokdash doctor` 会报告额度状态：总开关、按服务商授权、终止开关、生效间隔及其来源、上次轮询时间，以及已保存的快照数量。
+
+额度快照及其历史保存在本地使用量数据库（`usage.sqlite3`，默认开启），**默认永久保留**——将 `TOKDASH_QUOTA_RETENTION_DAYS` 设为正整数天数可开启对更早快照的清理。如果你用 `TOKDASH_USAGE_DB=0` 关闭本地持久化，「额度」标签页将失去主要数据来源：不再保留快照历史，后台轮询也不运行，标签页只会在当前服务进程存活期间展示手动**刷新**（已授权的网络服务商）得到的内存中结果。日常额度跟踪请保持使用量数据库开启（默认）。
+
+## API（本地）
+
+Tokdash 是一个本地 HTTP 服务。常用接口：
+
+- `GET /api/usage?period=today|week|month|N`
+- `GET /api/usage?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD`
+- `GET /api/tools?period=...`（仅编程工具）
+- `GET /api/openclaw?period=...`（仅 OpenClaw）
+- `GET /api/sessions?tool=codex|claude|opencode|pi_agent|omp|mimo|kimi|dsh|reasonix|zcode|kilocode|grok|hermes|antigravity_cli|cline&period=...`（追加 `&include_review_sessions=true` 可包含默认隐藏的 Codex 审核/权限会话）
+- `GET /api/active-time?period=...`（跨全部会话工具的活跃时长，并按工具细分）
+- `GET /api/quota` 与 `GET /api/quota/history`（订阅额度快照；网络刷新受写入保护且需显式授权）
+- `GET /api/stats`（贡献日历与统计数据）
+
+示例：
+
+```bash
+curl 'http://127.0.0.1:55423/api/usage?period=today'
+```
+
+完整 API 参考：[`docs/reference/API.md`](docs/reference/API.md) — 包含每个端点的请求参数与响应结构。
 
 ## 费用精度说明
 
