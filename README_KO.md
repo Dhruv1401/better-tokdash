@@ -227,7 +227,7 @@ Tokdash Companion 상태표 앱은 macOS 메뉴 막대 앱, Windows 알림 영�
 
 Microsoft가 서명하고 Store를 통해 업데이트됩니다. Windows 11이 필요합니다.
 
-**직접 다운로드** — **[Tokdash Companion 1.0.0](https://github.com/JingbiaoMei/Tokdash/releases/tag/companion-v1.0.0)**:
+**직접 다운로드** — **[Tokdash Companion 1.1.0](https://github.com/JingbiaoMei/Tokdash/releases/tag/companion-v1.1.0)**:
 
 | 플랫폼 | 다운로드 | 요구 사항 |
 |---|---|---|

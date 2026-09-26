@@ -1,39 +1,67 @@
-# Tokdash Companion 1.0.2
+# Tokdash Companion 1.1.0
 
-A correctness release for quota cards that measure more than one account, such
-as Claude with a second `CLAUDE_CONFIG_DIR` install or MiniMax with both a
-global and a mainland-China Token Plan. One failing credential used to distort
-the reading of a healthy one, on both platforms.
+A feature release for both tray apps. The flyout now reads the calendar instead
+of three fixed buckets, the multi-server settings speak the dashboard's
+host-and-address language, and the settings window on each platform was rebuilt
+around the controls it actually needs.
 
 ## Changes
 
-- A quota row's `⚠` last-known prefix and its low-quota alert eligibility now
-  compare `buckets[].captured_at` against the **owning account's** `status_at`,
-  from the `providers.*.accounts` list Tokdash serves, rather than the
-  provider's. Against the provider's alone, one permanently broken credential
-  advanced `status_at` every cycle and marked every bucket the healthy
-  credential had not refreshed in that same cycle as last-known — which for
-  Claude's `weekly_scoped_opus` and MiniMax's per-model buckets is the normal
-  case, so a working subscription's low-quota alerts went quiet for as long as
-  its sibling stayed broken. A healthy account carries no `status_at` at all, so
-  the rule checks whether the row's own account failed *before* reaching for its
-  timestamp.
-- A card prints a failure notice under the account that owns it, so a failing
-  China plan no longer reads as a problem with the healthy global plan.
-- A card no longer swallows an error that belongs to none of the accounts it
-  lists. Both cards now gate on `providers.*.status_account`, which names the
-  account an error belongs to, instead of treating any account list as proof the
-  card's own error is covered.
-- The multi-server Servers tab counts a provider as OK when at least one of its
-  accounts is healthy **and** the card's own error belongs to one of them, so a
-  healthy `~/.claude` beside an expired `~/.claude-academic` no longer drops out
-  of the OK tally. An error no account claims is a provider whose credentials
-  could not be read at all, which is not OK.
+- **Calendar periods.** The period segment is `Day / Week / Month / Year` and
+  each one is a calendar-aligned window: this week, this month, the year to
+  date. The arrows step to the previous and next window, and every window
+  carries its own tokens, cost, estimated active time and comparison against the
+  equal window before it, plus per-server rows when more than one server is
+  enabled. The selected period persists. The day segment now reads `Day` on both
+  platforms.
+- **Instant navigation.** An arrow click updates the selected date and draws the
+  loading placeholders at once instead of waiting on the round trip, and a
+  refresh that was cancelled by a newer one can no longer land on top of it.
+- **Activity glance.** An optional strip under the hero: 24 hourly bars for
+  today, a per-day histogram for the week, and the contribution grid for month
+  and year. With several servers enabled each contributes its own series. Every
+  face is optional — a source the connected server does not serve hides that
+  face rather than drawing a zero.
+- **Configurable rankings.** Choose how many top-tool and top-model rows the
+  flyout prints. macOS gets a slider in Settings, Windows a slim slider in the
+  same place.
+- **Reset credits, both providers.** Codex credit expiry as before, and Claude
+  Code limit resets, which arrive from the server as of Tokdash 2.6.3. The
+  notice stays on one line and scrolls in its own viewport when it overflows;
+  reduced-motion settings stop the scroll and keep the full text as a tooltip.
+- **Provider and tool marks.** Ranked rows wear the agent's own mark.
+- **Servers group by host.** Settings keeps one entry per machine and gives it a
+  row per address, each with its own reachability and latency, automatic or
+  preferred routing, and failover that moves only once the next address proves
+  the same daemon identity. Two addresses of one live Tokdash contribute their
+  usage once, and **Open Dashboard** follows the address that is actually
+  serving. Existing single-address settings migrate unchanged, and servers that
+  do not identify themselves stay supported as single-address hosts.
+- **Settings rebuilt.** macOS: the window opens taller within the visible
+  screen, rank rows use a slider, and an enabled switch stays blue while it is
+  off. Windows: rounded fields and buttons, blue switches, compact dropdowns, a
+  clear primary **Save**, and a six-pixel rounded scrollbar thumb with a larger
+  hit area shared with the quota lists. Keyboard focus and high-contrast colours
+  are preserved.
+- **A tighter Mac flyout.** Fixed-width scrolling date label that stays inside
+  the panel, closer section spacing, and no freshness/Quit footer — **Quit**
+  remains in the flyout's right-click menu.
+- **Fixed:** an optimised macOS build could report a reachable server as
+  unreachable in a multi-server setup. Concurrent health responses now survive
+  the optimised refresh.
 
-Per-account attribution needs Tokdash 2.5.3 or newer, which is where
-`providers.*.accounts` and `providers.*.status_account` are first served. Against
-an older server the apps fall back to the provider's own status, which is the
-1.0.1 behaviour, so upgrading the companion alone is safe.
+## Server compatibility
+
+The companion still works against Tokdash `1.5.2` or newer. Four surfaces light
+up only against newer servers, and each hides itself when the connected server
+is older rather than showing a zero:
+
+| Feature | Needs Tokdash |
+|---|---|
+| Activity glance (today, week) | `2.5.0` |
+| Contribution grid (month, year) | `2.5.0` |
+| Per-account quota attribution | `2.5.3` |
+| Claude Code limit resets | `2.6.3` |
 
 Update checks remain optional. They never download or install software;
 **View update** opens the validated Tokdash GitHub release page in the default
@@ -57,14 +85,17 @@ covered by this policy.
 
 ## Assets
 
-- `Tokdash-Companion-1.0.2-macos-universal-unsigned.dmg` supports Apple Silicon
+- `Tokdash-Companion-1.1.0-macos-universal-unsigned.dmg` supports Apple Silicon
   and Intel Macs on macOS 14 or newer.
-- `Tokdash-Companion-1.0.2-windows-x64-unsigned.zip` is a self-contained Windows
+- `Tokdash-Companion-1.1.0-windows-x64-unsigned.zip` is a self-contained Windows
   11 x64 portable build. Windows 11 on Arm may run it through x64 emulation.
 - `SHA256SUMS` covers both downloadable binaries.
 
 To update on macOS, quit Tokdash Companion, open the DMG, drag the app to
-Applications, and choose **Replace**. Existing settings migrate automatically.
+Applications, and choose **Replace**. To update the portable Windows build,
+disable launch at login, quit, replace the extracted directory, and re-enable
+it. Existing settings migrate automatically, including the new per-host server
+grouping.
 
 The companion has no telemetry, credential discovery, or port scanning. It
 connects only to Tokdash endpoints configured by the user and, for manual or

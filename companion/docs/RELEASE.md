@@ -2,17 +2,20 @@
 
 Tokdash Companion is versioned independently from the Python package.
 `companion/VERSION` is the authority and release tags use
-`companion-vX.Y.Z`. The current release is `1.0.2` and requires Tokdash `1.5.2`
-or newer. Per-account quota attribution degrades gracefully below Tokdash
-`2.5.3`, which is where `providers.*.accounts` is first served.
+`companion-vX.Y.Z`. The current release is `1.1.0` and requires Tokdash `1.5.2`
+or newer. Optional surfaces degrade gracefully against an older server, which
+hides them rather than showing a zero: the Activity glance needs `2.5.0`, where
+`/api/insights` first answers and `contributions[].intensity` first carries a
+real value; per-account quota attribution needs `2.5.3`, where
+`providers.*.accounts` is first served; Claude Code limit resets need `2.6.3`.
 
-## v1.0.2 assets
+## v1.1.0 assets
 
 Publish one GitHub **release** with exactly these assets:
 
 ```text
-Tokdash-Companion-1.0.2-macos-universal-unsigned.dmg
-Tokdash-Companion-1.0.2-windows-x64-unsigned.zip
+Tokdash-Companion-1.1.0-macos-universal-unsigned.dmg
+Tokdash-Companion-1.1.0-windows-x64-unsigned.zip
 SHA256SUMS
 ```
 
@@ -78,7 +81,7 @@ than in certification. A dedicated step fails the build when any is unset,
 because the build script would otherwise fall back to its test identity and
 produce a package Partner Center rejects.
 
-## v1.0.2 unsigned-binary policy
+## v1.1.0 unsigned-binary policy
 
 The maintainer explicitly accepted unsigned distribution for this GitHub
 release. Every user-facing surface must say that the binaries are unsigned:

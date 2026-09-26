@@ -227,7 +227,7 @@ O app Tokdash Companion de barra de status é um app nativo opcional para a barr
 
 Assinado pela Microsoft e atualizado através da Store. Requer Windows 11.
 
-**Download direto** — **[Tokdash Companion 1.0.0](https://github.com/JingbiaoMei/Tokdash/releases/tag/companion-v1.0.0)**:
+**Download direto** — **[Tokdash Companion 1.1.0](https://github.com/JingbiaoMei/Tokdash/releases/tag/companion-v1.1.0)**:
 
 | Plataforma | Download | Requisitos |
 |---|---|---|

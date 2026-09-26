@@ -228,7 +228,7 @@ Tokdash Companion 状态栏应用是一个可选的原生客户端：在 macOS
 
 由 Microsoft 签名，并通过 Store 更新。需要 Windows 11。
 
-**直接下载** —— **[Tokdash Companion 1.0.0](https://github.com/JingbiaoMei/Tokdash/releases/tag/companion-v1.0.0)**：
+**直接下载** —— **[Tokdash Companion 1.1.0](https://github.com/JingbiaoMei/Tokdash/releases/tag/companion-v1.1.0)**：
 
 | 平台 | 下载 | 要求 |
 |---|---|---|

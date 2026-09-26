@@ -227,7 +227,7 @@ Tokdash Companion ステータスバーアプリは、macOS のメニューバ�
 
 Microsoft による署名済みで、Store 経由で更新されます。Windows 11 が必要。
 
-**直接ダウンロード** — **[Tokdash Companion 1.0.0](https://github.com/JingbiaoMei/Tokdash/releases/tag/companion-v1.0.0)**:
+**直接ダウンロード** — **[Tokdash Companion 1.1.0](https://github.com/JingbiaoMei/Tokdash/releases/tag/companion-v1.1.0)**:
 
 | プラットフォーム | ダウンロード | 要件 |
 |---|---|---|

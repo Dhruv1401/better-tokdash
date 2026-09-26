@@ -229,7 +229,7 @@ view of the Tokdash service without keeping the full dashboard open.
 
 Signed by Microsoft and updated through the Store. Requires Windows 11.
 
-**Direct download** — **[Tokdash Companion 1.0.0](https://github.com/JingbiaoMei/Tokdash/releases/tag/companion-v1.0.0)**:
+**Direct download** — **[Tokdash Companion 1.1.0](https://github.com/JingbiaoMei/Tokdash/releases/tag/companion-v1.1.0)**:
 
 | Platform | Download | Requirements |
 |---|---|---|
