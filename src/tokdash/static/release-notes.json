@@ -1,6 +1,35 @@
 {
-  "current": "2.6.4",
+  "current": "2.6.5",
   "releases": [
+    {
+      "version": "2.6.5",
+      "date": "2026-09-26",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "A server can hold several addresses. Settings keeps one entry per machine with a row per address, reads it through the quickest address the browser is allowed to use, and moves to the next one when an address is dead, so adding a second address no longer counts the same tokens twice.",
+            "An address is checked before it is stored: one that does not answer, or answers as a different Tokdash, is refused where it is typed and names the machine that owns it, and an address a browser provably cannot read is labelled blocked with the rule that blocks it rather than merged."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Quota provider cards lead with the provider's own brand mark -- Codex, Claude Code, Antigravity, MiniMax, Kimi Code, Grok Build, OpenCode Go and Command Code -- picked through one provider-to-brand table so the mark and brand colour follow the source registry. Z.ai is the only provider left on the letter tile.",
+            "The Report tab's agent table prints every tool that recorded tokens instead of folding the tail behind an Other tools on this machine disclosure; a tool with no recorded session keeps its row with em dashes in the session and active-time columns."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "On the TUI period views the [ / ] / 0 keys step by whole calendar periods: one press on the month view shows the entire previous month rather than the same month one day shorter, the week view steps a full Mon-Sun week and the year view a full calendar year.",
+            "Three TUI follow-ups from the same review: textual is pinned to 8.x, the quota disabled-poll note paints yellow instead of a literal [warn] tag, and the database status read moved off the event loop so a slow database cannot stall key handling.",
+            "Pinned Qoder CLI models are counted. Setting a model in the Qoder settings file used to silence the whole source; Tokdash now reads each model's context window from the CLI's own run logs, or from the --context-window a session declared, and recovers the tokens the CLI zero-fills. A model with no window evidence anywhere is named in a warning instead of vanishing.",
+            "Antigravity usage from agy 1.2.x is counted. That CLI writes no row timestamp, and an undated row never reached the usage store, so rows are now dated from the latest step they reference."
+          ]
+        }
+      ]
+    },
     {
       "version": "2.6.4",
       "date": "2026-09-25",
