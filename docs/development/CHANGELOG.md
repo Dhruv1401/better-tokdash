@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 2.6.6 - 2026-09-28
 
 ### Added
 
@@ -31,6 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Hermes sessions keep their real end-of-activity timing. An earlier cut of this PR appended a zero-token turn at each session's `ended_at` to extend the active-time span, which credited sessions with hours of idle time between messages; the fabricated turn and the `session_model_usage` read it depended on are out, and `HermesParser.persistent_parser_version` stays 1 so existing parsed caches survive the upgrade. (#110, thanks @Dhruv1401)
 
+- Pi fork replays are counted once. A Pi fork copies its parent's already-billed assistant events into a new session file, and those copies were read as new usage -- so forking a session inflated every total that session touched, and the fork appeared in Sessions as a row whose whole history was replayed rather than written there. Ancestry is now resolved from the `parentSession` header edge, and each event is keyed by an identity corroborated from the immutable copied fields (id, timestamp, provider, model and the five token counts) rather than by its short id alone, which Pi only checks within a session and which therefore cannot mean that two unrelated sessions are the same one. The same ancestry and ownership rules run across live usage, the persistent store and the Sessions assembly, so the three cannot disagree: the original owns the recorded billing, descendants contribute only their own new work, and a session that replayed nothing but history disappears instead of standing as a phantom. Established ancestry is persisted in per-file cache metadata, so deleting an ancestor's log and reopening the dashboard cannot hand the same replay a fresh identity; Pi's parser version moved to 2, which rebuilds available v1 rows once and leaves warm caches and ordinary appends alone. Where an ancestor is genuinely unavailable the copy is kept rather than guessed at -- an absent link is not evidence, and an unproven family keeps its usage until the link appears. A session id containing underscores, a branch whose `parentId` links were rewritten, and two unrelated sessions whose short ids collide are each preserved rather than merged; OMP and every other source keep their existing behavior. (#126, closes #124)
 
 ## 2.6.5 - 2026-09-26
 

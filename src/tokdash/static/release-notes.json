@@ -1,6 +1,38 @@
 {
-  "current": "2.6.5",
+  "current": "2.6.6",
   "releases": [
+    {
+      "version": "2.6.6",
+      "date": "2026-09-28",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "The desktop dashboard gained a sidebar -- Overview, Sessions Explorer, Stats & Heatmap, Usage Report, Quota & Budgets, Servers and Pricing DB -- with What's New and Settings at its foot, a light/dark quick toggle in the header, and a Sessions tab filter row built from the tools that actually have sessions in the selected period. Phone widths keep the existing tab bar and pick up a gear and a What's New icon, so Settings and the language switch stay reachable below 768px.",
+            "Session detail now surfaces what the harnesses already record about a session: the working directory's project name and git branch for Hermes, per-session tool-call and message counts, profile name, and a metadata-only message timeline for Hermes and Antigravity sessions. Transcript text is never read into the API; only its measurements ship.",
+            "The Overview carries a Token Composition band breaking the window's tokens into prompt, cache, output and reasoning, with the cash value of the cache hits beside it."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Settings opens as a modal over the page from its sidebar trigger, and both Settings and What's New keep one copy each instead of a header and a sidebar twin.",
+            "Light mode is no longer dark-mode paint with a light wall. The redesign's hardcoded surfaces are mapped to the theme tokens, so cards, the KPI grid, the drawer and the scrollbar follow the selected style theme. Every visible string was measured rather than eyeballed: no text in the dashboard falls below WCAG AA (4.5:1) in light mode or dark.",
+            "The energy/kWh estimate is gone. Its Joules-per-token coefficients cited a research note outside the repository, and the model matcher that fed them priced Kimi as llama-405b; Tokdash does not publish numbers it cannot source. Cost is the proxy that was always there.",
+            "The version strings in the sidebar and header are read from the running package instead of hardcoded literals that were already stale when written.",
+            "The Z.ai quota card wears the ZCode mark instead of the grey letter tile: the poll already reads the Z.ai key out of the ZCode CLI's own config, so the provider table maps zai onto the ZCode entry already in the package rather than shipping a second copy of the same glyph. The card keeps its own heading, so it still reads Z.ai.",
+            "A bare tokdash prints a one-screen command card -- eleven verbs in four groups, each with one line -- instead of the full flag reference. --help is still the whole reference and still lists every flag, but the usage line is now one line and the flags arrive in sections whose heading names every verb that reads them, so twelve flags stop each repeating a For tokdash quota consent line. An error prints the same short usage."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Hermes sessions keep their real end-of-activity timing. An earlier cut appended a zero-token turn at each session's ended_at to extend the active-time span, which credited sessions with hours of idle time between messages; the fabricated turn is out and the Hermes parser version stays at 1, so existing parsed caches survive the upgrade.",
+            "Pi fork replays are counted once. A Pi fork copies its parent's already-billed assistant events into a new session file, and those copies were read as new usage -- forking a session inflated every total that session touched, and the fork appeared in Sessions as a row whose whole history was replayed. Ancestry is now resolved from the parentSession header and each event is keyed by corroborated immutable fields, so the original owns the recorded billing, descendants contribute only their own new work, and a replay-only session disappears. Ancestry is persisted in per-file cache metadata, so deleting an ancestor's log cannot hand the same replay a fresh identity; Pi's parser version moved to 2 and rebuilds v1 rows once."
+          ]
+        }
+      ]
+    },
     {
       "version": "2.6.5",
       "date": "2026-09-26",
