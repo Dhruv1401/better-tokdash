@@ -9,7 +9,7 @@ always "unknown": schema v12 records no cwd.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -46,6 +46,12 @@ CREATE TABLE messages (
     session_id TEXT,
     role TEXT,
     content TEXT,
+    tool_name TEXT,
+    tool_call_id TEXT,
+    tool_calls TEXT,
+    reasoning TEXT,
+    token_count INTEGER,
+    finish_reason TEXT,
     timestamp REAL
 );
 """
@@ -402,3 +408,71 @@ def test_api_endpoints(monkeypatch, tmp_path):
     assert "_bill" not in turn and "_event_key" not in turn
     with pytest.raises(ValueError):
         get_sessions_data("not_a_tool", "all")
+
+
+def test_session_detail_exposes_no_transcripts(monkeypatch, tmp_path):
+    """Privacy regression: /api/session detail must carry per-message metadata
+    (roles, sizes, token counts, timestamps) but never transcript text,
+    reasoning text, tool arguments, or tool outputs."""
+    home = _home(tmp_path)
+    _write_db(
+        home,
+        [
+            _row("h-priv", "deepseek-chat", "deepseek", 1779395293.0,
+                 100, 10, 5, 1, title="Privacy session"),
+        ],
+        messages=[
+            (1, "h-priv", "user", "SECRET user prompt text", 1779395294.0),
+            (2, "h-priv", "assistant", "SECRET assistant reply text", 1779395295.0),
+        ],
+    )
+    _patch_env(monkeypatch, home)
+
+    detail = get_session_detail("hermes", "h-priv")
+
+    for msg in detail.get("messages", []):
+        assert "content" not in msg, "message transcript text leaked"
+        assert "reasoning" not in msg, "reasoning text leaked"
+        assert "tool_calls" not in msg, "raw tool call payloads leaked"
+    for tc in detail.get("tool_executions", []) + detail.get("tool_calls", []):
+        assert "arguments" not in tc, "tool arguments leaked"
+        assert "args" not in tc, "tool arguments leaked"
+        assert "result" not in tc, "tool results leaked"
+        assert "output" not in tc, "tool outputs leaked"
+
+    # The metadata the View Chat timeline needs is still present.
+    assert detail["messages"], "expected at least one message row"
+    assert detail["messages"][0]["role"] == "user"
+    assert detail["messages"][0]["content_chars"] == len("SECRET user prompt text")
+    assert detail["metadata"]["message_count"] >= 1
+
+
+
+def test_foreign_db_first_does_not_break_later_detail(monkeypatch, tmp_path):
+    """Regression: a foreign state.db scanned BEFORE the session's own database
+    used to raise out of _hermes_rich_session_detail's loop (its per-DB try had
+    no except) and kill get_session_detail for every valid session living in a
+    later database. The listing loader has always skipped foreign DBs per-file
+    (see the parity comment in _load_hermes_sessions); the detail scan must too.
+    """
+    foreign = _home(tmp_path, "foreign")
+    conn = sqlite3.connect(str(foreign / "state.db"))
+    conn.executescript("CREATE TABLE unrelated (id INTEGER PRIMARY KEY, note TEXT);")
+    conn.commit()
+    conn.close()
+
+    valid = _home(tmp_path, "valid")
+    _write_db(
+        valid,
+        [_row("h-later", "deepseek-chat", "deepseek", 1779395293.0,
+              100, 10, 5, 1, title="Later db session")],
+        messages=[(1, "h-later", "user", "a prompt", 1779395294.0)],
+    )
+
+    # hermes_search_dirs keeps HERMES_HOME order: the foreign DB is scanned first.
+    monkeypatch.setenv("HERMES_HOME", f"{foreign},{valid}")
+
+    detail = get_session_detail("hermes", "h-later")
+
+    assert detail.get("messages"), "detail from the later database must still resolve"
+    assert detail["messages"][0]["role"] == "user"

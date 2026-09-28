@@ -9,7 +9,8 @@ import os
 import re
 import sqlite3
 import threading
-from collections import OrderedDict
+import time
+from collections import Counter, OrderedDict
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache, wraps
 from pathlib import Path
@@ -1014,7 +1015,7 @@ def _summarize_session(
     last_seen_at_ms = int(turns[-1].get("timestamp_ms", 0) or 0)
     intervals = _session_active_intervals(raw, active_gap_cap_ms(), since_ms, until_ms)
 
-    return {
+    res = {
         "tool": raw.get("tool", "unknown"),
         "session_id": raw.get("session_id", "unknown"),
         "display_name": raw.get("display_name")
@@ -1045,6 +1046,15 @@ def _summarize_session(
         "active_ms_sum": sum(end - start for start, end in intervals),
         "_active_intervals": intervals,
     }
+    if "tool_call_count" in raw:
+        res["tool_call_count"] = raw["tool_call_count"]
+    if "message_count" in raw:
+        res["message_count"] = raw["message_count"]
+    if "git_branch" in raw:
+        res["git_branch"] = raw["git_branch"]
+    if "profile_name" in raw:
+        res["profile_name"] = raw["profile_name"]
+    return res
 
 
 def _public_turns(turns: Iterable[Dict[str, Any]]) -> list[Dict[str, Any]]:
@@ -3133,19 +3143,33 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
             continue
         try:
             try:
-                has_title = "title" in _sqlite_columns(conn, "sessions")
+                cols = set(_sqlite_columns(conn, "sessions"))
+                has_title = "title" in cols
+                has_cwd = "cwd" in cols
+                has_repo = "git_repo_root" in cols
+                has_branch = "git_branch" in cols
+                has_tools = "tool_call_count" in cols
+                has_msgs = "message_count" in cols
+                has_profile = "profile_name" in cols
+
                 cur = conn.cursor()
-                cur.execute(
-                    f"""
+
+                query = f"""
                     SELECT id, model, billing_provider, started_at,
                            input_tokens, output_tokens,
                            cache_read_tokens, cache_write_tokens,
-                           reasoning_tokens, estimated_cost_usd, actual_cost_usd
-                           {', title' if has_title else ", ''"}
+                           reasoning_tokens, estimated_cost_usd, actual_cost_usd,
+                           { 'title' if has_title else "''" } as title_col,
+                           { 'cwd' if has_cwd else "''" } as cwd_col,
+                           { 'git_repo_root' if has_repo else "''" } as repo_col,
+                           { 'git_branch' if has_branch else "''" } as branch_col,
+                           { 'tool_call_count' if has_tools else "0" } as tools_col,
+                           { 'message_count' if has_msgs else "0" } as msgs_col,
+                           { 'profile_name' if has_profile else "'default'" } as profile_col
                     FROM sessions
                     WHERE model IS NOT NULL AND TRIM(model) != ''
-                    """
-                )
+                """
+                cur.execute(query)
                 rows = cur.fetchall()
             except (OSError, sqlite3.Error):
                 # Corrupt/foreign DB: the parser skips it per-DB, so the
@@ -3159,12 +3183,22 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                             input_t, output_t,
                             cache_r, cache_w, reasoning,
                             estimated_cost, actual_cost, title_raw,
+                            cwd_val, repo_val, branch_val,
+                            tool_calls_cnt, msg_cnt, profile_val,
                         ) = row
                         sid = str(row_id)
                         # Dedup across state.db files: first search-dir wins.
                         if sid in claimed:
                             continue
                         claimed.add(sid)
+
+                        # Verbatim parser expression: seconds, or ms if > 1e12.
+                        try:
+                            sa = float(started_at or 0.0)
+                        except (ValueError, TypeError):
+                            sa = 0.0
+                        ts_ms = int(sa * 1000) if sa < 1e12 else int(sa)
+
                         input_t = _to_int(input_t)
                         output_t = _to_int(output_t)
                         cache_r = _to_int(cache_r)
@@ -3178,12 +3212,7 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                             actual_f > 0 or estimated_f > 0
                         ):
                             continue
-                        # Verbatim parser expression: seconds, or ms if > 1e12.
-                        try:
-                            sa = float(started_at or 0.0)
-                        except (ValueError, TypeError):
-                            sa = 0.0
-                        ts_ms = int(sa * 1000) if sa < 1e12 else int(sa)
+
                         model = str(model)
                         provider = (
                             str(billing_provider or "").strip()
@@ -3217,13 +3246,32 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                             bill=bill,
                         )
                         turn["_event_key"] = f"hermes:{sid}"
+
+                        # Extract project name from git_repo_root or cwd
+                        proj_path = repo_val or cwd_val or ""
+                        if proj_path:
+                            try:
+                                p = Path(proj_path)
+                                if p.resolve() == Path.home().resolve():
+                                    project = "~"
+                                else:
+                                    project = p.name or "unknown"
+                            except Exception:
+                                project = "unknown"
+                        else:
+                            project = "unknown"
+
                         # One extra query per title-less session; fine at
                         # current hermes scale, revisit if histories grow.
                         title = _clean_display_name(title_raw) or _hermes_user_preview(conn, sid)
                         raw: Dict[str, Any] = {
                             "tool": "hermes",
                             "session_id": sid,
-                            "project": "unknown",  # schema v12 records no cwd
+                            "project": project,
+                            "git_branch": str(branch_val or ""),
+                            "tool_call_count": _to_int(tool_calls_cnt),
+                            "message_count": _to_int(msg_cnt),
+                            "profile_name": str(profile_val or "default"),
                             "turns": [turn],
                         }
                         if title:
@@ -6704,6 +6752,232 @@ def get_active_time_data(
     }
 
 
+def _hermes_rich_session_detail(session_id: str, raw: Dict[str, Any], session: Dict[str, Any]) -> Dict[str, Any]:
+    detail_data: Dict[str, Any] = {
+        "messages": [],
+        "tool_executions": [],
+        "model_usages": [],
+        "metadata": {
+            "project": session.get("project", "hermes"),
+            "git_branch": raw.get("git_branch", ""),
+            "profile_name": raw.get("profile_name", "default"),
+            "tool_call_count": raw.get("tool_call_count", 0),
+            "message_count": raw.get("message_count", 0),
+            "is_live": False,
+        },
+    }
+    for db_path in _hermes_db_paths():
+        if not db_path.exists():
+            continue
+        try:
+            conn = connect_sqlite_readonly(db_path)
+        except Exception:
+            continue
+        try:
+            cur = conn.cursor()
+            cols = set(_sqlite_columns(conn, "sessions"))
+            has_ended = "ended_at" in cols
+            has_last_act = "last_activity_at" in cols
+            has_cwd = "cwd" in cols
+            has_branch = "git_branch" in cols
+            has_profile = "profile_name" in cols
+            has_tools = "tool_call_count" in cols
+            has_msgs = "message_count" in cols
+
+            query = f"""
+                SELECT id, started_at,
+                       { 'ended_at' if has_ended else 'NULL' },
+                       { 'last_activity_at' if has_last_act else 'NULL' },
+                       { 'cwd' if has_cwd else "''" },
+                       { 'git_branch' if has_branch else "''" },
+                       { 'profile_name' if has_profile else "'default'" },
+                       { 'tool_call_count' if has_tools else "0" },
+                       { 'message_count' if has_msgs else "0" }
+                FROM sessions WHERE id = ?
+            """
+            cur.execute(query, (session_id,))
+            s_row = cur.fetchone()
+            if not s_row:
+                continue
+
+            tables = set(r[0] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+
+            if "messages" in tables:
+                try:
+                    cur.execute(
+                        """
+                        SELECT id, role, content, tool_name, tool_call_id, tool_calls, reasoning, token_count, finish_reason, timestamp
+                        FROM messages
+                        WHERE session_id = ?
+                        ORDER BY id ASC
+                        """,
+                        (session_id,),
+                    )
+                    msg_rows = cur.fetchall()
+                    parsed_messages = []
+                    tool_calls_map: Dict[str, Dict[str, Any]] = {}
+                    for mr in msg_rows:
+                        mid, role, content, tool_name, tool_call_id, tool_calls_raw, reasoning, token_count, finish_reason, ts = mr
+                        parsed_tc = []
+                        if tool_calls_raw:
+                            try:
+                                parsed_tc = json.loads(tool_calls_raw) if isinstance(tool_calls_raw, str) else tool_calls_raw
+                            except Exception:
+                                parsed_tc = []
+
+                        msg_item = {
+                            "id": mid,
+                            "role": role,
+                            # Transcript text is intentionally NOT exposed over the
+                            # API (privacy): only per-message metadata ships.
+                            "content_chars": len(content or ""),
+                            "content_tokens": token_count,
+                            "tool_name": tool_name or "",
+                            "tool_call_id": tool_call_id or "",
+                            "has_tool_calls": bool(parsed_tc),
+                            "has_reasoning": bool(reasoning),
+                            "token_count": token_count,
+                            "finish_reason": finish_reason,
+                            "timestamp": ts,
+                        }
+                        parsed_messages.append(msg_item)
+
+                        for tc in (parsed_tc or []):
+                            if isinstance(tc, dict):
+                                cid = tc.get("id") or tc.get("call_id")
+                                fn = tc.get("function", {}) if isinstance(tc.get("function"), dict) else {}
+                                if cid:
+                                    t_name = fn.get("name") or tc.get("name", "tool")
+                                    tool_calls_map[cid] = {
+                                        "id": cid,
+                                        "name": t_name,
+                                        "tool_name": t_name,
+                                        "status": "executed",
+                                        "timestamp": ts,
+                                    }
+
+                        if role == "tool" and tool_call_id:
+                            if tool_call_id in tool_calls_map:
+                                if tool_name:
+                                    tool_calls_map[tool_call_id]["name"] = tool_name
+                                    tool_calls_map[tool_call_id]["tool_name"] = tool_name
+                            else:
+                                tool_calls_map[tool_call_id] = {
+                                    "id": tool_call_id,
+                                    "name": tool_name or "tool",
+                                    "tool_name": tool_name or "tool",
+                                    "status": "executed",
+                                    "timestamp": ts,
+                                }
+
+                    detail_data["messages"] = parsed_messages
+                    detail_data["tool_executions"] = list(tool_calls_map.values())
+                    detail_data["tool_calls"] = list(tool_calls_map.values())
+                except Exception:
+                    pass
+
+            ended_at = s_row[2]
+            last_activity = s_row[3]
+            now_sec = time.time()
+            is_live = ended_at is None and last_activity and (now_sec - float(last_activity) < 900)
+            detail_data["metadata"]["is_live"] = bool(is_live)
+            break
+        except (OSError, sqlite3.Error, ValueError):
+            # Corrupt/foreign DB (or junk last_activity values): skip this file
+            # and keep scanning, mirroring the listing loader's per-DB guard.
+            # Without this, a foreign state.db scanned before the session's own
+            # database raised out of the loop and killed detail lookup for every
+            # valid session living in a later DB.
+            continue
+        finally:
+            conn.close()
+    return detail_data
+
+
+def _antigravity_rich_session_detail(session_id: str, raw: Dict[str, Any], session: Dict[str, Any]) -> Dict[str, Any]:
+    detail_data: Dict[str, Any] = {
+        "messages": [],
+        "tool_executions": [],
+        "tool_calls": [],
+        "model_usages": [],
+        "metadata": {
+            "project": session.get("project", "antigravity"),
+            "tool_call_count": 0,
+            "message_count": 0,
+            "is_live": False,
+        },
+    }
+    from . import clientpaths
+    for base in clientpaths.antigravity_product_dirs():
+        brain_log = base / "brain" / session_id / ".system_generated" / "logs" / "transcript.jsonl"
+        if not brain_log.exists():
+            continue
+        try:
+            with open(brain_log, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        step = json.loads(line)
+                    except Exception:
+                        continue
+                    src = step.get("source", "")
+                    styp = step.get("type", "")
+                    role = "user" if (src == "USER_EXPLICIT" or styp == "USER_INPUT") else "assistant"
+                    content = step.get("content", "") or ""
+                    thinking = step.get("thinking", "") or ""
+                    t_calls = step.get("tool_calls") or []
+                    created_at = step.get("created_at", "")
+
+                    if content or thinking or t_calls:
+                        detail_data["messages"].append({
+                            "role": role,
+                            # Transcript text is intentionally NOT exposed over the
+                            # API (privacy): only per-message metadata ships.
+                            "content_chars": len(content or ""),
+                            "has_reasoning": bool(thinking),
+                            "has_tool_calls": bool(t_calls),
+                            "timestamp": created_at,
+                        })
+                    for tc in t_calls:
+                        tool_item = {
+                            "tool_name": tc.get("name", "tool"),
+                            "name": tc.get("name", "tool"),
+                            "has_args": bool(tc.get("args")),
+                            "timestamp": created_at,
+                        }
+                        detail_data["tool_executions"].append(tool_item)
+                        detail_data["tool_calls"].append(tool_item)
+            detail_data["metadata"]["tool_call_count"] = len(detail_data["tool_calls"])
+            detail_data["metadata"]["message_count"] = len(detail_data["messages"])
+            break
+        except Exception as e:
+            logger.warning(f"Error loading antigravity session transcript: {e}")
+
+    turns = raw.get("turns", [])
+    model_counts: Dict[str, Dict[str, Any]] = {}
+    for t in turns:
+        m_name = t.get("model") or "unknown"
+        if m_name not in model_counts:
+            model_counts[m_name] = {
+                "model": m_name,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "reasoning_tokens": 0,
+                "cost": 0.0,
+            }
+        model_counts[m_name]["input_tokens"] += t.get("tokens_in", 0)
+        model_counts[m_name]["output_tokens"] += t.get("tokens_out", 0)
+        model_counts[m_name]["cache_read_tokens"] += t.get("tokens_cache", 0)
+        model_counts[m_name]["reasoning_tokens"] += t.get("tokens_reasoning", 0)
+        model_counts[m_name]["cost"] += float(t.get("cost", 0.0))
+    detail_data["model_usages"] = list(model_counts.values())
+
+    return detail_data
+
+
 def get_session_detail(tool: str, session_id: str) -> Dict[str, Any]:
     key = str(tool or "").strip().lower()
     if key not in SESSION_TOOLS:
@@ -6718,11 +6992,16 @@ def get_session_detail(tool: str, session_id: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"{TOOL_LABELS.get(key, key.title())} session not found: {session_id}")
     session.pop("_active_intervals", None)
 
-    return {
+    res = {
         "session": session,
         "turns": _public_turns(raw.get("turns", [])),
         "timestamp": datetime.now().isoformat(),
     }
+    if key == "hermes":
+        res.update(_hermes_rich_session_detail(str(session_id), raw, session))
+    elif key in ("antigravity_cli", "antigravity"):
+        res.update(_antigravity_rich_session_detail(str(session_id), raw, session))
+    return res
 
 
 def get_codex_sessions_data(
