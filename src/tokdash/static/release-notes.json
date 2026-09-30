@@ -1,6 +1,24 @@
 {
-  "current": "2.6.7",
+  "current": "2.6.8",
   "releases": [
+    {
+      "version": "2.6.8",
+      "date": "2026-09-30",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "gpt-6.1-sol is priced. OpenAI's newest Sol tier reads $2.00 input / $10.00 output per MTok at the standard short-context rates, with cache read at $0.10 and cache write at $2.50 -- the same as gpt-6-sol except that cached input is halved, and its long-context and Batch/Flex/Fast rules carry over unchanged."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "A failed dashboard load no longer freezes the page behind a dialog. That failure was already reported on the persistent status line, so the alert was a second, blocking copy of a message the page had just shown; the error now stays in the console."
+          ]
+        }
+      ]
+    },
     {
       "version": "2.6.7",
       "date": "2026-09-28",

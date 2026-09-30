@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 2.6.8 - 2026-09-30
+
+### Added
+
+- Updated `src/tokdash/pricing_db.json` from pricing DB `2.0.32` to `2.0.33` (`lastUpdated: 2026-09-30T00:00:00Z`) to price `gpt-6.1-sol`, released 2026-09-29. The entry carries OpenAI's official standard short-context rates -- $2.00 input / $10.00 output per MTok with cache at $0.10 read / $2.50 write -- which match `gpt-6-sol` on every field but cached input, where they are halved. The long-context rule is the sibling's too: past 272K input and cache double and output rises 1.5x, while Batch and Flex halve these rates and Fast doubles them. The contract test that pins the Sol family now takes `gpt-6.1-sol` alongside `gpt-6-sol` and `gpt-6-luna`. (#138, thanks @lushuyu)
+
+### Fixed
+
+- A failed dashboard fetch no longer freezes the page behind a modal dialog. `updateDashboard()`'s error path called `alert('Failed to fetch data. Check console for details.')` whenever nothing had loaded yet, so a transient failure -- a server mid-restart, a request dropped on a sleepy connection -- blocked the whole dashboard until someone dismissed it, and it said less than what the user had already been shown: the same handler reports through `setDashboardFetchStatus()`, which writes `t('loadFailed')` into the persistent `#lastUpdate` status line, and a forced refresh reports again through `showUsageRefreshReport()`. The dialog is gone and the error stays in the console, where developers already look for it. The test that required the alert now forbids one, keeping the harness `alert()` stub as a tripwire so a reintroduction fails loudly, and the banner `console.log` that announced the dashboard on every page load goes with it. (#137, thanks @Dhruv1401)
+
 ## 2.6.7 - 2026-09-28
 
 ### Added
