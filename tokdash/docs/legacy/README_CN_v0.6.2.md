@@ -1,0 +1,353 @@
+<!--
+Archived README (中文) — Tokdash v0.6.2.
+Preserved verbatim before the v1.0.0 documentation rewrite (Python-native onboarding).
+For current usage see the top-level README_CN.md; for the rewrite plan see
+docs/local/20260620_python_onboard/PYTHON_ONBOARD_PLAN.md.
+-->
+
+> **存档快照 — Tokdash v0.6.2。** 在 v1.0.0 README 重写之前保留以供参考。
+
+<p align="center">
+  <a href="README.md">English</a> &nbsp;|&nbsp; <a href="README_CN.md">中文</a>
+</p>
+
+<p align="center">
+  <a href="https://tokdash.github.io/"><img src="https://raw.githubusercontent.com/JingbiaoMei/tokdash/main/docs/assets/tokdash_logo_full.png" alt="Tokdash" width="420" /></a>
+</p>
+
+<p align="center">
+  <b>适用于 AI 编程工具的本地 Token 与费用仪表盘</b>
+</p>
+
+<p align="center">
+  <a href="https://opencode.ai/" title="OpenCode"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/opencode.png" alt="OpenCode" height="34"></a>
+  <a href="https://openai.com/codex/" title="Codex"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/codex.png" alt="Codex" height="34"></a>
+  <a href="https://www.claude.com/product/claude-code" title="Claude Code"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/claude.png" alt="Claude Code" height="34"></a>
+  <a href="https://github.com/google-gemini/gemini-cli" title="Gemini CLI"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/gemini.png" alt="Gemini CLI" height="34"></a>
+  <a href="https://openclaw.ai/" title="OpenClaw"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/openclaw.png" alt="OpenClaw" height="34"></a>
+  <a href="https://github.com/MoonshotAI/kimi-cli" title="Kimi CLI"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/kimi.png" alt="Kimi CLI" height="34"></a>
+  <a href="https://pi.dev/" title="Pi"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/pi.png" alt="Pi" height="34"></a>
+  <a href="https://github.com/features/copilot" title="GitHub Copilot CLI"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/copilot.png" alt="GitHub Copilot CLI" height="34"></a>
+  <a href="https://hermes-agent.nousresearch.com/" title="Hermes"><img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/agents/pills/hermes.png" alt="Hermes" height="34"></a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/FastAPI-009688?style=flat&logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/License-MIT-green?style=flat" alt="License" />
+  <a href="https://tokdash.github.io/"><img src="https://img.shields.io/badge/%E5%AE%98%E7%BD%91-tokdash.github.io-1E40AF?style=flat&logo=githubpages&logoColor=white" alt="官网" /></a>
+  <a href="https://tokdash.github.io/demo/"><img src="https://img.shields.io/badge/%E5%9C%A8%E7%BA%BF%E4%BD%93%E9%AA%8C-tokdash.github.io%2Fdemo-F59E0B?style=flat&logo=githubpages&logoColor=white" alt="在线体验" /></a>
+</p>
+
+<p align="center">
+  <b>无需安装即可体验 → <a href="https://tokdash.github.io/demo/">tokdash.github.io/demo</a></b>
+</p>
+
+<p align="center">
+  <b>v0.6.0：冷启动使用量扫描比 0.6.0 之前快约 30×，在同一台机器的本地基准中比 ccusage 快 15×。</b>
+</p>
+
+> [!IMPORTANT]
+> **保留你的历史：** Claude Code 与 Gemini CLI 默认会删除超过约 30 天的本地会话，因此 Tokdash 早期月份的统计可能会悄悄变少——每个客户端改一行配置即可避免（[历史数据保留](#历史数据保留)）。
+
+## 目录
+
+- [功能特性](#功能特性)
+- [在线 Demo](#在线-demo)
+- [已支持客户端](docs/SUPPORTED_CLIENTS.md)
+- [平台支持](#平台支持)
+- [快速开始](#快速开始)
+- [配置](#配置)
+- [隐私与安全](#隐私与安全)
+- [API（本地）](#api本地)
+- [费用精度说明](#费用精度说明)
+- [历史数据保留](#历史数据保留)
+- [路线图](#路线图)
+- [贡献 / 安全](#贡献--安全)
+- [项目结构](#项目结构)
+- [License](#license)
+
+## 功能特性
+
+- **精确 Token 统计**：输入 / 输出 / 缓存 Token 明细
+- **状态栏集成** *[新]*：把实时 Token 使用量挂到 Claude Code（或任何能访问本地 HTTP 端点的 Agent）的状态栏中 — 见[快速开始](#状态栏集成statusline-integration)
+- **自定义日期范围**：Flatpickr 日期选择器 + 快捷按钮（今天、最近 7 天、本月等）
+- **贡献日历**：2D 热力图 + 3D 等距视图，支持 Tokens / Cost / Messages 切换
+- **会话浏览器**：Codex、Claude Code、OpenCode 的逐会话下钻
+- **10 款样式主题**：Elevated、Classic、Vibrant、Midnight、Paper、Liquid、Terminal、Brutalist、Arcade、Studio
+- **明暗模式**：自动跟随系统偏好，支持手动切换
+- **PWA 支持**：可作为渐进式 Web 应用安装
+
+<p align="center">
+  <a href="https://tokdash.github.io/demo/">
+    <img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/demo.png" alt="Tokdash 仪表盘 — 点击体验在线 Demo" width="900" />
+  </a>
+</p>
+<p align="center">
+  <a href="https://tokdash.github.io/demo/">
+    <img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/demo-stats.png" alt="Tokdash 统计与热力图 — 点击体验在线 Demo" width="900" />
+  </a>
+</p>
+
+## 在线 Demo
+
+仪表盘的静态在线版本：**[tokdash.github.io/demo](https://tokdash.github.io/demo/)**，
+无需安装即可体验。（项目官网为 **[tokdash.github.io](https://tokdash.github.io/)**。）
+
+Demo 使用未经修改的 Tokdash 前端，配合浏览器内的 Mock 层返回确定性的合成数据。
+你可以：
+
+- 切换 Overview / Sessions / Stats / Pricing 各页签，
+- 选择任意日期范围（或 Today / 最近 7 天 / 最近 30 天 等快捷按钮），
+- 在浅色 / 深色模式与全部 10 款主题之间切换，
+- 进入 Codex / Claude Code / OpenCode 的合成会话查看明细，
+- 浏览只读的定价数据库。
+
+Demo 源码：[tokdash/tokdash.github.io](https://github.com/tokdash/tokdash.github.io)。
+不会上传任何数据，也不会读取你本地的任何文件。
+
+## 平台支持
+
+- **Linux（含 WSL2）**：支持
+- **macOS**：实验性支持
+
+## 快速开始
+
+### 前置要求
+
+- Python **3.10+**
+- 已安装一个或多个[支持的客户端](docs/SUPPORTED_CLIENTS.md)
+
+### 安装（pip）
+
+```bash
+pip install tokdash
+tokdash serve
+```
+
+打开：`http://localhost:55423`
+
+如果端口冲突：
+- `tokdash serve --port <port>`
+
+如果你想从其他设备访问 Tokdash（推荐）：
+- Tailscale Serve（仅对你的 tailnet 可见）：`tailscale serve 55423`
+- SSH 端口转发：`ssh -L 55423:127.0.0.1:55423 <user>@<host>`
+
+也可以绑定到 `0.0.0.0`，但**不推荐**：这会监听所有网络接口，可能把仪表盘暴露到你的局域网/VPN/Wi-Fi 之外。只有在你清楚风险并已配置防火墙/认证时才这样做。
+
+### 后台运行
+
+参见 `docs/agents/systemd/BACKGROUND_RUN.md`，其中包含：
+- Linux systemd（用户服务）模板
+- macOS launchd（LaunchAgent）模板
+- 可选的 `/health` 健康探测看门狗，可在服务卡死时自动重启
+
+#### 面向人类用户
+
+把下面这段提示词复制给你的 LLM 代理（Claude Code、AmpCode、Cursor 等）：
+
+```text
+Install and configure Tokdash to run in the background by following the instructions here:
+https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/agents/systemd/AGENTS.md
+
+Or read the Background Run guide, but seriously, let an agent do it.
+```
+
+#### 面向 LLM 代理
+
+拉取安装指南并按照其说明执行：
+
+```bash
+curl -s https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/agents/systemd/AGENTS.md
+```
+
+### 更新 Tokdash
+
+如果你是通过 pip 安装 Tokdash，并通过 systemd 运行它：
+
+```bash
+# 1. 升级包
+pip install --upgrade tokdash
+
+# 2. 重启 systemd 服务以加载新版本
+systemctl --user daemon-reload
+systemctl --user restart tokdash
+
+# 3. 验证新版本
+pip show tokdash | grep Version
+systemctl --user status tokdash --no-pager
+
+# 4. 测试 API 是否正常响应
+curl 'http://127.0.0.1:55423/api/usage?period=today'
+```
+
+如需查看日志：
+
+```bash
+journalctl --user -u tokdash -f
+```
+
+### OpenClaw 摘要（定时报表）
+
+Tokdash 可以通过定时查询本地 API，生成 OpenClaw 的日报 / 周报 / 月报。
+
+#### 面向人类用户
+
+把下面这段提示词复制给你的 LLM 代理（Claude Code、AmpCode、Cursor 等）：
+
+```text
+Install and configure scheduled Tokdash usage reports for OpenClaw by following the instructions here:
+https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/agents/openclaw_reporting/AGENTS.md
+
+Or read the guide yourself, but seriously, let an agent do it.
+```
+
+#### 面向 LLM 代理
+
+拉取安装指南并按照其说明执行：
+
+```bash
+curl -s https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/agents/openclaw_reporting/AGENTS.md
+```
+
+### 状态栏集成（Statusline integration）
+
+本地 API 可为编程 Agent（如 Claude Code）提供实时 token/费用状态栏。把下面这段提示词发给你的 Agent：
+
+> *"I would like to add a statusline item from the tokdash endpoint's API; it should show the total tokens used today."*
+
+再把 [`docs/API.md`](docs/API.md) 作为参考一起给它，剩下的让 Agent 自行接入即可。
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/JingbiaoMei/Tokdash/main/docs/assets/demo-statusline.png" alt="Tokdash 状态栏集成示例" width="900" />
+</p>
+
+## 配置
+
+Tokdash 默认**只监听 localhost**。
+
+- `TOKDASH_HOST`（默认：`127.0.0.1`）
+- `TOKDASH_PORT`（默认：`55423`）
+- `TOKDASH_CACHE_TTL`（默认：`120` 秒）
+- `TOKDASH_COMPUTE_CONCURRENCY`（默认：`2`）——同时进行的重型历史重解析数量上限；超出的冷请求会立即返回 `503`，而不是在高负载下耗尽服务线程
+- `TOKDASH_LIMIT_CONCURRENCY`（默认：`64`）——uvicorn 接受的最大并发连接数（背压）
+- `TOKDASH_KEEPALIVE`（默认：`5` 秒）——uvicorn keep-alive 超时
+- `TOKDASH_ALLOW_ORIGINS`（逗号分隔，默认：空）
+- `TOKDASH_ALLOW_ORIGIN_REGEX`（默认仅允许 localhost/127.0.0.1）
+- `TOKDASH_NO_RETENTION_NOTICE`（设为 `1` 可静默 `tokdash serve` 启动时打印的历史保留提醒）
+
+持久化使用量数据库（默认开启）：
+
+Tokdash 默认会在 `~/.tokdash/usage.sqlite3` 维护一个本地 SQLite 索引。它保存解析后的 token 行以及 Codex/Claude 会话摘要，让仪表盘和 API 的重复读取可以走索引 SQL，而不是每次重新解析所有源日志。源日志仍然是事实来源；这个 DB 是本地性能索引，禁用或不可用时 Tokdash 会回退到实时解析。
+
+- `TOKDASH_USAGE_DB`（默认：`1`）——设为 `0`、`false`、`no` 或 `off` 可禁用持久化使用量 DB
+- `TOKDASH_DATA_DIR`（默认：`~/.tokdash`）——Tokdash 本地状态目录
+- `TOKDASH_USAGE_DB_PATH`（默认：`$TOKDASH_DATA_DIR/usage.sqlite3`）——显式指定 SQLite 文件路径
+- `TOKDASH_USAGE_DB_DURABLE`（默认：`1`）——当源文件临时消失或解析器返回空结果时保留已索引行；设为 `0` 则严格按源文件替换
+- `TOKDASH_USAGE_DB_WATCH`（默认：`0`）——设为 `1` 后，`tokdash serve` 内部会启动后台同步循环
+- `TOKDASH_USAGE_DB_WATCH_INTERVAL`（默认：`30` 秒）——`tokdash db watch` 和 serve-time watch 循环的同步间隔
+
+DB 维护命令：
+
+```bash
+tokdash db status --pretty
+tokdash db sync --pretty
+tokdash db verify --verify-period today --pretty
+tokdash db repair --dry-run --pretty
+tokdash db resync --pretty
+tokdash db watch --pretty
+```
+
+示例（通过 Tailscale Serve 远程访问，推荐）：
+
+```bash
+tokdash serve --bind 127.0.0.1 --port 55423
+tailscale serve --bg 55423
+```
+
+默认情况下，`tokdash serve` 会在启动时自动在浏览器中打开仪表盘一次。使用 `--no-open` 可禁用此行为（在无界面/SSH 环境以及后台服务模板中也会自动跳过）。
+
+## 隐私与安全
+
+- **无遥测**：Tokdash 不会主动把你的数据发送到任何地方。
+- **本地解析**：使用量由本机会话文件计算得出（见[支持的客户端](docs/SUPPORTED_CLIENTS.md)）。
+- **服务暴露**：Tokdash 默认绑定 `127.0.0.1`。如需远程访问，优先使用 Tailscale Serve 或 SSH 隧道；除非你明确知道风险并配置好了防火墙/认证，否则不要使用 `--bind 0.0.0.0`。
+
+## API（本地）
+
+Tokdash 是一个本地 HTTP 服务。常用接口：
+
+- `GET /api/usage?period=today|week|month|N`
+- `GET /api/usage?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD`
+- `GET /api/tools?period=...`（仅编程工具）
+- `GET /api/openclaw?period=...`（仅 OpenClaw）
+- `GET /api/sessions?tool=codex|claude|opencode|pi_agent&period=...`（追加 `&include_review_sessions=true` 可包含默认隐藏的 Codex 审核/权限会话）
+- `GET /api/stats`（贡献日历与统计数据）
+
+示例：
+
+```bash
+curl 'http://127.0.0.1:55423/api/usage?period=today'
+```
+
+完整 API 参考：[`docs/API.md`](docs/API.md) — 包含每个端点的请求参数与响应结构。
+
+## 费用精度说明
+
+Token 统计依赖各客户端本地记录的内容。费用由 `src/tokdash/pricing_db.json` 计算，可能滞后于真实服务商价格。如金额敏感，请以你的账单来源为准。
+
+## 历史数据保留
+
+Tokdash 通过读取各客户端的**本地**会话日志来统计用量，同时也维护一个本地 SQLite 性能索引。这个索引可以保留 Tokdash 已经见过的行，但无法恢复在索引前就被删除的日志，也不能替代原始客户端历史。如果客户端在 Tokdash 同步前删除了旧日志，过去某个月的统计仍然**可能比你最初记录时更低**。只有两个受支持的客户端会默认这样做，且都只需改一行配置：
+
+- **Claude Code** 会在启动时删除超过 `cleanupPeriodDays`（**默认 30 天**）的会话。请把这个键添加到你现有的 `~/.claude/settings.json`（以及任何其他 `CLAUDE_CONFIG_DIR`）：
+  ```json
+  { "cleanupPeriodDays": 3650 }
+  ```
+- **Gemini CLI** 会删除超过 30 天的会话。在 `~/.gemini/settings.json` 中关闭它；如果某个项目有 `.gemini/settings.json`，也要同步修改，因为工作区设置会覆盖用户设置：
+  ```json
+  { "general": { "sessionRetention": { "enabled": false } } }
+  ```
+
+其他所有受支持的客户端默认都会无限期保留历史。完整的逐客户端清单、配置细节，以及本地 SQLite 索引能保留什么、不能保留什么，详见 **[docs/HISTORY_RETENTION.md](docs/HISTORY_RETENTION.md)**。
+
+## 路线图
+
+参见 `docs/ROADMAP.md`。
+
+## 贡献 / 安全
+
+- 贡献指南：`docs/CONTRIBUTING.md`
+- 安全策略：`docs/SECURITY.md`
+
+## 项目结构
+
+```text
+tokdash/
+├── main.py                 # 源码入口（python3 main.py）
+├── tokdash                 # CLI 包装器（./tokdash serve）
+├── src/
+│   └── tokdash/
+│       ├── cli.py
+│       ├── api.py                # FastAPI 路由 / 应用
+│       ├── compute.py            # 聚合 / 合并逻辑
+│       ├── dateutil.py           # 共享的日期范围解析
+│       ├── sessions.py           # 会话浏览器逻辑
+│       ├── pricing.py            # PricingDatabase 封装
+│       ├── assets.py             # 静态资源管理
+│       ├── model_normalization.py
+│       ├── pricing_db.json
+│       ├── sources/
+│       │   ├── openclaw.py       # OpenClaw 会话日志解析器
+│       │   └── coding_tools.py   # 本地编程工具解析器
+│       └── static/
+│           ├── index.html        # 单页仪表盘
+│           ├── theme-config.js   # 主题调色板 & 热力图颜色
+│           └── themes.css        # 各主题 CSS 覆写
+└── docs/                   # 路线图 + 后台运行文档 + agent 提示词
+```
+
+## License
+
+MIT License，详见 `LICENSE`。

@@ -1,0 +1,20 @@
+{
+  "case": "busy",
+  "period": "today",
+  "fixtures": {
+    "health": "health.json",
+    "usage": "503",
+    "active_time": "503",
+    "insights": "503",
+    "quota": "503"
+  },
+  "expected": {
+    "connection": "Busy",
+    "dot": "busy",
+    "banner": {
+      "title": "Tokdash is busy - retrying",
+      "body_contains": "Backing off"
+    },
+    "last_good_data": "dimmed"
+  }
+}

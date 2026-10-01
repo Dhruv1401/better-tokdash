@@ -1,0 +1,12 @@
+M1 FULL SUITE: KILLED (584 failed, 2464 passed, 15 skipped, 3 warnings, 4 errors in 270.46s (0:04:30))
+Traceback (most recent call last):
+  File "<stdin>", line 34, in <module>
+  File "C:\Users\Dhruv Jadav\AppData\Local\Programs\Python\Python312\Lib\shutil.py", line 435, in copy
+    copyfile(src, dst, follow_symlinks=follow_symlinks)
+  File "C:\Users\Dhruv Jadav\AppData\Local\Programs\Python\Python312\Lib\shutil.py", line 262, in copyfile
+    with open(dst, 'wb') as fdst:
+         ^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\Dhruv Jadav\\Downloads\\Tokdash Testing\\output\\mutant\\src\\tokdash\\sources\\coding_tools.py'
+Python\Python312\Lib\shutil.py", line 637, in _rmtree_unsafe
+    os.rmdir(path)
+PermissionError: [WinError 32] The process cannot access the file because it is being used by another process: 'C:\\Users\\Dhruv Jadav\\Downloads\\Tokdash Testing\\output\\mutant'

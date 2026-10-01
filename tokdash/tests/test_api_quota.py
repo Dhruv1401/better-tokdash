@@ -1,0 +1,857 @@
+from __future__ import annotations
+
+import pytest
+
+import tokdash.api as api
+
+
+def test_get_quota_returns_stored_codex_session_data_without_collecting(monkeypatch):
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    monkeypatch.setattr(
+        "tokdash.sources.quota.collect_local_snapshots",
+        lambda: (_ for _ in ()).throw(AssertionError("local collector called")),
+    )
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "codex",
+                "default",
+                "5h",
+                "5-hour window",
+                50,
+                1_782_909_000,
+                "pro",
+                1_782_907_200,
+                "codex_session",
+                "ok",
+                {},
+            )
+        ]
+    )
+
+    payload = api.get_quota()
+
+    assert payload["providers"]["codex"]["network_enabled"] is False
+    assert payload["providers"]["codex"]["buckets"][0]["bucket"] == "5h"
+    assert payload["providers"]["codex"]["buckets"][0]["used_percent"] == 50.0
+    assert payload["consent"] == {
+        "credential_scan": False,
+        "codex_api": False,
+        "claude_api": False,
+        "antigravity_api": False,
+        "minimax_api": False,
+        "kimi_api": False,
+        "grok_api": False,
+        "zai_api": False,
+        "opencode_go_api": False,
+        "commandcode_api": False,
+    }
+
+
+def test_get_quota_does_not_call_network_collectors(monkeypatch):
+    api._clear_cache()
+    monkeypatch.setattr("tokdash.sources.quota.collect_network_snapshots", lambda: (_ for _ in ()).throw(AssertionError("network called")))
+
+    payload = api.get_quota()
+
+    assert "providers" in payload
+
+
+def test_get_quota_exposes_new_provider_shells_and_consent_keys():
+    api._clear_cache()
+
+    payload = api.get_quota()
+
+    assert {"minimax", "kimi", "grok", "zai", "opencode_go"}.issubset(payload["providers"])
+    assert {"minimax_api", "kimi_api", "grok_api", "zai_api", "opencode_go_api"}.issubset(payload["consent"])
+
+
+def test_quota_state_marks_only_locally_present_provider_shells_detected(monkeypatch, tmp_path):
+    from tokdash.sources import quota
+
+    api._clear_cache()
+    present = tmp_path / "present"
+    present.mkdir()
+    missing = tmp_path / "missing"
+    monkeypatch.setattr(quota.clientpaths, "codex_home", lambda: present)
+    monkeypatch.setattr(quota.clientpaths, "claude_config_dir", lambda: missing)
+    monkeypatch.setattr(quota.clientpaths, "antigravity_cli_dir", lambda: missing)
+    monkeypatch.setattr(quota.clientpaths, "minimax_cli_root", lambda: missing)
+    monkeypatch.setattr(quota.clientpaths, "grok_home", lambda: missing)
+    monkeypatch.setattr(quota.clientpaths, "zcode_home", lambda: missing)
+    monkeypatch.setattr(quota.clientpaths, "kimi_roots", lambda: [missing])
+    for name in (
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "MINIMAX_API_KEY",
+        "MINIMAX_TOKEN_PLAN_GLOBAL_KEY",
+        "MINIMAX_TOKEN_PLAN_CN_KEY",
+        "KIMI_API_KEY",
+        "ZAI_API_KEY",
+        "Z_AI_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    payload = quota.quota_state()
+
+    assert payload["providers"]["codex"]["detected"] is True
+    assert all(
+        payload["providers"][provider]["detected"] is False
+        for provider in ("claude", "antigravity", "minimax", "kimi", "grok", "zai")
+    )
+
+
+def test_anthropic_zai_environment_credential_is_discovered_and_detected(monkeypatch, tmp_path):
+    from tokdash.sources import quota
+    from tokdash.sources.quota import credential_sources
+
+    api._clear_cache()
+    missing = tmp_path / "missing"
+    monkeypatch.setattr(quota.clientpaths, "zcode_home", lambda: missing)
+    monkeypatch.setattr(quota.clientpaths, "kimi_roots", lambda: [missing])
+    monkeypatch.setattr(quota.config, "credential_scan_enabled", lambda: False)
+    monkeypatch.setattr(credential_sources.clientpaths, "zcode_home", lambda: missing)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(missing / "claude"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(missing / "data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(missing / "config"))
+    monkeypatch.setenv("CC_SWITCH_CONFIG_DIR", str(missing / "cc-switch"))
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "zai-anthropic-token")
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+    monkeypatch.delenv("Z_AI_API_KEY", raising=False)
+
+    assert credential_sources.discover_provider_sources()["zai"] == ["environment"]
+    assert quota.quota_state()["providers"]["zai"]["detected"] is True
+
+
+def test_quota_history_route_uses_stored_snapshots(tmp_path):
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    store = UsageEntryStore()
+    store.insert_quota_snapshots(
+        [
+            QuotaSnapshot("codex", "acct", "5h", "5-hour window", 10, None, "pro", 1_782_907_200, "codex_session", "ok", {}),
+            QuotaSnapshot("codex", "acct", "5h", "5-hour window", 20, None, "pro", 1_782_910_800, "codex_session", "ok", {}),
+        ]
+    )
+
+    history = api.get_quota_history(granularity="hour")
+
+    assert history["series"][0]["provider"] == "codex"
+    assert history["series"][0]["consumption"] == [{"period_start": 1_782_910_800, "consumed_percent": 10.0}]
+
+
+def test_quota_consent_route_persists_provider_flags():
+    api._clear_cache()
+    payload = api.set_quota_consent({"codex_api": True, "claude_api": False})
+
+    assert payload["consent"] == {
+        "credential_scan": False,
+        "codex_api": True,
+        "claude_api": False,
+        "antigravity_api": False,
+        "minimax_api": False,
+        "kimi_api": False,
+        "grok_api": False,
+        "zai_api": False,
+        "opencode_go_api": False,
+        "commandcode_api": False,
+    }
+    assert api.get_quota()["consent"]["codex_api"] is True
+
+
+def test_quota_refresh_collects_and_stores_network_snapshots(monkeypatch):
+    from tokdash.sources.quota.types import QuotaSnapshot
+
+    snapshot = QuotaSnapshot(
+        "claude",
+        "default",
+        "session",
+        "Session",
+        12.5,
+        None,
+        "max",
+        1_782_907_200,
+        "claude_api",
+        "ok",
+        {"fixture": True},
+    )
+    monkeypatch.setattr(api, "_try_begin_quota_refresh", lambda: 0.0)
+    monkeypatch.setattr("tokdash.sources.quota.collect_enabled_snapshots", lambda include_network=True, store=None: [snapshot])
+
+    payload = api.refresh_quota()
+
+    assert payload["inserted"] == 1
+    assert api.get_quota_history(providers="claude")["series"][0]["bucket"] == "session"
+
+
+def test_quota_refresh_enforces_cooldown(monkeypatch):
+    monkeypatch.setattr(api, "_try_begin_quota_refresh", lambda: 42.0)
+
+    with pytest.raises(api.HTTPException) as exc:
+        api.refresh_quota()
+
+    assert exc.value.status_code == 429
+    assert "42" in exc.value.detail
+
+
+def test_try_begin_quota_refresh_reserves_atomically(monkeypatch):
+    # First caller reserves the slot (remaining == 0); an immediate second caller is blocked
+    # (remaining > 0). The check-and-reserve happen in one critical section, so two racing
+    # refreshes can never both proceed.
+    monkeypatch.setattr(api.time, "monotonic", lambda: 1000.0)
+    monkeypatch.setattr(api, "_quota_last_refresh_monotonic", 0.0)
+    assert api._try_begin_quota_refresh() == 0.0
+    assert api._try_begin_quota_refresh() > 0
+
+
+def test_quota_refresh_failure_releases_cooldown(monkeypatch):
+    # A refresh that errors after reserving the slot must roll the reservation back —
+    # otherwise a 500 locks the user out for the full cooldown with nothing to show for it.
+    monkeypatch.setattr(api.time, "monotonic", lambda: 1000.0)
+    monkeypatch.setattr(api, "_quota_last_refresh_monotonic", 0.0)
+    monkeypatch.setattr(api, "_quota_prev_refresh_monotonic", 0.0)
+    monkeypatch.setattr(
+        "tokdash.sources.quota.collect_enabled_snapshots",
+        lambda include_network=True, store=None: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with pytest.raises(RuntimeError):
+        api.refresh_quota()
+
+    # The slot is free again: the next attempt reserves instead of hitting the cooldown.
+    assert api._try_begin_quota_refresh() == 0.0
+
+
+def test_get_quota_exposes_codex_reset_credit_inventory():
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "codex",
+                "acct",
+                "reset_credits",
+                "Reset credits",
+                2,
+                None,
+                "pro",
+                1_782_907_200,
+                "codex_api",
+                "ok",
+                {
+                    "reset_credits": {
+                        "available_count": 2,
+                        "credits": [{"id": "credit-a", "expires_at": "2026-07-04T00:00:00Z"}],
+                    }
+                },
+            )
+        ]
+    )
+
+    payload = api.get_quota()
+
+    assert payload["providers"]["codex"]["reset_credits"] == {
+        "available_count": 2,
+        "credits": [{"id": "credit-a", "expires_at": "2026-07-04T00:00:00Z"}],
+    }
+
+
+def test_quota_refresh_keeps_current_state_when_usage_db_disabled(monkeypatch):
+    from tokdash.sources.quota.types import QuotaSnapshot
+
+    snapshot = QuotaSnapshot(
+        "antigravity",
+        "default",
+        "models/gemini-3-pro",
+        "Gemini 3 Pro",
+        80,
+        None,
+        None,
+        1_782_907_200,
+        "antigravity_api",
+        "ok",
+        {},
+    )
+    monkeypatch.setenv("TOKDASH_USAGE_DB", "0")
+    monkeypatch.setattr(api, "_try_begin_quota_refresh", lambda: 0.0)
+    monkeypatch.setattr("tokdash.sources.quota.collect_enabled_snapshots", lambda include_network=True, store=None: [snapshot])
+
+    payload = api.refresh_quota()
+    state = api.get_quota()
+
+    assert payload["inserted"] == 0
+    assert state["providers"]["antigravity"]["buckets"][0]["bucket_label"] == "Gemini 3 Pro"
+
+
+def test_get_quota_tolerates_malformed_poll_interval(monkeypatch):
+    api._clear_cache()
+    monkeypatch.setenv("TOKDASH_QUOTA_POLL_INTERVAL", "not-an-int")
+
+    payload = api.get_quota()
+
+    # Malformed env override falls through to the default (30 min) and reports its source.
+    assert payload["poll"]["interval"] == 1800
+    assert payload["poll"]["interval_source"] == "default"
+
+
+def test_get_quota_marks_network_enabled_and_last_run_for_api_rows():
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    api.set_quota_consent({"credential_scan": True, "codex_api": True})
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "codex",
+                "acct",
+                "5h",
+                "5-hour window",
+                20,
+                None,
+                "pro",
+                1_782_907_200,
+                "codex_api",
+                "ok",
+                {},
+            )
+        ]
+    )
+
+    payload = api.get_quota()
+
+    assert payload["providers"]["codex"]["network_enabled"] is True
+    assert payload["poll"]["last_run"] == 1_782_907_200
+
+
+def test_get_quota_prefers_freshest_bucket_across_accounts():
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "codex",
+                "default",
+                "5h",
+                "5-hour window",
+                50,
+                None,
+                "pro",
+                1_782_907_200,
+                "codex_session",
+                "ok",
+                {},
+            ),
+            QuotaSnapshot(
+                "codex",
+                "acct_real",
+                "5h",
+                "5-hour window",
+                20,
+                None,
+                "pro",
+                1_782_910_800,
+                "codex_api",
+                "ok",
+                {},
+            ),
+            QuotaSnapshot(
+                "codex",
+                "default",
+                "7d",
+                "7-day window",
+                40,
+                None,
+                "pro",
+                1_782_907_200,
+                "codex_session",
+                "ok",
+                {},
+            ),
+        ]
+    )
+
+    buckets = api.get_quota()["providers"]["codex"]["buckets"]
+
+    assert [(bucket["bucket"], bucket["account"], bucket["used_percent"]) for bucket in buckets] == [
+        ("5h", "acct_real", 20.0),
+        ("7d", "default", 40.0),
+    ]
+
+
+def test_quota_settings_route_sets_enabled_and_interval():
+    api._clear_cache()
+    payload = api.set_quota_settings({"enabled": False, "poll_interval_minutes": 60})
+
+    assert payload["enabled"] is False
+    assert payload["poll_interval_minutes"] == 60
+    assert payload["interval"] == 3600
+
+    state = api.get_quota()
+    assert state["enabled"] is False
+    assert state["poll"]["interval"] == 3600
+    assert state["poll"]["interval_source"] == "config"
+
+
+def test_quota_settings_route_rejects_bad_interval():
+    with pytest.raises(api.HTTPException) as exc:
+        api.set_quota_settings({"poll_interval_minutes": 45})
+
+    assert exc.value.status_code == 400
+
+
+def test_quota_refresh_rejected_when_disabled():
+    api._clear_cache()
+    api.set_quota_settings({"enabled": False})
+
+    with pytest.raises(api.HTTPException) as exc:
+        api.refresh_quota()
+
+    assert exc.value.status_code == 409
+    assert "disabled" in exc.value.detail.lower()
+
+
+def test_get_quota_reports_master_switch_and_poll_source():
+    api._clear_cache()
+    payload = api.get_quota()
+
+    assert payload["enabled"] is True
+    assert payload["poll"]["interval"] == 1800
+    assert payload["poll"]["interval_source"] == "default"
+    assert payload["poll"]["network_enabled"] is False
+
+
+def test_quota_history_route_bounds_series_to_max_points():
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "codex",
+                "acct",
+                "5h",
+                "5-hour window",
+                float(i),
+                None,
+                "pro",
+                1_782_907_200 + i * 60,
+                "codex_session",
+                "ok",
+                {},
+            )
+            for i in range(10)
+        ]
+    )
+
+    history = api.get_quota_history(max_points=2)
+
+    for series in history["series"]:
+        assert len(series["points"]) <= 2
+
+
+def test_get_quota_exposes_status_detail_for_freshest_api_status_row():
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "antigravity",
+                "default",
+                "api",
+                "Antigravity API",
+                None,
+                None,
+                None,
+                1_782_907_200,
+                "antigravity_api",
+                "stale_token",
+                {},
+            )
+        ]
+    )
+
+    payload = api.get_quota()
+
+    assert payload["providers"]["antigravity"]["status_detail"] == "stale_token"
+    assert payload["providers"]["antigravity"]["buckets"] == []
+    assert payload["providers"]["claude"]["status_detail"] is None
+
+
+def test_poll_quota_idles_entirely_when_disabled(monkeypatch):
+    import tokdash.sources.quota as quota
+
+    quota.config.set_quota_enabled(False)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("collector invoked while quota tracking is disabled")
+
+    monkeypatch.setattr(quota, "collect_local_snapshots", boom)
+    monkeypatch.setattr(quota, "collect_network_snapshots", boom)
+
+    result = quota.poll_quota()
+
+    assert result["disabled"] is True
+    assert result["inserted"] == 0
+    assert result["snapshots"] == 0
+
+
+def test_stale_token_banner_clears_after_successful_api_poll():
+    """A failure status row (bucket "api") is only written on failure, so it stays the
+    newest "api" row forever after recovery — the banner must yield to a newer ok row."""
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    store = UsageEntryStore()
+    store.insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "codex", "acct", "api", "Codex API", None, None, None,
+                1_782_900_000, "codex_api", "stale_token", {"error": "token_expired"},
+            ),
+            QuotaSnapshot(
+                "codex", "acct", "5h", "5-hour window", 42.0, None, "pro",
+                1_782_907_200, "codex_api", "ok", {},
+            ),
+        ]
+    )
+
+    payload = api.get_quota()
+    codex = payload["providers"]["codex"]
+    assert codex["status_detail"] is None
+    assert codex["status"] == "ok"
+
+
+def test_get_quota_exposes_remaining_percent_alongside_used_percent():
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "codex", "acct", "5h", "5-hour window", 99.0, None, "pro",
+                1_782_907_200, "codex_api", "ok", {},
+            )
+        ]
+    )
+
+    bucket = api.get_quota()["providers"]["codex"]["buckets"][0]
+
+    assert bucket["used_percent"] == 99.0
+    assert bucket["remaining_percent"] == 1.0
+
+
+def test_get_quota_exposes_unlimited_bucket_without_finite_percent():
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "minimax", "cn", "cn_general_7d", "Weekly", None, 1_785_081_600, None,
+                1_785_030_000, "minimax_api", "ok", {"unlimited": True},
+            )
+        ]
+    )
+
+    bucket = api.get_quota()["providers"]["minimax"]["buckets"][0]
+
+    assert bucket["used_percent"] is None
+    assert bucket["remaining_percent"] is None
+    assert bucket["unlimited"] is True
+
+
+def test_stale_token_banner_shows_when_failure_is_newest():
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "codex", "acct", "5h", "5-hour window", 42.0, None, "pro",
+                1_782_900_000, "codex_api", "ok", {},
+            ),
+            QuotaSnapshot(
+                "codex", "acct", "api", "Codex API", None, None, None,
+                1_782_907_200, "codex_api", "stale_token", {"error": "token_expired"},
+            ),
+        ]
+    )
+
+    payload = api.get_quota()
+    assert payload["providers"]["codex"]["status_detail"] == "stale_token"
+
+
+def test_nameless_fallback_failure_clears_once_the_provider_answers_again():
+    """A poll with no credential to name files its failure under ``default``, while every
+    success is stamped with the account the credential actually named. That fallback view
+    therefore never recovers on its own, so a newer success on a sibling account has to
+    retire it -- otherwise a two-minute gap in ``auth.json`` warns on the card forever.
+
+    The ``codex_session`` row is the shape stored databases really have: the local rollout
+    parser files its windows under ``default`` too. It is the client's own record rather
+    than the provider's answer, so it must not make this view look like a live account."""
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "codex", "default", "5h", "5-hour window", 41.0, None, None,
+                1_782_910_000, "codex_session", "ok", {},
+            ),
+            QuotaSnapshot(
+                "codex", "default", "api", "Codex API", None, None, None,
+                1_782_900_000, "codex_api", "unavailable", {"error": "auth_not_found"},
+            ),
+            QuotaSnapshot(
+                "codex", "637ec3ac", "5h", "5-hour window", 70.0, None, "Pro Lite",
+                1_782_907_200, "codex_api", "ok", {},
+            ),
+        ]
+    )
+
+    codex = api.get_quota()["providers"]["codex"]
+    assert codex["status_detail"] is None
+    assert codex["status_at"] is None
+    assert codex["status"] == "ok"
+
+
+def test_nameless_fallback_failure_still_warns_when_it_is_the_newest_row():
+    """The retirement is a timestamp comparison, not a suppression: with nothing answered
+    since, a credential-less failure is the provider's live state and must still print."""
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "codex", "637ec3ac", "5h", "5-hour window", 70.0, None, "Pro Lite",
+                1_782_900_000, "codex_api", "ok", {},
+            ),
+            QuotaSnapshot(
+                "codex", "default", "api", "Codex API", None, None, None,
+                1_782_907_200, "codex_api", "unavailable", {"error": "auth_not_found"},
+            ),
+        ]
+    )
+
+    codex = api.get_quota()["providers"]["codex"]
+    assert codex["status_detail"] == "unavailable"
+    assert codex["status"] == "unavailable"
+
+
+def test_named_account_that_only_fails_keeps_warning_despite_a_healthy_sibling():
+    """A named account is a credential the user can see, so it answers for itself. The
+    global Token Plan polling fine does not retire a ``cn`` key that has never worked."""
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "minimax", "cn", "api", "MiniMax Token Plan", None, None, None,
+                1_782_903_600, "minimax_api", "fetch_error", {"error": "403"},
+            ),
+            QuotaSnapshot(
+                "minimax", "global", "global_5h", "5-hour window", 12.0, None, "Token Plan",
+                1_782_907_200, "minimax_api", "ok", {},
+            ),
+        ]
+    )
+
+    minimax = api.get_quota()["providers"]["minimax"]
+    assert minimax["status_detail"] == "fetch_error"
+    assert minimax["status_account"] == "cn"
+    assert {a["account"] for a in minimax["accounts"]} == {"global", "cn"}
+
+
+def test_default_account_that_has_answered_keeps_its_own_error():
+    """``default`` is only a fallback name where nothing behind it ever answered.
+
+    Antigravity files a fully signed-in account under ``default`` whenever the ID token
+    carries no email (the live shape on the maintainer's machine: ~115k successful
+    ``antigravity_api`` rows under that name beside a second email-named account), and Kimi,
+    Z.ai and OpenCode Go name every account they write that. So a card must not read the
+    name as "credential-less" and let a sibling's success bury a real expired sign-in --
+    exactly the regression per-account retirement (#70) was added to prevent.
+    """
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "antigravity", "default", "gemini-3-flash", "Gemini 3 Flash", 10.0, None, None,
+                1_782_890_000, "antigravity_api", "ok", {},
+            ),
+            QuotaSnapshot(
+                "antigravity", "default", "api", "Antigravity API", None, None, None,
+                1_782_900_000, "antigravity_api", "stale_token", {"error": "HTTP 401"},
+            ),
+            QuotaSnapshot(
+                "antigravity", "jing@example.com", "gemini-3-flash", "Gemini 3 Flash",
+                12.0, None, None, 1_782_907_200, "antigravity_api", "ok", {},
+            ),
+        ]
+    )
+
+    antigravity = api.get_quota()["providers"]["antigravity"]
+    assert antigravity["status_detail"] == "stale_token"
+    assert antigravity["status"] == "stale_token"
+    assert antigravity["status_at"] == 1_782_900_000
+
+
+def test_codex_plan_label_normalized_in_state_only():
+    """Card label shows "Pro Lite"; stored rows keep the raw plan_type."""
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    store = UsageEntryStore()
+    store.insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "codex", "acct", "5h", "5-hour window", 40.0, None, "prolite",
+                1_782_907_200, "codex_session", "ok", {},
+            )
+        ]
+    )
+
+    payload = api.get_quota()
+    assert payload["providers"]["codex"]["plan"] == "Pro Lite"
+    assert store.latest_quota_snapshots()[0]["plan"] == "prolite"
+
+
+def test_get_quota_api_enabled_session_does_not_override_bucket():
+    """codex_api enabled: a newer codex_session row must not win the 7d bucket over an
+    older codex_api row — the API is the sole oracle once enabled."""
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    api.set_quota_consent({"credential_scan": True, "codex_api": True})
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "codex", "acct", "7d", "7-day window", 70, 1_783_000_000, "pro",
+                1_782_907_200, "codex_api", "ok", {},
+            ),
+            QuotaSnapshot(
+                "codex", "default", "7d", "7-day window", 40, 1_783_100_000, "pro",
+                1_782_907_260, "codex_session", "ok", {},
+            ),
+        ]
+    )
+
+    buckets = api.get_quota()["providers"]["codex"]["buckets"]
+
+    assert len(buckets) == 1
+    bucket = buckets[0]
+    assert bucket["bucket"] == "7d"
+    assert bucket["source"] == "codex_api"
+    assert bucket["used_percent"] == 70.0
+    assert bucket["resets_at"] == 1_783_000_000
+
+
+def test_get_quota_api_enabled_session_only_omits_bucket():
+    """codex_api enabled but only session rows exist for a bucket: the bucket is omitted
+    rather than falling back to stale session data (accepted empty-card behavior)."""
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    api.set_quota_consent({"credential_scan": True, "codex_api": True})
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "codex", "default", "7d", "7-day window", 40, 1_783_100_000, "pro",
+                1_782_907_200, "codex_session", "ok", {},
+            ),
+        ]
+    )
+
+    payload = api.get_quota()
+    codex = payload["providers"]["codex"]
+
+    assert [b["bucket"] for b in codex["buckets"]] == []
+    assert codex["estimated"] is False
+
+
+def test_get_quota_api_disabled_shows_session_and_marks_estimated():
+    """codex_api disabled: the session row is shown as the bucket, and the codex card is
+    marked estimated."""
+    from tokdash.sources.quota.types import QuotaSnapshot
+    from tokdash.usage_store import UsageEntryStore
+
+    api._clear_cache()
+    api.set_quota_consent({"codex_api": False})
+    UsageEntryStore().insert_quota_snapshots(
+        [
+            QuotaSnapshot(
+                "codex", "default", "7d", "7-day window", 40, 1_783_100_000, "pro",
+                1_782_907_200, "codex_session", "ok", {},
+            ),
+        ]
+    )
+
+    payload = api.get_quota()
+    codex = payload["providers"]["codex"]
+
+    assert [b["bucket"] for b in codex["buckets"]] == ["7d"]
+    assert codex["buckets"][0]["source"] == "codex_session"
+    assert codex["estimated"] is True
+
+
+def test_quota_state_does_not_read_claude_credentials_without_scan_consent(monkeypatch):
+    # Regression (#1): the per-profile plan reader opens .credentials.json and may trigger
+    # the macOS Keychain. A dashboard load must NOT touch it without credential-scan
+    # consent (default off).
+    import tokdash.sources.quota as quota
+
+    called = []
+
+    def tracked(*_a, **_k):
+        called.append(True)
+        return [{"account": "default", "status": "ok", "plan": "Pro"}]
+
+    monkeypatch.setattr(quota, "read_claude_profiles", tracked)
+    quota.quota_state()
+    assert called == []
+
+
+def test_quota_state_reads_claude_plan_with_scan_consent(monkeypatch):
+    import tokdash.sources.quota as quota
+    from tokdash.sources.quota import config
+
+    config.set_quota_consent({"credential_scan": True})
+    called = []
+
+    def tracked(*_a, **_k):
+        called.append(True)
+        return [{"account": "default", "status": "ok", "plan": "Pro", "tier": "pro", "credential_path": None}]
+
+    monkeypatch.setattr(quota, "read_claude_profiles", tracked)
+    payload = quota.quota_state()
+    assert called == [True]
+    assert payload["providers"]["claude"]["plan"] == "Pro"

@@ -1,0 +1,132 @@
+name: Publish to PyPI
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+
+      - name: Verify release metadata
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+
+          def get_toml_section(text: str, header: str) -> str:
+              parts = re.split(rf'^\[{re.escape(header)}\]\s*$', text, flags=re.M)
+              if len(parts) < 2:
+                  return ''
+              return re.split(r'^\[', parts[1], flags=re.M)[0]
+
+
+          ref = os.environ.get('GITHUB_REF', '')
+          m = re.match(r'^refs/tags/v(.+)$', ref)
+          tag_version = m.group(1) if m else None
+
+          pyproject = Path('pyproject.toml').read_text(encoding='utf-8')
+          project_body = get_toml_section(pyproject, 'project')
+          if not project_body:
+              raise SystemExit('Could not find [project] section in pyproject.toml')
+
+          package_init = Path('src/tokdash/__init__.py').read_text(encoding='utf-8')
+          package_match = re.search(r'^__version__\s*=\s*"([^"]+)"\s*$', package_init, flags=re.M)
+          if not package_match:
+              raise SystemExit('Could not find __version__ in src/tokdash/__init__.py')
+          package_version = package_match.group(1)
+
+          project_match = re.search(r'^\s*version\s*=\s*"([^"]+)"\s*$', project_body, flags=re.M)
+          if project_match:
+              project_version = project_match.group(1)
+          else:
+              dynamic_match = re.search(r'^\s*dynamic\s*=\s*\[(.*?)\]\s*$', project_body, flags=re.M | re.S)
+              if not dynamic_match or '"version"' not in dynamic_match.group(1):
+                  raise SystemExit('Could not find project.version or dynamic version configuration in pyproject.toml')
+
+              dynamic_body = get_toml_section(pyproject, 'tool.setuptools.dynamic')
+              if not dynamic_body:
+                  raise SystemExit('Could not find [tool.setuptools.dynamic] section in pyproject.toml')
+
+              attr_match = re.search(r'^\s*version\s*=\s*\{\s*attr\s*=\s*"([^"]+)"\s*\}\s*$', dynamic_body, flags=re.M)
+              if not attr_match:
+                  raise SystemExit('Could not find tool.setuptools.dynamic.version attr in pyproject.toml')
+              if attr_match.group(1) != 'tokdash.__version__':
+                  raise SystemExit(
+                      'Expected tool.setuptools.dynamic.version to reference tokdash.__version__.'
+                  )
+              project_version = package_version
+
+          if project_version != package_version:
+              raise SystemExit(
+                  f'pyproject version {project_version} does not match package version {package_version}.'
+              )
+
+          if tag_version and tag_version != project_version:
+              raise SystemExit(
+                  f'Tag v{tag_version} does not match pyproject version {project_version}. '
+                  'Retag the release from the correct commit.'
+              )
+
+          print('OK', project_version)
+          PY
+
+      - name: Install build tools
+        run: |
+          python -m pip install -U pip
+          python -m pip install build twine
+
+      - name: Build
+        run: python -m build
+
+      - name: Check dist
+        run: twine check dist/*
+
+      - name: Upload dist
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/*
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    # Keep an explicit environment so PyPI Trusted Publishing can match the OIDC
+    # claims (and so you can later enable GitHub Environment protections if you
+    # want). This does NOT require manual approval unless you configure
+    # protections for the `pypi` environment in GitHub settings.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/tokdash
+    steps:
+      - name: Download dist
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1

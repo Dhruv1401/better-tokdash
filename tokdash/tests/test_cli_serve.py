@@ -1,0 +1,350 @@
+"""Tests for `tokdash serve` browser auto-open behavior and the --no-open flag."""
+import sys
+
+import pytest
+
+import tokdash.cli as cli
+from tokdash.onboard import engine
+
+
+def test_no_open_flag_defaults_false():
+    args = cli.build_parser("tokdash").parse_args(["serve"])
+    assert args.no_open is False
+
+
+def test_no_open_flag_sets_true():
+    args = cli.build_parser("tokdash").parse_args(["serve", "--no-open"])
+    assert args.no_open is True
+
+
+def test_db_command_defaults_to_status():
+    args = cli.build_parser("tokdash").parse_args(["db"])
+    assert args.command == "db"
+    assert args.db_action == "status"
+
+
+def test_db_verify_period_arg():
+    args = cli.build_parser("tokdash").parse_args(["db", "verify", "--verify-period", "week"])
+    assert args.command == "db"
+    assert args.db_action == "verify"
+    assert args.verify_period == "week"
+
+
+def test_db_repair_dry_run_arg():
+    args = cli.build_parser("tokdash").parse_args(["db", "repair", "--dry-run"])
+    assert args.command == "db"
+    assert args.db_action == "repair"
+    assert args.dry_run is True
+
+
+def test_db_watch_arg():
+    args = cli.build_parser("tokdash").parse_args(["db", "watch"])
+    assert args.command == "db"
+    assert args.db_action == "watch"
+
+
+def test_quota_command_parses_actions():
+    args = cli.build_parser("tokdash").parse_args(["quota", "poll"])
+    assert args.command == "quota"
+    assert args.quota_action == "poll"
+
+    args = cli.build_parser("tokdash").parse_args(["quota", "consent", "--codex-api", "on"])
+    assert args.command == "quota"
+    assert args.quota_action == "consent"
+    assert args.codex_api == "on"
+
+    args = cli.build_parser("tokdash").parse_args(
+        ["quota", "consent", "--credential-scan", "on", "--minimax-api", "on", "--kimi-api", "on", "--grok-api", "off", "--zai-api", "on"]
+    )
+    assert args.credential_scan == "on"
+    assert args.minimax_api == "on"
+    assert args.kimi_api == "on"
+    assert args.grok_api == "off"
+    assert args.zai_api == "on"
+
+    args = cli.build_parser("tokdash").parse_args(["quota", "consent", "--opencode-go-api", "on"])
+    assert args.opencode_go_api == "on"
+
+    args = cli.build_parser("tokdash").parse_args(["quota", "consent", "--commandcode-api", "on"])
+    assert args.commandcode_api == "on"
+
+
+def test_quota_consent_cli_updates_config():
+    assert cli.cli(["quota", "consent", "--codex-api", "on", "--claude-api", "off", "--json"]) == 0
+
+    from tokdash.sources.quota.config import read_quota_config
+
+    assert read_quota_config() == {
+        "credential_scan": False,
+        "codex_api": True,
+        "claude_api": False,
+        "antigravity_api": False,
+        "minimax_api": False,
+        "kimi_api": False,
+        "grok_api": False,
+        "zai_api": False,
+        "opencode_go_api": False,
+        "commandcode_api": False,
+    }
+
+
+def test_quota_poll_cli_uses_collector(monkeypatch):
+    monkeypatch.setattr(cli, "_quota_poll_once", lambda: {"inserted": 0, "snapshots": 0})
+
+    assert cli.cli(["quota", "poll"]) == 0
+
+
+def test_quota_poll_interval_has_floor_and_jitter(monkeypatch):
+    monkeypatch.setenv("TOKDASH_QUOTA_POLL_INTERVAL", "120")
+    assert cli._quota_poll_interval() == 300
+    monkeypatch.setenv("TOKDASH_QUOTA_POLL_INTERVAL", "1000")
+    monkeypatch.setattr(cli.random, "uniform", lambda a, b: b)
+    assert cli._quota_jittered_interval() == 1050
+
+
+def test_export_include_quota_flag(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "compute_usage", lambda period: {"period": period, "total_tokens": 1})
+    monkeypatch.setattr("tokdash.sources.quota.quota_state", lambda: {"providers": {"codex": {"buckets": []}}})
+
+    assert cli.cli(["export", "--include-quota"]) == 0
+
+    payload = __import__("json").loads(capsys.readouterr().out)
+    assert payload["quota"]["providers"]["codex"]["buckets"] == []
+
+
+def test_has_display_false_in_ci(monkeypatch):
+    monkeypatch.delenv("SSH_CONNECTION", raising=False)
+    monkeypatch.delenv("SSH_TTY", raising=False)
+    # These tests assert the real-GUI branch, so lift the pytest marker that
+    # has_display() treats as headless.
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    # CI gating is OS-independent, so even a "GUI" platform stays headless.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("CI", "true")
+    # Both call sites (serve's auto-open and setup's optional open) share one
+    # implementation — pin the unified CI semantics at both wrappers.
+    assert cli._has_display() is False
+    assert engine._has_display() is False
+    # An explicitly falsy CI value should not gate.
+    monkeypatch.setenv("CI", "false")
+    assert cli._has_display() is True
+    assert engine._has_display() is True
+
+
+def test_has_display_false_under_ssh(monkeypatch):
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("SSH_CONNECTION", "192.0.2.1 22 198.51.100.2 22")
+    assert cli._has_display() is False
+
+
+def test_has_display_linux_requires_display(monkeypatch):
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("SSH_CONNECTION", raising=False)
+    monkeypatch.delenv("SSH_TTY", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)  # assert the real-GUI branch
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    assert cli._has_display() is False
+    monkeypatch.setenv("DISPLAY", ":0")
+    assert cli._has_display() is True
+
+
+def test_has_display_non_linux_assumes_gui(monkeypatch):
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("SSH_CONNECTION", raising=False)
+    monkeypatch.delenv("SSH_TTY", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)  # assert the real-GUI branch
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    assert cli._has_display() is True
+
+
+@pytest.mark.opens_browser
+def test_open_browser_swallows_errors(monkeypatch):
+    def boom(url):
+        raise RuntimeError("no browser available")
+
+    monkeypatch.setattr(cli.webbrowser, "open", boom)
+    # Best-effort: must not propagate.
+    cli._open_browser("http://localhost:55423")
+
+
+def _patch_serve(monkeypatch, *, has_display=None):
+    """Stub uvicorn + threading.Timer; return a list that records timer starts.
+
+    ``has_display=None`` leaves the REAL predicate in place (the regression
+    test needs that to bite); True/False stub it out.
+    """
+    started: list[str] = []
+    monkeypatch.setattr(cli.uvicorn, "run", lambda *a, **k: None)
+    if has_display is not None:
+        monkeypatch.setattr(cli, "_has_display", lambda: has_display)
+
+    class FakeTimer:
+        def __init__(self, _interval, _func, args=(), **_kwargs):
+            self._args = args
+            self.daemon = False
+
+        def start(self):
+            started.append(self._args[0])
+
+    monkeypatch.setattr(cli.threading, "Timer", FakeTimer)
+    return started
+
+
+def test_serve_opens_browser_when_enabled_and_display(monkeypatch):
+    started = _patch_serve(monkeypatch, has_display=True)
+    cli.serve("127.0.0.1", 55423, "info", open_browser=True)
+    assert started == ["http://127.0.0.1:55423"]
+
+
+def test_serve_skips_browser_when_disabled(monkeypatch):
+    started = _patch_serve(monkeypatch, has_display=True)
+    cli.serve("127.0.0.1", 55423, "info", open_browser=False)
+    assert started == []
+
+
+def test_serve_skips_browser_when_headless(monkeypatch):
+    started = _patch_serve(monkeypatch, has_display=False)
+    cli.serve("127.0.0.1", 55423, "info", open_browser=True)
+    assert started == []
+
+
+def test_serve_never_arms_browser_timer_under_pytest(monkeypatch):
+    # Regression (WSLg incident, serve twin): under pytest the browser timer
+    # must never arm, even with a display present. CI/SSH are cleared so the
+    # PYTEST_CURRENT_TEST guard in osinfo.has_display is the ONLY thing between
+    # serve() and a timer — remove it and this test arms one. (Incident
+    # history: tests/conftest.py::no_browser_open.)
+    started = _patch_serve(monkeypatch, has_display=None)  # the real predicate must decide
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("SSH_CONNECTION", raising=False)
+    monkeypatch.delenv("SSH_TTY", raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("DISPLAY", ":0")
+
+    cli.serve("127.0.0.1", 55423, "info", open_browser=True)
+    assert started == []
+
+
+def test_positive_int_env_defaults_and_validation(monkeypatch):
+    monkeypatch.delenv("X_KNOB", raising=False)
+    assert cli._positive_int_env("X_KNOB", 64) == 64  # unset -> default
+    monkeypatch.setenv("X_KNOB", "")
+    assert cli._positive_int_env("X_KNOB", 64) == 64  # blank -> default
+    monkeypatch.setenv("X_KNOB", "nope")
+    assert cli._positive_int_env("X_KNOB", 64) == 64  # non-int -> default
+    monkeypatch.setenv("X_KNOB", "0")
+    assert cli._positive_int_env("X_KNOB", 64) == 64  # non-positive -> default
+    monkeypatch.setenv("X_KNOB", "-5")
+    assert cli._positive_int_env("X_KNOB", 64) == 64
+    monkeypatch.setenv("X_KNOB", "128")
+    assert cli._positive_int_env("X_KNOB", 64) == 128  # valid override wins
+
+
+def test_serve_passes_backpressure_knobs_to_uvicorn(monkeypatch):
+    """serve() must hand uvicorn the concurrency/keep-alive limits (P2 backpressure)."""
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli.uvicorn, "run", lambda *a, **k: captured.update(k))
+    monkeypatch.setattr(cli, "_has_display", lambda: False)
+    monkeypatch.setenv("TOKDASH_LIMIT_CONCURRENCY", "99")
+    monkeypatch.setenv("TOKDASH_KEEPALIVE", "7")
+    cli.serve("127.0.0.1", 55423, "info", open_browser=False)
+    assert captured["limit_concurrency"] == 99
+    assert captured["timeout_keep_alive"] == 7
+
+
+def test_serve_starts_usage_db_watch_when_enabled(monkeypatch):
+    started: list[str] = []
+    monkeypatch.setattr(cli, "_DB_WATCH_THREAD_STARTED", False)
+    monkeypatch.setattr(cli.uvicorn, "run", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "_has_display", lambda: False)
+    monkeypatch.setenv("TOKDASH_USAGE_DB", "1")
+    monkeypatch.setenv("TOKDASH_USAGE_DB_WATCH", "1")
+
+    class FakeThread:
+        def __init__(self, target, name, daemon):
+            self.target = target
+            self.name = name
+            self.daemon = daemon
+
+        def start(self):
+            started.append(self.name)
+
+    monkeypatch.setattr(cli.threading, "Thread", FakeThread)
+    cli.serve("127.0.0.1", 55423, "info", open_browser=False)
+    assert started == ["tokdash-usage-db-watch"]
+
+
+def test_serve_starts_quota_poll_thread_before_network_consent(monkeypatch):
+    started: list[str] = []
+    monkeypatch.setattr(cli, "_QUOTA_POLL_THREAD_STARTED", False)
+    monkeypatch.setenv("TOKDASH_USAGE_DB", "1")
+    monkeypatch.setenv("TOKDASH_USAGE_DB_WATCH", "0")
+    monkeypatch.setattr(cli, "_quota_network_enabled", lambda: False)
+
+    class FakeThread:
+        def __init__(self, target, name, daemon):
+            self.target = target
+            self.name = name
+            self.daemon = daemon
+
+        def start(self):
+            started.append(self.name)
+
+    monkeypatch.setattr(cli.threading, "Thread", FakeThread)
+
+    cli._start_quota_poll_daemon()
+
+    assert started == ["tokdash-quota-poll"]
+
+# --- Windows stdio hardening (serve under pythonw / cp1252 consoles) ---------------
+
+
+def test_harden_stdio_noop_on_posix(monkeypatch):
+    monkeypatch.setattr(cli.os, "name", "posix")
+    original = sys.stdout
+    cli._harden_windows_stdio()
+    assert sys.stdout is original
+
+
+def test_harden_stdio_replaces_missing_stream_on_windows(monkeypatch):
+    # pythonw.exe (GUI subsystem, Task Scheduler context): sys.stdout is None and the
+    # first print would raise AttributeError and kill the service before it starts.
+    monkeypatch.setattr(cli.os, "name", "nt")
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    cli._harden_windows_stdio()
+    try:
+        print("emoji \U0001f680 banner")  # must not raise
+    finally:
+        pass
+    assert sys.stdout is not None and sys.stderr is not None
+
+
+def test_harden_stdio_tolerates_unencodable_chars_on_windows(monkeypatch, capsys):
+    # cp1252 pipe (legacy conhost redirect): emoji must degrade, not crash.
+    import io
+
+    monkeypatch.setattr(cli.os, "name", "nt")
+    buf = io.TextIOWrapper(__import__("io").BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", buf)
+    monkeypatch.setattr(sys, "stderr", buf)
+    cli._harden_windows_stdio()
+    try:
+        print("\U0001f680 Starting Tokdash on http://127.0.0.1:55423")
+        buf.flush()
+    finally:
+        pass
+    out = buf.buffer.getvalue().decode("cp1252", errors="replace")
+    assert "Starting Tokdash" in out
+    assert "\U0001f680" not in out  # degraded to '?' on the cp1252 pipe
+
+
+def test_cli_entry_applies_stdio_harden(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_harden_windows_stdio", lambda: calls.append(1))
+    rc = cli.cli(["version"])
+    assert rc == 0 and calls == [1]

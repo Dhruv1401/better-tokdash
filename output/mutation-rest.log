@@ -1,0 +1,6 @@
+M2 FULL SUITE: KILLED (157 failed, 2901 passed, 9 skipped, 3 warnings in 305.37s (0:05:05))
+M6 FULL SUITE: KILLED (154 failed, 2904 passed, 9 skipped, 3 warnings in 284.44s (0:04:44))
+M8 FULL SUITE: KILLED (155 failed, 2903 passed, 9 skipped, 3 warnings in 254.49s (0:04:14))
+M9 FULL SUITE: KILLED (154 failed, 2904 passed, 9 skipped, 3 warnings in 261.87s (0:04:21))
+M12 FULL SUITE: KILLED (154 failed, 2904 passed, 9 skipped, 3 warnings in 269.64s (0:04:29))
+DONE

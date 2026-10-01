@@ -1,0 +1,767 @@
+{
+  "current": "2.6.8",
+  "releases": [
+    {
+      "version": "2.6.8",
+      "date": "2026-09-30",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "gpt-6.1-sol is priced. OpenAI's newest Sol tier reads $2.00 input / $10.00 output per MTok at the standard short-context rates, with cache read at $0.10 and cache write at $2.50 -- the same as gpt-6-sol except that cached input is halved, and its long-context and Batch/Flex/Fast rules carry over unchanged."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "A failed dashboard load no longer freezes the page behind a dialog. That failure was already reported on the persistent status line, so the alert was a second, blocking copy of a message the page had just shown; the error now stays in the console."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.6.7",
+      "date": "2026-09-28",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "The pricing database is regenerated from the 2026-09-28 scan. Claude Sonnet 5.5 joins at $2.00 input / $10.00 output per MTok with cache at $0.20 read / $2.50 write, beside GLM 5.3 Prime ($2.80 / $8.80), Qwen 3.8 Max Prime ($4.00 / $12.00) and Command A Plus ($0.30 / $1.50). The sonnet-5.5 and sonnet55 aliases resolve to it, so Claude Code's bare short name prices like the sonnet-5 pair already did instead of costing nothing. The 86 price changes the scan flagged for manual review are not part of this update."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "The quota poll interval and the Hit % column header speak the dashboard's language. The static \"Poll every\" select hardcoded 15 min through 120 min and so stayed English in all six locales while the per-server selects already used the translated minute unit; every Hit % header now takes the existing cacheHitRateHint translation too, where two carried an English-only tooltip and 21 had none at all."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.6.6",
+      "date": "2026-09-28",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "The desktop dashboard gained a sidebar -- Overview, Sessions Explorer, Stats & Heatmap, Usage Report, Quota & Budgets, Servers and Pricing DB -- with What's New and Settings at its foot, a light/dark quick toggle in the header, and a Sessions tab filter row built from the tools that actually have sessions in the selected period. Phone widths keep the existing tab bar and pick up a gear and a What's New icon, so Settings and the language switch stay reachable below 768px.",
+            "Session detail now surfaces what the harnesses already record about a session: the working directory's project name and git branch for Hermes, per-session tool-call and message counts, profile name, and a metadata-only message timeline for Hermes and Antigravity sessions. Transcript text is never read into the API; only its measurements ship.",
+            "The Overview carries a Token Composition band breaking the window's tokens into prompt, cache, output and reasoning, with the cash value of the cache hits beside it."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Settings opens as a modal over the page from its sidebar trigger, and both Settings and What's New keep one copy each instead of a header and a sidebar twin.",
+            "Light mode is no longer dark-mode paint with a light wall. The redesign's hardcoded surfaces are mapped to the theme tokens, so cards, the KPI grid, the drawer and the scrollbar follow the selected style theme. Every visible string was measured rather than eyeballed: no text in the dashboard falls below WCAG AA (4.5:1) in light mode or dark.",
+            "The energy/kWh estimate is gone. Its Joules-per-token coefficients cited a research note outside the repository, and the model matcher that fed them priced Kimi as llama-405b; Tokdash does not publish numbers it cannot source. Cost is the proxy that was always there.",
+            "The version strings in the sidebar and header are read from the running package instead of hardcoded literals that were already stale when written.",
+            "The Z.ai quota card wears the ZCode mark instead of the grey letter tile: the poll already reads the Z.ai key out of the ZCode CLI's own config, so the provider table maps zai onto the ZCode entry already in the package rather than shipping a second copy of the same glyph. The card keeps its own heading, so it still reads Z.ai.",
+            "A bare tokdash prints a one-screen command card -- eleven verbs in four groups, each with one line -- instead of the full flag reference. --help is still the whole reference and still lists every flag, but the usage line is now one line and the flags arrive in sections whose heading names every verb that reads them, so twelve flags stop each repeating a For tokdash quota consent line. An error prints the same short usage."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Hermes sessions keep their real end-of-activity timing. An earlier cut appended a zero-token turn at each session's ended_at to extend the active-time span, which credited sessions with hours of idle time between messages; the fabricated turn is out and the Hermes parser version stays at 1, so existing parsed caches survive the upgrade.",
+            "Pi fork replays are counted once. A Pi fork copies its parent's already-billed assistant events into a new session file, and those copies were read as new usage -- forking a session inflated every total that session touched, and the fork appeared in Sessions as a row whose whole history was replayed. Ancestry is now resolved from the parentSession header and each event is keyed by corroborated immutable fields, so the original owns the recorded billing, descendants contribute only their own new work, and a replay-only session disappears. Ancestry is persisted in per-file cache metadata, so deleting an ancestor's log cannot hand the same replay a fresh identity; Pi's parser version moved to 2 and rebuilds v1 rows once."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.6.5",
+      "date": "2026-09-26",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "A server can hold several addresses. Settings keeps one entry per machine with a row per address, reads it through the quickest address the browser is allowed to use, and moves to the next one when an address is dead, so adding a second address no longer counts the same tokens twice.",
+            "An address is checked before it is stored: one that does not answer, or answers as a different Tokdash, is refused where it is typed and names the machine that owns it, and an address a browser provably cannot read is labelled blocked with the rule that blocks it rather than merged."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Quota provider cards lead with the provider's own brand mark -- Codex, Claude Code, Antigravity, MiniMax, Kimi Code, Grok Build, OpenCode Go and Command Code -- picked through one provider-to-brand table so the mark and brand colour follow the source registry. Z.ai is the only provider left on the letter tile.",
+            "The Report tab's agent table prints every tool that recorded tokens instead of folding the tail behind an Other tools on this machine disclosure; a tool with no recorded session keeps its row with em dashes in the session and active-time columns."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "On the TUI period views the [ / ] / 0 keys step by whole calendar periods: one press on the month view shows the entire previous month rather than the same month one day shorter, the week view steps a full Mon-Sun week and the year view a full calendar year.",
+            "Three TUI follow-ups from the same review: textual is pinned to 8.x, the quota disabled-poll note paints yellow instead of a literal [warn] tag, and the database status read moved off the event loop so a slow database cannot stall key handling.",
+            "Pinned Qoder CLI models are counted. Setting a model in the Qoder settings file used to silence the whole source; Tokdash now reads each model's context window from the CLI's own run logs, or from the --context-window a session declared, and recovers the tokens the CLI zero-fills. A model with no window evidence anywhere is named in a warning instead of vanishing.",
+            "Antigravity usage from agy 1.2.x is counted. That CLI writes no row timestamp, and an undated row never reached the usage store, so rows are now dated from the latest step they reference."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.6.4",
+      "date": "2026-09-25",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "The changelog localizes: in the Chinese dashboard locale, What's New now overlays Simplified Chinese on the English record, and the footer links the generated Chinese changelog page. Locales without a translation, and untranslated releases, fall back to the English record.",
+            "tokdash tui opens an interactive terminal dashboard with Overview, Report and Quota tabs over the same compute and caches as the web dashboard. No server needed.",
+            "tokdash report prints a one-shot activity report for a single window; --json, --pretty and --output follow the tokdash export conventions."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "A bare tokdash with no verb prints the command help and exits instead of starting tokdash serve and opening a browser."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Claude Code quota no longer reads a usage percent of 1 as 100% used: the live API's 0-100 integer percents stay on that scale.",
+            "Antigravity quota now finds its sign-in on macOS when the agy CLI keeps the OAuth token in the login Keychain instead of a file, and failure snapshots redact unrecognized token metadata."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.6.3",
+      "date": "2026-09-23",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Claude Code limit resets now show on the Quota tab, in the same Reset Credits block the Codex card uses. Each reset lists its expiry under the install that holds it, and Tokdash only reads them: spending one still happens in Claude Code."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.6.2",
+      "date": "2026-09-23",
+      "sections": [
+        {
+          "type": "changed",
+          "items": [
+            "The pricing database was updated for the September releases: Claude Opus 5.5 Fast (2x the standard rate), Claude Mythos 5.1 and OpenAI's GPT-5.6 Cyber are priced, GPT-5.6 Sol and Sol Pro drop to $4.00 / $20.00 under OpenAI's promotional pricing, and Claude Sonnet 5's $2.00 / $10.00 is confirmed as the standard price."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.6.1",
+      "date": "2026-09-22",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Devin CLI usage tracking: per-call token usage from Devin's local SQLite store lands in Overview, the period filters and Stats."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "The pricing database was refreshed from the 2026-09-22 model scan: Claude Opus 5.5 is priced at $4.00 input / $20.00 output per MTok, and Claude Fable 5.1 now sits with the other Anthropic entries."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "A signed-out Claude Code profile no longer shows quota windows it can never refresh."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.6.0",
+      "date": "2026-09-21",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "MiniMax Code usage tracking: per-call token usage from the mcode CLI lands in Overview, the period filters and Stats, beside the MiniMax quota card that already covered the account side.",
+            "Command Code subscription quota tracking shows the 5-hour and weekly windows the API reports and a monthly window derived from the resolved plan, behind an explicit consent: tokdash quota consent --credential-scan on --commandcode-api on.",
+            "OpenCode v2's session_message / session_v2 schema is read, so usage written after OpenCode's migration is counted again in Overview and Sessions. Kilo Code databases are detected the same way."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "A quota card stops warning that it couldn't refresh as soon as the provider answers again, instead of warning for days after it recovered.",
+            "A quota window updated twice in the same second now keeps the newer reading, so a bar that should be withdrawn really disappears."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.5.7",
+      "date": "2026-09-15",
+      "sections": [
+        {
+          "type": "fixed",
+          "items": [
+            "Antigravity quota tracking now discovers the current OAuth token, while retaining compatibility with the legacy token path.",
+            "The Quota tab's provider filter is stored per host, so changing one host no longer changes the others."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.5.6",
+      "date": "2026-09-14",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Muse Code usage tracking is now enabled, reading parent and subagent session logs with mirrored-stream filtering and cross-fork deduplication.",
+            "DeepSeek V4.1 Flash is priced at the official rates."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Share cards now rank the top five harnesses, models and projects, matching the Report page."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "The Refresh button now waits for a recompute already in progress and shows its fresh result, instead of briefly reporting cached data."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.5.5",
+      "date": "2026-09-14",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Qwen Code, OpenClaw and Qoder CLI now have Session Explorer panels whose token totals share the same parsing and deduplication rules as Overview.",
+            "Opt-in OpenCode Go quota tracking reads rolling, weekly and monthly subscription windows through the key-auth usage endpoint."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "The secure remote-access guide now covers Cloudflare Tunnel with Access and authenticated Caddy/nginx deployments, including client and subpath limitations."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Claude Code turns keep their fullest cumulative usage snapshot, recovering output tokens that were lost when an early streamed block was retained.",
+            "Static assets load from symlink-based package installations instead of returning 404.",
+            "File-backed usage sync keeps existing rows when a log disappears between discovery and parsing, and cross-file copies choose the same owner with or without the durable database."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.5.4",
+      "date": "2026-09-08",
+      "sections": [
+        {
+          "type": "changed",
+          "items": [
+            "The Report tab is much faster to reopen: sessions are cached per session and shared across the week, month and year windows instead of being rebuilt three times. TOKDASH_SESSION_CACHE_TURNS bounds what the cache retains.",
+            "The Report tab swaps the quick-range presets for period chips \u2014 this and last week, named months, years \u2014 each stepping the window a whole period back.",
+            "Share cards follow the app theme, export at 1800x3200, and print tokens and cost together in the header, with cost on by default and the toggle as the opt-out. Month cards use smaller heat squares with empty boxes for days still ahead, week cards drop the heat row, and the project card ranks the top 3 projects.",
+            "Durations render in unit words, two at most: 25 hours reads as 1 day 1 hour, 34 days as 1 month 4 days."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "claude-3.5-sonnet prices at the published $3 / $15 per MTok instead of double, so Claude Code's default model from Oct 2024 to early Feb 2025 showed twice its real cost. Stored rows reprice on read."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.5.3",
+      "date": "2026-09-05",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "A new Report tab: a period report on this week, this month or the year to date, with a day map, a top harness / model / project podium, an hour-and-weekday rhythm, and a row per harness.",
+            "Two shareable cards at the foot of the Report tab, exported as 1080x1920 PNGs. Every export writes both a light and a dark card, and cost stays off until you ask for it.",
+            "Seven new style themes adapted from cosyncing: Teal Obsidian, Graphite, Nordic Warmth, Cyber Amber, Royal Navy, Soft Minimalist and Flat White, each with its own light and dark tokens, heatmap and chart palettes.",
+            "Antigravity sessions run through an ACP host are now counted. The antigravity-acp and antigravity-ide product homes are scanned alongside antigravity-cli, all reporting under the one Antigravity entry, and ANTIGRAVITY_HOME adds further homes without displacing the defaults.",
+            "A second Claude Code subscription now reaches the Quota tab. With credential scanning consented, every ~/.claude* install that has its own sign-in is polled, and the Claude card groups its windows by install under the directory name it was set up with.",
+            "gpt-6-astra is priced at OpenAI's published standard rates instead of showing as $0.",
+            "tokdash serve --dev-fixture dense now serves /api/insights, so the Report tab can be worked on against the fixture."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Theme defects across the style set: the refresh glyph and the select caret no longer disappear on light-buttoned themes, Overview KPI values no longer wrap in the monospace themes, Flat White panels have their separation from the page back, and label text that sat below WCAG AA contrast was corrected in nine theme and mode combinations.",
+            "The Report tab's panels follow the active style theme instead of painting a literal white or slate blue on every theme.",
+            "A quota card that measures two accounts no longer blames one of them for the other's failure. A failing MiniMax China plan reads as a problem with that plan rather than the healthy global one, and one region's recovery no longer leaves the other's stale error in place.",
+            "Low-quota alerts no longer go quiet on a working Claude install while a sibling install stays broken. A quota row's last-known marker and its alert eligibility now compare against the status of the account that owns the row.",
+            "A quota card now prints an error that belongs to none of the accounts it lists, instead of letting any account list silence it.",
+            "The multi-server views no longer count a working subscription as needing attention. A provider is OK when at least one of its accounts is healthy and the card's own error belongs to one of them.",
+            "tokdash serve --dev-fixture dense no longer answers /api/insights with a 500 for a short explicit date range."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.5.2",
+      "date": "2026-09-03",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Gemini 3.8 Flash, Tencent HY4 Preview and Muse Spark 1.3, plus the Muse Spark contributor tier, are priced instead of showing as $0.",
+            "Model names that matched nothing now resolve: the Qwen3.8-Flash-Next spellings price as Qwen3.8 Flash, gemini-3.7-flash-control as Gemini 3.7 Flash, and doubao-seed-code, doubao-seed-2.0-code and ark-code as Seed 2.0 Code."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.5.1",
+      "date": "2026-09-02",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Claude Fable 5.1 is priced, with fable-5.1 style aliases, instead of showing as $0.",
+            "tokdash serve --dev-fixture dense starts the dashboard against a dense synthetic dataset for UI work, reading none of your real history."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Refresh while a large Codex session is streaming no longer takes 30-60 s or balloons memory: the Codex and Claude parsers stream their logs, one sync runs per source at a time, and the comparison window reuses the current window's sync."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "The first request after upgrading re-parses Codex session files once; on a large history that is a one-off pause of some tens of seconds."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.5.0",
+      "date": "2026-09-01",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Zed, Qwen Code and Charm Crush are new usage sources, read locally from each tool's own store.",
+            "WorkBuddy and Qoder IDE now have their own Session Explorer panels, with per-session turns and active time.",
+            "A new /api/insights endpoint returns hour-of-day, weekday, heatmap, per-project and streak analytics in one request.",
+            "Usage responses carry top_models_by_cost alongside the token-ranked top_models, and stats adds messages, most_used_model and highest_cost_model."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Model lists are ordered by tokens, as the API reference always described. The cost ranking is served separately rather than replacing it.",
+            "The favorite model ranks by tokens rather than cost, so a rarely used but expensive model no longer wins.",
+            "A project name is taken from the last element of a Windows path as well as a POSIX one, so the same project seen from Windows and WSL groups together."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Calendar heatmap days carry a real intensity instead of always zero, so the calendar shades again.",
+            "Current and longest streaks are computed instead of always returning zero.",
+            "Refresh no longer reports success while serving cached data."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.4.3",
+      "date": "2026-09-01",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Hermes named profiles are scanned by default, so usage kept under ~/.hermes/profiles/<name> no longer goes missing from Overview and Session Explorer.",
+            "Yesterday's figures are warmed just after midnight, so the first Yesterday click of the day is already cached."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "The cap on concurrent heavy computes now scales with the CPUs this process may actually use, up to 8, instead of a fixed 2."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Switching to a date range nothing has computed no longer leaves most Sessions panels failing. Requests that cannot get a compute slot now queue briefly instead of being refused outright."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.4.2",
+      "date": "2026-08-30",
+      "sections": [
+        {
+          "type": "fixed",
+          "items": [
+            "Yesterday and other past date ranges now recompute once the range has ended, instead of showing the partial figures cached while it was still in progress. Previously only the Refresh button corrected them."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.4.1",
+      "date": "2026-08-28",
+      "sections": [
+        {
+          "type": "fixed",
+          "items": [
+            "Quota provider visibility menus now list the harnesses reported by their own server and keep every server block synchronized when the shared preference changes."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.4.0",
+      "date": "2026-08-28",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Added Japanese, Korean, Spanish, and Portuguese dashboard languages, with automatic browser-language detection and locale-aware dates and numbers.",
+            "Added opt-in Z.ai Coding Plan quota tracking for 5-hour, weekly credit, and legacy MCP windows.",
+            "Updated pricing data to 2.0.20 with 14 newly listed models."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Refresh reports now appear for every repeat refresh of the displayed range while respecting an explicit dismissal."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.3.1",
+      "date": "2026-08-27",
+      "sections": [
+        {
+          "type": "changed",
+          "items": [
+            "Session panels now show each harness's brand logo, and harnesses with no sessions in the selected range are hidden instead of rendering empty panels."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "The first dashboard load after startup no longer returns a transient 503 while the cache warms."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.3.0",
+      "date": "2026-08-26",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Added Session Explorer support for Antigravity CLI, Cline, Grok Build, Hermes, Kilo Code, and omp, with per-turn usage and active time.",
+            "Added a Servers tab for comparing configured Tokdash instances and collapsible per-tool session panels.",
+            "Refresh now reports source-level additions, updates, removals, and unchanged rows from incremental scans."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Overview and session runtime cards now report agent time consistently, and unchanged source files are reused during rescans."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Fixed queued dashboard refreshes, stale date-range breakdowns, Antigravity WAL metadata invalidation, and Cline project fallback."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.2.0",
+      "date": "2026-08-22",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Added omp (oh-my-pi) as a local token and cost source, reading the same session format as Pi across the default tree, the init-xdg migration root, and named profiles.",
+            "Added Kilo Code as a local token and cost source, covering the CLI and the current VS Code extension through their shared store, including dev-channel databases.",
+            "Added Cline as a local token and cost source, reading per-session message files so subagent spawns are counted in full rather than dropped.",
+            "Added local omp, Kilo Code, and Cline brand marks throughout dashboard tool rows and charts."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Each scanned session directory is now claimed by exactly one source, so two clients pointed at the same tree can no longer count the same tokens twice.",
+            "The persistent store's cross-file stable-key sync is a declared parser capability instead of a Codex-specific branch, keeping the correct owner for Cline's forked session files."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.1.0",
+      "date": "2026-08-22",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Added WorkBuddy as a local token and cost source, with cache-aware prompt accounting and per-model pricing.",
+            "Added Qoder IDE and Qoder CLI as separate local usage sources, including authoritative provider-credit costs where Qoder reports them.",
+            "Added local WorkBuddy and Qoder brand marks throughout dashboard tool rows and charts."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Parser changes now invalidate only that parser's persistent usage cache, while pricing changes reprice stored rows without rereading source logs.",
+            "Native-Windows setup, re-setup, doctor, and uninstall now classify and stop owned processes safely while leaving foreign port holders alone."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Closed cache races that could expose mixed pricing generations or preserve stale costs after a concurrent sync.",
+            "Made Qoder fixture reads explicit UTF-8 so the parser suite passes on Windows consoles with legacy default encodings."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "2.0.0",
+      "date": "2026-08-20",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Added ZCode as a local token and cost source, with cache-aware input accounting and per-model pricing.",
+            "Added ZCode to the Session Explorer with turns, per-model billing, and measured active-time events.",
+            "Added Qwen3.8 27B pricing and ZCode branding across the dashboard and documentation."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Fixed native-Windows setup, locked-file session reads, and usage-database resync behavior.",
+            "Made ZCode live-database reads coherent and read-only at the source by querying disposable SQLite snapshots, with retry-safe caching."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "1.9.0",
+      "date": "2026-08-19",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Reasonix is now a tracked source. Tokdash reads its per-request stats and session logs from ~/.reasonix (or $REASONIX_HOME), pricing each provider/model pair through the usual pricing database.",
+            "Sessions can now use a step duration the tool measured itself rather than inferring one from the gap between events, so idle time between an answer and your next prompt is excluded outright."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Changing the date range no longer leaves the previous range's Apps & Models and Combined Models tables under the new range's label.",
+            "The Agent Time card now shows that it is loading instead of a dash, which read as \u201cno agent time\u201d while its request was still in flight.",
+            "Restored DeepSeek Harness session loading when the persistent usage database is disabled or unreadable."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "1.8.1",
+      "date": "2026-08-18",
+      "sections": [
+        {
+          "type": "fixed",
+          "items": [
+            "Codex subagent and fork sessions no longer double-count the parent thread they replay \u2014 newer Codex writes forks in a shape the old check could not see.",
+            "Codex usage is no longer attributed to gpt-5.3-codex when a rollout records no model; those rows now take the file's own model, or read as unknown at zero cost.",
+            "Picking a date range no longer keeps a fork's replayed rows when the range excluded the parent session."
+          ]
+        },
+        {
+          "type": "added",
+          "items": [
+            "Codex rollouts moved to ~/.codex/archived_sessions are now read alongside the active ones, without counting anything twice."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Sessions spanning many files now load much faster. Claude splits one session across every subagent it spawns, and merging those rows was quadratic in the file count."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "1.8.0",
+      "date": "2026-08-14",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Added DeepSeek Harness (dsh) as a token, cost and session source \u2014 each step's early usage chunk folds into its finalized message, and a forked session's inherited prefix is skipped, so nothing is double-counted.",
+            "DeepSeek Harness sessions appear in the Session Explorer with title, project and active time, and sync into the persistent store.",
+            "Added GLM 5.3, DeepSeek V4 Pro and Grok 4.6 pricing, plus a DeepSeek Harness brand mark."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Updated the DeepSeek V4 Flash and V4 Pro rates to the current official prices."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "1.7.0",
+      "date": "2026-08-14",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Added an estimated agent time card to the Overview, with a change against the previous period.",
+            "Added estimated active and agent runtime to sessions and per-tool panels, with an idle cap so a session left open overnight no longer reads as an all-night session.",
+            "Added Kimi to the session explorer, including per-agent stream timing."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Cached session rows now hold their billing inputs and are priced when read, so editing a rate reprices immediately instead of reparsing every session log."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Kept the cost OpenCode and Mimo report themselves instead of replacing it with an estimate.",
+            "Stopped a superseded dashboard load from showing its results or its errors under the range you switched to."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "1.6.4",
+      "date": "2026-08-12",
+      "sections": [
+        {
+          "type": "fixed",
+          "items": [
+            "Replaced the quick-range horizontal scrollbar with a responsive More ranges disclosure that keeps the selected preset visible."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "1.6.3",
+      "date": "2026-08-12",
+      "sections": [
+        {
+          "type": "fixed",
+          "items": [
+            "Preserved persistent usage caches across unchanged package upgrades while retaining invalidation for pricing data and calculation changes.",
+            "Removed duplicate empty quota history panels from multi-server dashboard views."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "1.6.2",
+      "date": "2026-08-12",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Added a localized in-app What's new drawer and local brand marks throughout tool breakdowns."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Unified loading states, refined the Overview profile hierarchy, and kept quick date ranges compact on one row."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Enabled same-tailnet Tailscale Serve dashboards to combine Tokdash servers without manual CORS setup while keeping remote writes blocked.",
+            "Synchronized today's Profile Activity totals, removed duplicate tool-icon transfers, and kept long themed pages visually continuous."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "1.6.1",
+      "date": "2026-08-11",
+      "sections": [
+        {
+          "type": "fixed",
+          "items": [
+            "Kept the Settings dropdown above dashboard cards in themes that use blurred surfaces."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "1.6.0",
+      "date": "2026-08-10",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Added multi-server selection across the dashboard and companion apps, with combined usage and server-grouped quota views.",
+            "Added browser-side server health checks, offline-friendly server setup, and automatic recovery after a server becomes reachable."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Companion settings now migrate the previous single-server preference into the multi-server format without resetting other preferences.",
+            "Sessions requests now use two-tool concurrency so one cold scan does not block the remaining tools."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Improved startup warming, stale-response refreshes, persistent session indexing, and cache compatibility across wheel restamps."
+          ]
+        }
+      ]
+    },
+    {
+      "version": "1.5.9",
+      "date": "2026-08-10",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Made the active homepage date range immediately visible with a localized, keyboard-accessible range selector."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Companion apps now show multi-day quota resets in days, matching the dashboard."
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.freebuff/
+tokdash/**/__pycache__/
+tokdash/**/*.pyc
+mutant/
+
+prompt.txt

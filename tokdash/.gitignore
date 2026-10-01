@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code
+.claude
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*_old.*
+*.bak
+
+# Logs
+*.log
+
+# Secrets
+.api_keys/
+.env
+.env.*
+
+# Private agent instructions (not for public release)
+AGENTS.md
+**/AGENTS.md
+# ...but these two are PUBLIC documentation guides (linked from the READMEs); keep them tracked:
+!docs/guides/agents/openclaw_reporting/AGENTS.md
+!docs/guides/agents/systemd/AGENTS.md
+docs/guides/agents/release/release.py
+
+
+.playwright-mcp
+.codex
+
+# Generated/disposable artifacts (sanity snapshots, etc.)
+output/
+
+# Companion dev run logs
+companion/windows/stderr.txt
+companion/windows/stdout.txt
+
+# Local-only analysis & planning notes (machine-specific usage data; not for the public repo)
+docs/local/
+.cosyncing/
+
+scratchpad/

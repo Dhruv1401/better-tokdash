@@ -1,0 +1,1104 @@
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import os
+import random
+import sys
+import time
+import threading
+import webbrowser
+from datetime import datetime
+from pathlib import Path
+
+import uvicorn
+
+from . import __version__, osinfo
+from .api import app
+from .cli_help import COMMAND_VERBS, brief_help
+from .compute import compute_usage
+from .sources.quota.config import POLL_INTERVAL_FLOOR_SECONDS
+
+_DB_WATCH_THREAD_STARTED = False
+_DB_WATCH_THREAD_LOCK = threading.Lock()
+_QUOTA_POLL_THREAD_STARTED = False
+_QUOTA_POLL_THREAD_LOCK = threading.Lock()
+
+
+class TokdashArgumentParser(argparse.ArgumentParser):
+    def parse_args(self, args=None, namespace=None):
+        parsed = super().parse_args(args, namespace)
+        if getattr(parsed, "command", None) == "quota":
+            parsed.quota_action = getattr(parsed, "db_action", "show")
+        else:
+            parsed.quota_action = None
+        return parsed
+
+
+def _port_type(value: str) -> int:
+    try:
+        port = int(value)
+    except Exception:
+        raise argparse.ArgumentTypeError(f"Invalid port {value!r}. Must be an integer in 1..65535.")
+
+    if not (1 <= port <= 65535):
+        raise argparse.ArgumentTypeError(f"Invalid port {port}. Valid range is 1..65535.")
+
+    return port
+
+
+def _default_port() -> int:
+    raw = os.environ.get("TOKDASH_PORT", "55423")
+    try:
+        return _port_type(raw)
+    except argparse.ArgumentTypeError as e:
+        raise SystemExit(f"Invalid TOKDASH_PORT={raw!r}. {e} Use --port <1-65535>.")
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    """Read a positive integer from the environment, falling back on bad/empty values.
+
+    A misconfigured knob must never crash ``serve``; we just use the default.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def build_parser(prog: str) -> argparse.ArgumentParser:
+    parser = TokdashArgumentParser(prog=prog, description="Tokdash")
+    # One flat parser carries the flags of every verb, so argparse's own usage line
+    # would enumerate all of them (it did: six wrapped lines before the first help
+    # text). The verbs are the contract; the flags follow below, grouped per verb.
+    parser.usage = "%(prog)s <command> [options]"
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"tokdash {__version__}",
+        help="Print the Tokdash version and exit",
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default=None,
+        choices=list(COMMAND_VERBS),
+        help="Command (default: show help)",
+    )
+    parser.add_argument(
+        "db_action",
+        nargs="?",
+        default="status",
+        choices=["status", "sync", "resync", "verify", "repair", "watch", "poll", "show", "consent"],
+        help="Database action for `tokdash db` or quota action for `tokdash quota` (default: status)",
+    )
+
+    net = parser.add_argument_group("address and port (serve / setup / doctor)")
+    server = parser.add_argument_group("server (serve)")
+    net.add_argument(
+        "--bind",
+        "--host",
+        dest="bind",
+        default=os.environ.get("TOKDASH_HOST", "127.0.0.1"),
+        help="Bind address (default: 127.0.0.1)",
+    )
+    net.add_argument(
+        "--port",
+        type=_port_type,
+        default=None,
+        help="Port to listen on (default: 55423)",
+    )
+    server.add_argument(
+        "--log-level",
+        default=os.environ.get("TOKDASH_LOG_LEVEL", "info"),
+        help="Uvicorn log level (default: info)",
+    )
+    server.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Don't automatically open the browser",
+    )
+    dev = parser.add_argument_group("development fixture (serve)")
+    dev.add_argument(
+        "--dev-fixture",
+        choices=["dense"],
+        default=None,
+        help="Serve seeded synthetic data for visual development (never reads local history)",
+    )
+    dev.add_argument(
+        "--dev-seed",
+        type=int,
+        default=None,
+        help="Reproduce a development fixture dataset with a specific integer seed",
+    )
+
+    window = parser.add_argument_group("usage window (export / report / tui)")
+    out = parser.add_argument_group("output (export / report / db / quota)")
+    window.add_argument(
+        "--period",
+        default="today",
+        help='Usage period: "today", "week", "month", or an integer number of days (default: today)',
+    )
+    out.add_argument(
+        "--pretty",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    out.add_argument(
+        "--json",
+        action="store_true",
+        help="(compat) `export` is JSON by default; selects JSON output for `report` and the lifecycle verbs",
+    )
+    out.add_argument(
+        "--output",
+        type=str,
+        help="Write output to a file instead of stdout",
+    )
+    out.add_argument(
+        "--include-quota",
+        action="store_true",
+        help="`export` only: include local quota state. Off by default.",
+    )
+    db = parser.add_argument_group("usage database (db)")
+    preview = parser.add_argument_group("dry run (db repair / setup / update / uninstall)")
+    db.add_argument(
+        "--verify-period",
+        default="today",
+        help='Period for `db verify` (default: today)',
+    )
+    preview.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="db repair: report the checks without changing counters. Lifecycle verbs: print the "
+        "plan/command and change nothing.",
+    )
+    quota = parser.add_argument_group("quota consent (quota consent)")
+    quota.add_argument("--codex-api", choices=["on", "off"], help="Enable/disable Codex API quota polling.")
+    quota.add_argument("--claude-api", choices=["on", "off"], help="Enable/disable Claude API quota polling.")
+    quota.add_argument("--antigravity-api", choices=["on", "off"], help="Enable/disable Antigravity API quota polling.")
+    quota.add_argument("--minimax-api", choices=["on", "off"], help="Enable/disable MiniMax Token Plan quota polling.")
+    quota.add_argument("--kimi-api", choices=["on", "off"], help="Enable/disable Kimi Code quota polling.")
+    quota.add_argument("--grok-api", choices=["on", "off"], help="Enable/disable Grok Build quota polling.")
+    quota.add_argument("--zai-api", choices=["on", "off"], help="Enable/disable Z.ai Coding Plan quota polling.")
+    quota.add_argument("--opencode-go-api", dest="opencode_go_api", choices=["on", "off"], help="Enable/disable OpenCode Go subscription quota polling.")
+    quota.add_argument("--commandcode-api", dest="commandcode_api", choices=["on", "off"], help="Enable/disable Command Code subscription quota polling.")
+    quota.add_argument(
+        "--credential-scan",
+        choices=["on", "off"],
+        help="Allow/deny read-only access to allowlisted local credential stores.",
+    )
+    quota.add_argument("--enabled", choices=["on", "off"], help="Master switch for all quota tracking.")
+    quota.add_argument(
+        "--poll-interval",
+        type=int,
+        choices=[15, 30, 60, 120],
+        help="Background poll interval in minutes (15/30/60/120).",
+    )
+
+    # Lifecycle options (setup / doctor / update / uninstall). These reuse the global
+    # --bind/--port/--json/--dry-run above; their defaults are inert for the
+    # serve/export/db verbs so the parser-compatibility contract (§7.1) holds.
+    lifecycle = parser.add_argument_group("lifecycle (setup / doctor / update / uninstall)")
+    lifecycle.add_argument(
+        "--auto",
+        action="store_true",
+        help="Non-interactive 'easy' route with safe local-only defaults",
+    )
+    lifecycle.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Assume yes to confirmations (apply without prompting)",
+    )
+    lifecycle.add_argument(
+        "--runtime",
+        choices=["auto", "existing", "pipx", "venv", "binary"],
+        default="auto",
+        help="Service runtime to use (default: auto = the current interpreter)",
+    )
+    lifecycle.add_argument(
+        "--service",
+        choices=["auto", "systemd", "launchd", "winsched", "none"],
+        default="auto",
+        help="Background service type (default: auto)",
+    )
+    lifecycle.add_argument(
+        "--no-service",
+        action="store_true",
+        help="Do not create a background service",
+    )
+    lifecycle.add_argument(
+        "--purge",
+        action="store_true",
+        help="uninstall: also delete usage history and config (off by default)",
+    )
+    lifecycle.add_argument(
+        "--keep-runtime",
+        action="store_true",
+        help="uninstall: remove the service but keep a setup-owned runtime",
+    )
+    lifecycle.add_argument(
+        "--force",
+        "--adopt",
+        dest="force",
+        action="store_true",
+        help="setup: replace a pre-existing unmarked tokdash.service; "
+        "uninstall: remove a unit that is unmarked or no longer carries setup's marker",
+    )
+
+    return parser
+
+
+def _has_display() -> bool:
+    """Best-effort check for a usable GUI session.
+
+    Thin wrapper over the single shared implementation (:func:`osinfo.has_display`,
+    also used by ``tokdash setup``'s optional browser open) — keep it delegating
+    so the two call sites can never diverge. ``--no-open`` remains the explicit
+    hard override on top of this.
+    """
+    return osinfo.has_display()
+
+
+def _open_browser(url: str) -> None:
+    """Open ``url`` in a browser, swallowing any error.
+
+    Opening a browser is a best-effort convenience; a missing/misconfigured
+    browser must never take down the server.
+    """
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+
+
+def serve(
+    host: str,
+    port: int,
+    log_level: str,
+    open_browser: bool = True,
+    dev_fixture: str | None = None,
+    dev_seed: int | None = None,
+) -> None:
+    url_host = "localhost" if host in {"0.0.0.0", "::"} else host
+    url = f"http://{url_host}:{port}"
+    # Tell the app its effective bind/port so the write-protection gate
+    # (api._write_guard) can enforce loopback-only mutations and a Host allowlist.
+    app.state.bind = host
+    app.state.port = port
+    had_fixture_state = hasattr(app.state, "dev_fixture")
+    previous_fixture = getattr(app.state, "dev_fixture", "")
+    had_fixture_seed_state = hasattr(app.state, "dev_fixture_seed")
+    previous_fixture_seed = getattr(app.state, "dev_fixture_seed", 0)
+    if not dev_fixture:
+        fixture_seed = 0
+    elif dev_seed is not None:
+        fixture_seed = dev_seed
+    else:
+        fixture_seed = random.SystemRandom().randrange(1, 2**32)
+    app.state.dev_fixture = dev_fixture or ""
+    app.state.dev_fixture_seed = fixture_seed
+    print(f"🚀 Starting Tokdash on {url}")
+    if dev_fixture:
+        print(
+            f"🧪 Development fixture: {dev_fixture} · seed {fixture_seed} "
+            "(synthetic data; local history, credentials, and provider APIs are not read)"
+        )
+    if os.environ.get("TOKDASH_NO_RETENTION_NOTICE", "").strip().lower() not in {"1", "true", "yes"}:
+        print(
+            "ℹ️  Note: Claude Code & Gemini CLI auto-delete sessions older than ~30 days, "
+            "which can silently shrink Tokdash's history.\n"
+            "   Keep full history → https://github.com/JingbiaoMei/tokdash#history-retention\n"
+            "   Silence this notice with TOKDASH_NO_RETENTION_NOTICE=1"
+        )
+    # Open the browser only when explicitly enabled (--no-open is a hard
+    # override) and a GUI is actually available. Fire it from a short-delay
+    # daemon timer so the server has a moment to start listening first.
+    if open_browser and _has_display():
+        timer = threading.Timer(1.0, _open_browser, args=(url,))
+        timer.daemon = True
+        timer.start()
+    if not dev_fixture:
+        _start_usage_db_sync_daemon()
+        # Materialize the credential_scan grandfather once so upgraded installs keep
+        # their existing polling and the persisted consent state is explicit.
+        from .sources.quota import config as quota_config
+
+        quota_config.ensure_quota_consent_migrated()
+        _start_quota_poll_daemon()
+    # Backpressure: cap accepted concurrency and keep-alive lifetime so a load burst
+    # returns 503 fast instead of queuing forever and wedging the server. The limit
+    # sits above the AnyIO worker pool (~40) so cheap cache hits aren't rejected, but
+    # is bounded so the connection backlog can't grow without limit.
+    try:
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            log_level=log_level,
+            limit_concurrency=_positive_int_env("TOKDASH_LIMIT_CONCURRENCY", 64),
+            timeout_keep_alive=_positive_int_env("TOKDASH_KEEPALIVE", 5),
+        )
+    finally:
+        # In production uvicorn.run() only returns at shutdown, so this restore is
+        # effectively process teardown. It exists because the test suite calls
+        # serve() in-process with uvicorn.run monkeypatched, and a leaked
+        # app.state.dev_fixture would make every later test serve fixture data.
+        if had_fixture_state:
+            app.state.dev_fixture = previous_fixture
+        else:
+            del app.state.dev_fixture
+        if had_fixture_seed_state:
+            app.state.dev_fixture_seed = previous_fixture_seed
+        else:
+            del app.state.dev_fixture_seed
+
+
+def export(period: str, pretty: bool, output: str | None, include_quota: bool = False) -> None:
+    data = compute_usage(period)
+    if include_quota:
+        from .sources.quota import quota_state
+
+        data["quota"] = quota_state()
+    payload = json.dumps(data, indent=2 if pretty else None)
+
+    if output:
+        Path(output).write_text(payload + "\n", encoding="utf-8")
+    else:
+        print(payload)
+
+
+def _emit_json(payload: dict, pretty: bool, output: str | None = None) -> None:
+    text = json.dumps(payload, indent=2 if pretty else None, sort_keys=bool(pretty))
+    if output:
+        Path(output).write_text(text + "\n", encoding="utf-8")
+    else:
+        print(text)
+
+
+def _sync_usage_database() -> dict:
+    from .compute import _sync_usage_store
+    from .sources.coding_tools import CodingToolsUsageTracker
+    from .sources.openclaw import get_usage_for_days
+    from .sessions import get_sessions_data
+    from .usage_store import UsageEntryStore
+
+    tracker = CodingToolsUsageTracker()
+    _sync_usage_store(tracker)
+    # OpenClaw syncs all discovered files before applying the date window.
+    get_usage_for_days(36500)
+    # Session records for DB-backed Session tab paths.
+    get_sessions_data("codex", "all")
+    get_sessions_data("claude", "all")
+    get_sessions_data("kimi", "all")
+    get_sessions_data("dsh", "all")
+    get_sessions_data("reasonix", "all")
+    return UsageEntryStore().status()
+
+
+def _resync_usage_database() -> dict:
+    from .usage_store import UsageEntryStore, usage_db_path, usage_db_process_lock
+
+    path = usage_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with usage_db_process_lock(path):
+        old_status_error = ""
+        try:
+            old_status = UsageEntryStore(path).status() if path.exists() else {"usage_entries": 0}
+        except Exception as exc:
+            old_status = {"usage_entries": 0}
+            old_status_error = str(exc)
+        old_entries = int(old_status.get("usage_entries", 0) or 0)
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        tmp_path = path.with_name(f"{path.name}.tmp.{timestamp}")
+
+        old_env = os.environ.get("TOKDASH_USAGE_DB_PATH")
+        try:
+            os.environ["TOKDASH_USAGE_DB_PATH"] = str(tmp_path)
+            status = _sync_usage_database()
+            tmp_store = UsageEntryStore(tmp_path)
+            tmp_store.checkpoint()
+            new_entries = int(status.get("usage_entries", 0) or 0)
+            if old_entries > 0 and new_entries == 0:
+                status["ok"] = False
+                status["error"] = "refusing to replace populated DB with empty resync result"
+                status["old_usage_entries"] = old_entries
+                return status
+        finally:
+            if old_env is None:
+                os.environ.pop("TOKDASH_USAGE_DB_PATH", None)
+            else:
+                os.environ["TOKDASH_USAGE_DB_PATH"] = old_env
+
+        backup_paths: list[str] = []
+        backups: list[tuple[Path, Path]] = []
+        candidates = (path, Path(str(path) + "-wal"), Path(str(path) + "-shm"))
+        try:
+            for candidate in candidates:
+                if candidate.exists():
+                    backup = candidate.with_name(candidate.name + f".bak.{timestamp}")
+                    candidate.replace(backup)
+                    backups.append((candidate, backup))
+                    backup_paths.append(str(backup))
+            tmp_path.replace(path)
+            for suffix in ("-wal", "-shm"):
+                tmp_sidecar = Path(str(tmp_path) + suffix)
+                if tmp_sidecar.exists():
+                    tmp_sidecar.replace(Path(str(path) + suffix))
+        except OSError as exc:
+            # On Windows, SQLite opens the database without FILE_SHARE_DELETE, so while
+            # another tokdash process (e.g. a running `tokdash serve`) still holds it,
+            # these renames raise instead of succeeding as they do on POSIX. Every other
+            # OSError — a cross-device rename, an I/O error on the volume — leaves the
+            # tree in the same half-applied state and needs the same undo, so the catch
+            # is broad and only the *reported cause* is narrowed below. Catching just
+            # PermissionError would let those escape with the backups already renamed
+            # away and no rollback attempted at all. Undo in the pairs the renames were
+            # actually made in, not zipped back against the candidate tuple: a missing
+            # sidecar (any candidate that did not exist) would shift every later pair
+            # onto the wrong path.
+            restored_backups: list[str] = []
+            unrestored_backups: list[str] = []
+            for candidate, backup in backups:
+                try:
+                    backup.replace(candidate)
+                    restored_backups.append(str(backup))
+                except OSError:
+                    # Never swallow this one: the .bak left on disk is now the
+                    # only intact copy of the old database, and the live path
+                    # holds either the half-applied resync or nothing at all.
+                    unrestored_backups.append(str(backup))
+            for leftover in (tmp_path, Path(str(tmp_path) + "-wal"), Path(str(tmp_path) + "-shm")):
+                try:
+                    leftover.unlink()
+                except OSError:
+                    pass
+            if isinstance(exc, PermissionError):
+                # The Windows open-handle case. A retry cannot succeed while the
+                # handle stays open, so the remedy is to stop whoever holds it.
+                cause = (
+                    "the usage database is held open by another process (e.g. a running "
+                    "`tokdash serve`)"
+                )
+                remedy = "stop it and retry `tokdash db resync`"
+                recovery = "Stop the server and restore it by hand"
+            else:
+                # Not evidence of a holder. Name the real error instead of sending
+                # the user to stop a server that is not the cause.
+                cause = f"the usage database could not be replaced ({type(exc).__name__}: {exc})"
+                remedy = "resolve that error and retry `tokdash db resync`"
+                recovery = "You must restore it by hand"
+            if unrestored_backups:
+                error = (
+                    cause
+                    + ", and rolling the resync back did not finish: "
+                    + ", ".join(unrestored_backups)
+                    + " could not be moved back and is now the only intact copy of the "
+                    "old database. " + recovery + " — do not retry `tokdash db resync` first."
+                )
+            else:
+                error = f"{cause}; {remedy}"
+            return {
+                "ok": False,
+                "error": error,
+                # False means the tree was left mid-rollback and needs a human.
+                "rollback_ok": not unrestored_backups,
+                # `backups` means the same thing on both paths: .bak files that
+                # exist on disk right now. A clean rollback renames every one of
+                # them back, so the list is empty; anything that could not be
+                # moved back is still there and is listed here.
+                "backups": unrestored_backups,
+                "restored_backups": restored_backups,
+                "resync_mode": "temp-db-atomic-replace",
+            }
+
+        status = UsageEntryStore(path).status()
+        status["ok"] = True
+        status["backups"] = backup_paths
+        status["resync_mode"] = "temp-db-atomic-replace"
+        if old_status_error:
+            status["old_status_error"] = old_status_error
+        return status
+
+
+def _verify_usage_database(period: str) -> dict:
+    from .compute import compute_usage
+
+    old = os.environ.get("TOKDASH_USAGE_DB")
+    attempts = []
+    try:
+        for attempt in range(1, 6):
+            os.environ["TOKDASH_USAGE_DB"] = "0"
+            live_data = compute_usage(period)
+            os.environ["TOKDASH_USAGE_DB"] = "1"
+            db_data = compute_usage(period)
+
+            fields = ("total_tokens", "total_messages")
+            diffs = {field: int(db_data.get(field, 0) or 0) - int(live_data.get(field, 0) or 0) for field in fields}
+            cost_diff = round(
+                float(db_data.get("total_cost", 0.0) or 0.0) - float(live_data.get("total_cost", 0.0) or 0.0),
+                6,
+            )
+            ok = all(value == 0 for value in diffs.values()) and abs(cost_diff) < 0.0001
+            result = {
+                "ok": ok,
+                "period": period,
+                "attempt": attempt,
+                "db": {
+                    "total_tokens": db_data.get("total_tokens"),
+                    "total_cost": db_data.get("total_cost"),
+                    "total_messages": db_data.get("total_messages"),
+                },
+                "live": {
+                    "total_tokens": live_data.get("total_tokens"),
+                    "total_cost": live_data.get("total_cost"),
+                    "total_messages": live_data.get("total_messages"),
+                },
+                "diff": {**diffs, "total_cost": cost_diff},
+            }
+            if ok:
+                if attempts:
+                    result["attempts"] = attempts
+                return result
+            attempts.append(result)
+            time.sleep(2)
+        result["attempts"] = attempts[:-1]
+        return result
+    finally:
+        if old is None:
+            os.environ.pop("TOKDASH_USAGE_DB", None)
+        else:
+            os.environ["TOKDASH_USAGE_DB"] = old
+
+
+def _repair_usage_database(*, dry_run: bool = False) -> dict:
+    from .usage_store import UsageEntryStore
+
+    return UsageEntryStore().repair(apply=not dry_run)
+
+
+def _usage_db_watch_enabled() -> bool:
+    value = os.environ.get("TOKDASH_USAGE_DB_WATCH", "0").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _usage_db_watch_interval() -> int:
+    return _positive_int_env("TOKDASH_USAGE_DB_WATCH_INTERVAL", 30)
+
+
+def _sync_watch_once_quietly() -> None:
+    try:
+        _sync_usage_database()
+    except Exception:
+        pass
+
+
+def _start_usage_db_sync_daemon() -> None:
+    global _DB_WATCH_THREAD_STARTED
+    if not _usage_db_watch_enabled():
+        return
+    try:
+        from .usage_store import persistent_usage_db_enabled
+
+        if not persistent_usage_db_enabled():
+            return
+    except Exception:
+        return
+
+    interval = _usage_db_watch_interval()
+
+    def loop() -> None:
+        while True:
+            _sync_watch_once_quietly()
+            time.sleep(interval)
+
+    with _DB_WATCH_THREAD_LOCK:
+        if _DB_WATCH_THREAD_STARTED:
+            return
+        thread = threading.Thread(target=loop, name="tokdash-usage-db-watch", daemon=True)
+        thread.start()
+        _DB_WATCH_THREAD_STARTED = True
+
+
+def _quota_poll_interval() -> int:
+    from .sources.quota.config import effective_poll_interval
+
+    return effective_poll_interval()[0]
+
+
+def _quota_jittered_interval() -> int:
+    base = _quota_poll_interval()
+    return max(POLL_INTERVAL_FLOOR_SECONDS, int(base + random.uniform(-base * 0.05, base * 0.05)))
+
+
+# Boundary sampling must not bypass the same provider-call floor as regular polling.
+# Besides avoiding bursts, this lets one delayed poll coalesce nearby reset targets.
+_QUOTA_POLL_SLEEP_FLOOR_SECONDS = POLL_INTERVAL_FLOOR_SECONDS
+
+
+def _quota_latest_snapshots_for_scheduling() -> list[dict]:
+    """Latest snapshot rows for boundary-poll scheduling, or ``[]`` when boundary polling
+    is off (skips the DB read entirely, so a disabled feature costs nothing extra per
+    cycle) or on any failure (DB not ready yet, locked, etc.) — the daemon must always fall
+    back cleanly to the regular jittered interval."""
+    try:
+        from .sources.quota import config as quota_config
+
+        if not quota_config.effective_boundary_config().enabled:
+            return []
+        enabled_providers = {
+            source.removesuffix("_api") for source in quota_config.enabled_network_sources()
+        }
+        if not enabled_providers:
+            return []
+        from .usage_store import UsageEntryStore
+
+        return [
+            row
+            for row in UsageEntryStore().latest_quota_snapshots()
+            if str(row.get("provider") or "") in enabled_providers
+        ]
+    except Exception:
+        return []
+
+
+def _plan_next_quota_poll(
+    now: int,
+    latest_snapshots,
+    *,
+    anchored_post_targets=(),
+):
+    """Compute ``(sleep_seconds, boundary_target)`` for the daemon's next poll cycle.
+
+    Boundary targets are delayed to the regular 300-second provider-call floor and
+    coalesced there. The returned target carries the provider set so a boundary wake does
+    not poll unrelated enabled APIs.
+    """
+    from .sources.quota import config as quota_config
+    from .sources.quota import plan_boundary_poll
+
+    regular_delay = _quota_jittered_interval()
+    try:
+        boundary = plan_boundary_poll(
+            now,
+            latest_snapshots,
+            quota_config.effective_boundary_config(),
+            minimum_delay_seconds=_QUOTA_POLL_SLEEP_FLOOR_SECONDS,
+            anchored_post_targets=anchored_post_targets,
+        )
+    except Exception:
+        return regular_delay, None
+    if boundary is None or boundary.at - now >= regular_delay:
+        return regular_delay, None
+    return boundary.at - now, boundary
+
+
+def _next_poll_sleep_seconds(now: int, latest_snapshots) -> int:
+    """Seconds to sleep before the next quota poll (see `_plan_next_quota_poll`)."""
+    return _plan_next_quota_poll(now, latest_snapshots)[0]
+
+
+def _record_boundary_poll_metric(kind: str) -> None:
+    """Best-effort `quota_meta` counter bump for a fired boundary poll.
+
+    Purely for later measuring the payoff of boundary sampling (see feature background);
+    never allowed to break the poll loop, so every failure mode (DB not ready, locked,
+    disabled) is swallowed.
+    """
+    try:
+        from .usage_store import UsageEntryStore, persistent_usage_db_enabled
+
+        if not persistent_usage_db_enabled():
+            return
+        meta_key = "quota_boundary_pre_polls" if kind == "pre" else "quota_boundary_post_polls"
+        store = UsageEntryStore()
+        current = store.quota_meta_get(meta_key)
+        try:
+            count = int(current) if current else 0
+        except ValueError:
+            count = 0
+        store.quota_meta_set(meta_key, str(count + 1))
+    except Exception:
+        pass
+
+
+def _quota_poll_once(*, include_network: bool = True, network_sources=None) -> dict:
+    from .sources.quota import poll_quota
+
+    return poll_quota(include_network=include_network, network_sources=network_sources)
+
+
+def _quota_tracking_enabled() -> bool:
+    try:
+        from .sources.quota.config import quota_tracking_enabled
+
+        return quota_tracking_enabled()
+    except Exception:
+        return False
+
+
+def _quota_network_enabled() -> bool:
+    return bool(_quota_network_sources())
+
+
+def _quota_network_sources() -> tuple[str, ...]:
+    try:
+        from .sources.quota.config import enabled_network_sources
+
+        return tuple(enabled_network_sources())
+    except Exception:
+        return ()
+
+
+def _reset_epochs(rows) -> dict[tuple[str, str, str], int]:
+    epochs: dict[tuple[str, str, str], int] = {}
+    for row in rows:
+        resets_at = row.get("resets_at")
+        if resets_at is None:
+            continue
+        try:
+            reset = int(resets_at)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        key = (
+            str(row.get("provider") or ""),
+            str(row.get("account") or "default"),
+            str(row.get("bucket") or ""),
+        )
+        epochs[key] = reset
+    return epochs
+
+
+def _advanced_reset_post_targets(before_rows, after_rows, now: int) -> list[tuple[int, str]]:
+    """Post-reset targets anchored to reset epochs observed before a rollover poll."""
+    from .sources.quota import RESET_JITTER_SECONDS, config as quota_config
+
+    cfg = quota_config.effective_boundary_config()
+    if not cfg.enabled or not cfg.post_reset_enabled:
+        return []
+    before = _reset_epochs(before_rows)
+    after = _reset_epochs(after_rows)
+    targets: list[tuple[int, str]] = []
+    for key, old_reset in before.items():
+        new_reset = after.get(key)
+        if new_reset is None or new_reset - old_reset <= RESET_JITTER_SECONDS:
+            continue
+        target = old_reset + cfg.post_seconds
+        if target > now + RESET_JITTER_SECONDS:
+            targets.append((target, key[0]))
+    return targets
+
+
+def _start_quota_poll_daemon() -> None:
+    global _QUOTA_POLL_THREAD_STARTED
+    try:
+        from .usage_store import persistent_usage_db_enabled
+
+        if not persistent_usage_db_enabled():
+            return
+    except Exception:
+        return
+
+    def loop() -> None:
+        time.sleep(60)
+        pending_boundary = None
+        anchored_post_targets: list[tuple[int, str]] = []
+        while True:
+            # Re-read the master switch and interval every iteration so the tab's
+            # enable/disable + interval choice apply without a restart.
+            tracking_enabled = _quota_tracking_enabled()
+            before_snapshots = _quota_latest_snapshots_for_scheduling() if tracking_enabled else []
+            poll_succeeded = False
+            try:
+                if tracking_enabled:
+                    enabled_sources = _quota_network_sources()
+                    if pending_boundary is None:
+                        selected_sources = enabled_sources
+                    else:
+                        selected_sources = tuple(
+                            source
+                            for source in enabled_sources
+                            if source.removesuffix("_api") in pending_boundary.providers
+                        )
+                    _quota_poll_once(
+                        include_network=bool(selected_sources),
+                        network_sources=selected_sources,
+                    )
+                    poll_succeeded = True
+                    if pending_boundary is not None:
+                        for kind in pending_boundary.kinds:
+                            _record_boundary_poll_metric(kind)
+            except Exception:
+                pass
+            # Re-read boundary config AND latest snapshots each iteration (post-poll, so a
+            # rollover this cycle just wrote is already reflected) so a window's rollover
+            # reschedules the next boundary target immediately. With tracking off there is
+            # nothing to poll for, so skip the DB read and fall back to exactly the regular
+            # jittered interval — identical to pre-boundary-polling behavior.
+            now = int(time.time())
+            latest_snapshots = _quota_latest_snapshots_for_scheduling() if tracking_enabled else []
+            if poll_succeeded:
+                covered_providers = (
+                    set(pending_boundary.providers)
+                    if pending_boundary is not None
+                    else {source.removesuffix("_api") for source in _quota_network_sources()}
+                )
+                anchored_post_targets = [
+                    (target, provider)
+                    for target, provider in anchored_post_targets
+                    if target > now or provider not in covered_providers
+                ]
+                for target in _advanced_reset_post_targets(before_snapshots, latest_snapshots, now):
+                    if target not in anchored_post_targets:
+                        anchored_post_targets.append(target)
+            try:
+                sleep_seconds, pending_boundary = _plan_next_quota_poll(
+                    now,
+                    latest_snapshots,
+                    anchored_post_targets=anchored_post_targets,
+                )
+            except Exception:
+                sleep_seconds = max(_QUOTA_POLL_SLEEP_FLOOR_SECONDS, _quota_jittered_interval())
+                pending_boundary = None
+            time.sleep(sleep_seconds)
+
+    with _QUOTA_POLL_THREAD_LOCK:
+        if _QUOTA_POLL_THREAD_STARTED:
+            return
+        thread = threading.Thread(target=loop, name="tokdash-quota-poll", daemon=True)
+        thread.start()
+        _QUOTA_POLL_THREAD_STARTED = True
+
+
+def _watch_usage_database(pretty: bool, output: str | None) -> int:
+    interval = _usage_db_watch_interval()
+    try:
+        while True:
+            status = _sync_usage_database()
+            status["watch_interval_seconds"] = interval
+            _emit_json(status, pretty, output)
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        return 0
+
+
+def db_command(action: str, pretty: bool, output: str | None, verify_period: str, dry_run: bool = False) -> int:
+    from .usage_store import UsageEntryStore
+
+    # `--dry-run` only previews `db repair`. For the mutating/looping actions it would
+    # otherwise be silently ignored while the DB is rebuilt/replaced — fail loudly instead.
+    if dry_run and action in {"sync", "resync", "watch"}:
+        raise SystemExit(f"--dry-run is not supported for `tokdash db {action}` (only `tokdash db repair`).")
+
+    if action == "status":
+        _emit_json(UsageEntryStore().status(), pretty, output)
+        return 0
+    if action == "sync":
+        _emit_json(_sync_usage_database(), pretty, output)
+        return 0
+    if action == "resync":
+        result = _resync_usage_database()
+        _emit_json(result, pretty, output)
+        return 0 if result.get("ok") else 1
+    if action == "verify":
+        result = _verify_usage_database(verify_period)
+        _emit_json(result, pretty, output)
+        return 0 if result.get("ok") else 1
+    if action == "repair":
+        result = _repair_usage_database(dry_run=dry_run)
+        _emit_json(result, pretty, output)
+        return 0 if result.get("ok") else 1
+    if action == "watch":
+        return _watch_usage_database(pretty, output)
+    raise SystemExit(f"Unknown db action: {action}")
+
+
+def _parse_onoff(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    return value == "on"
+
+
+def quota_command(args) -> int:
+    action = args.quota_action or "show"
+    if action == "poll":
+        _emit_json(_quota_poll_once(), args.pretty, args.output)
+        return 0
+    if action == "show" or action == "status":
+        from .sources.quota import quota_state
+
+        _emit_json(quota_state(), args.pretty, args.output)
+        return 0
+    if action == "consent":
+        from .sources.quota import config as quota_config
+
+        updates = {
+            key: value
+            for key, value in {
+                "credential_scan": _parse_onoff(args.credential_scan),
+                "codex_api": _parse_onoff(args.codex_api),
+                "claude_api": _parse_onoff(args.claude_api),
+                "antigravity_api": _parse_onoff(args.antigravity_api),
+                "minimax_api": _parse_onoff(args.minimax_api),
+                "kimi_api": _parse_onoff(args.kimi_api),
+                "grok_api": _parse_onoff(args.grok_api),
+                "zai_api": _parse_onoff(args.zai_api),
+                "opencode_go_api": _parse_onoff(args.opencode_go_api),
+                "commandcode_api": _parse_onoff(args.commandcode_api),
+            }.items()
+            if value is not None
+        }
+        consent = quota_config.set_quota_consent(updates) if updates else quota_config.read_quota_config()
+        enabled_arg = _parse_onoff(getattr(args, "enabled", None))
+        if enabled_arg is not None:
+            quota_config.set_quota_enabled(enabled_arg)
+        if getattr(args, "poll_interval", None) is not None:
+            quota_config.set_poll_interval_minutes(args.poll_interval)
+        interval_seconds, interval_source = quota_config.effective_poll_interval()
+        _emit_json(
+            {
+                "consent": consent,
+                "enabled": quota_config.quota_tracking_enabled(),
+                "poll_interval_minutes": quota_config.read_poll_interval_minutes()
+                or quota_config.DEFAULT_POLL_INTERVAL_MINUTES,
+                "interval_seconds": interval_seconds,
+                "interval_source": interval_source,
+            },
+            args.pretty,
+            args.output,
+        )
+        return 0
+    raise SystemExit(f"Unknown quota action: {action}")
+
+
+def _harden_windows_stdio() -> None:
+    """Keep CLI output from crashing on Windows consoles that are not UTF-8 (or absent).
+
+    Task Scheduler runs the service via ``pythonw.exe`` (GUI subsystem: no console,
+    ``sys.stdout is None``), and legacy conhost/pipe contexts default to cp1252 — both
+    make the first emoji ``print`` raise (UnicodeEncodeError / AttributeError) and kill
+    the process before the server starts. Replace absent streams with devnull and give
+    present text streams ``errors="replace"`` so any character degrades to "?" instead
+    of crashing. Non-Windows is a no-op.
+    """
+    if os.name != "nt":
+        return
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name)
+        if stream is None:
+            setattr(sys, name, io.TextIOWrapper(
+                open(os.devnull, "wb"), encoding="utf-8", errors="replace", line_buffering=True,
+            ))
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
+def cli(argv: list[str] | None = None, prog: str = "tokdash") -> int:
+    _harden_windows_stdio()
+    parser = build_parser(prog=prog)
+    args = parser.parse_args(argv)
+
+    # A bare `tokdash` is a no-op that shows help, not a surprise server: it used
+    # to default to `serve` and open a browser. No autostart path rides on that
+    # default -- every service writer embeds "serve" explicitly (systemd, launchd,
+    # the Windows scheduler task) -- so dropping it breaks nothing that runs
+    # unattended. Global flags alone land here too: flags with no verb are still
+    # no verb.
+    if args.command is None:
+        # The curated card, not the full reference: eleven verbs and none of the
+        # forty flags. `--help` still prints everything.
+        print(brief_help(prog), end="")
+        return 0
+
+    # Checked before any command dispatch, not inside the serve branch. These live
+    # on the flat top-level parser, so `tokdash export --dev-fixture dense` parses
+    # cleanly -- and used to export the user's REAL usage while looking like it had
+    # opted into synthetic data. Only serve honors them, so only serve accepts them.
+    if args.command != "serve":
+        if args.dev_fixture:
+            parser.error(f"--dev-fixture is only supported by `serve`, not `{args.command}`")
+        if args.dev_seed is not None:
+            parser.error(f"--dev-seed is only supported by `serve`, not `{args.command}`")
+    elif args.dev_seed is not None and not args.dev_fixture:
+        parser.error("--dev-seed requires --dev-fixture")
+
+    if args.command == "tui" and (args.json or args.output or args.pretty):
+        parser.error("--json/--pretty/--output belong to `report`/`export`; `tui` is interactive only")
+
+    # Kill the silent all-time fallback at the parse edge for the two new verbs.
+    # `export` keeps its historical permissive --period behavior untouched.
+    if args.command in {"tui", "report"}:
+        from .compute import period_is_recognized
+        if not period_is_recognized(args.period):
+            parser.error(
+                f"Unknown period {args.period!r}; use today, week, month, year, all, "
+                "an integer number of days, or Nd/Nw/Nm/Ny shorthand"
+            )
+
+    if args.command == "version":
+        print(f"tokdash {__version__}")
+        return 0
+
+    if args.command in {"setup", "doctor", "update", "uninstall"}:
+        # Only `setup` binds a port, so only it resolves (and validates) TOKDASH_PORT here —
+        # symmetric with how --bind defaults to TOKDASH_HOST and serve resolves the port.
+        # doctor prefers the manifest-recorded port; update/uninstall don't use the port at
+        # all (update reads the manifest; uninstall falls back to DEFAULT_PORT internally), so
+        # a malformed TOKDASH_PORT must NOT make those two die with "Invalid TOKDASH_PORT".
+        # An ABSENT TOKDASH_PORT leaves args.port None so the planner can adopt the
+        # previous install's manifest-recorded port on re-setup — only an explicit
+        # --port or a present TOKDASH_PORT may pin the port ahead of the manifest.
+        if args.port is None and args.command == "setup" and os.environ.get("TOKDASH_PORT", "").strip():
+            args.port = _default_port()
+        # Imported lazily so serve/export/db don't pay for the onboarding engine.
+        from .onboard.engine import run_lifecycle
+
+        return run_lifecycle(args)
+
+    if args.command == "serve":
+        port = args.port if args.port is not None else _default_port()
+        serve(
+            args.bind,
+            port,
+            args.log_level,
+            open_browser=not args.no_open,
+            dev_fixture=args.dev_fixture,
+            dev_seed=args.dev_seed,
+        )
+        return 0
+
+    if args.command == "export":
+        export(args.period, args.pretty, args.output, include_quota=args.include_quota)
+        return 0
+
+    if args.command == "db":
+        return db_command(args.db_action, args.pretty, args.output, args.verify_period, args.dry_run)
+
+    if args.command == "quota":
+        return quota_command(args)
+
+    if args.command == "report":
+        from .tui.report import run_report
+        return run_report(args)
+
+    if args.command == "tui":
+        from .tui.app import run_tui
+        return run_tui(args)
+
+    parser.error(f"Unknown command: {args.command}")
+    return 2
+
+
+def main() -> None:
+    raise SystemExit(cli())

@@ -1,0 +1,1229 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## 2.6.8 - 2026-09-30
+
+### Added
+
+- Updated `src/tokdash/pricing_db.json` from pricing DB `2.0.32` to `2.0.33` (`lastUpdated: 2026-09-30T00:00:00Z`) to price `gpt-6.1-sol`, released 2026-09-29. The entry carries OpenAI's official standard short-context rates -- $2.00 input / $10.00 output per MTok with cache at $0.10 read / $2.50 write -- which match `gpt-6-sol` on every field but cached input, where they are halved. The long-context rule is the sibling's too: past 272K input and cache double and output rises 1.5x, while Batch and Flex halve these rates and Fast doubles them. The contract test that pins the Sol family now takes `gpt-6.1-sol` alongside `gpt-6-sol` and `gpt-6-luna`. (#138, thanks @lushuyu)
+
+### Fixed
+
+- A failed dashboard fetch no longer freezes the page behind a modal dialog. `updateDashboard()`'s error path called `alert('Failed to fetch data. Check console for details.')` whenever nothing had loaded yet, so a transient failure -- a server mid-restart, a request dropped on a sleepy connection -- blocked the whole dashboard until someone dismissed it, and it said less than what the user had already been shown: the same handler reports through `setDashboardFetchStatus()`, which writes `t('loadFailed')` into the persistent `#lastUpdate` status line, and a forced refresh reports again through `showUsageRefreshReport()`. The dialog is gone and the error stays in the console, where developers already look for it. The test that required the alert now forbids one, keeping the harness `alert()` stub as a tripwire so a reintroduction fails loudly, and the banner `console.log` that announced the dashboard on every page load goes with it. (#137, thanks @Dhruv1401)
+
+## 2.6.7 - 2026-09-28
+
+### Added
+
+- Updated `src/tokdash/pricing_db.json` from pricing DB `2.0.29` to `2.0.32` (`lastUpdated: 2026-09-28T19:49:31Z`) with the auto-approved additions from the 2026-09-28 pricing-updater scan. Claude Sonnet 5.5 joins at $2.00 input / $10.00 output per MTok with cache at $0.20 read / $2.50 write, beside GLM 5.3 Prime ($2.80 / $8.80), Qwen 3.8 Max Prime ($4.00 / $12.00) and Command A Plus ($0.30 / $1.50). The new aliases `sonnet-5.5` and `sonnet55` resolve to `claude-sonnet-5.5`, matching the existing `sonnet-5`/`sonnet5` pair -- without them Claude Code's bare short name priced at nothing while `opus-5-5` already worked, and the hyphenated, dated-snapshot and provider-qualified spellings (`claude-sonnet-5-5`, `claude-sonnet-5.5-20260926`, `anthropic/claude-sonnet-5.5`, `-thinking`) were already covered by normalization. The 86 price changes the scan flagged for manual review are deliberately not part of this update. (#131)
+
+### Fixed
+
+- The quota poll interval and the `Hit %` column header now speak the dashboard's language. The static "Poll every" select hardcoded `15 min` through `120 min`, so it stayed English in all six locales while the per-server selects already used the translated minute unit; `applyI18n()` now relabels its options the same way. Two `Hit %` headers carried an English-only tooltip and the other 21 had none at all, so every one of them now takes the existing `cacheHitRateHint` translation, including the JS-built Apps & Models sub-tables. (#130)
+
+## 2.6.6 - 2026-09-28
+
+### Added
+
+- The desktop dashboard gained a sidebar: Overview, Sessions Explorer, Stats & Heatmap, Usage Report, Quota & Budgets, Servers and Pricing DB as navigation items, with What's New and Settings at its foot, a light/dark quick toggle in the header, and a Sessions tab filter row built from the tools that actually have sessions in the selected period. Phone widths keep the existing tab bar and pick up the two things the hidden sidebar used to own -- a gear and a What's New icon in the top action row -- so Settings and the language switch stay reachable below 768px. (#110, thanks @Dhruv1401)
+
+- Session detail now surfaces what the harnesses already record about a session: the working directory's project name and git branch for Hermes, per-session tool-call and message counts, profile name, and a metadata-only message timeline (roles, sizes, token counts, timestamps, tool names) for Hermes and Antigravity sessions. Transcript text is never read into the API; only its measurements ship. (#110, thanks @Dhruv1401)
+
+- The Overview carries a Token Composition band breaking the window's tokens into prompt, cache, output and reasoning, with the cash value of the cache hits beside it. `tokens_reasoning` is now aggregated through the compute layer so the split adds up to the total. (#110, thanks @Dhruv1401)
+
+### Changed
+
+- Settings opens as a modal over the page from its sidebar trigger. It used to render as a panel anchored to the header while its button sat at the bottom of the sidebar, nearly a screen away, and both Settings and What's New had two copies (header and sidebar); one copy each remains. An available update now raises a red dot on the Settings row, with the copy/skip controls inside the modal. (#110, thanks @Dhruv1401)
+
+- Light mode is no longer dark-mode paint with a light wall. The redesign's hardcoded surfaces (`#0d121f` cards, `#090d16` session drawer, white-alpha hairlines, dark-palette text on the default Paper theme) are mapped to the theme tokens, so cards, the KPI grid, the drawer and the scrollbar follow the selected style theme instead of staying black. Every visible string was then measured rather than eyeballed: no text in the dashboard now falls below WCAG AA (4.5:1) in light mode or dark, including labels the dark palette had left effectively invisible (the pressed range chip's white-on-white `Today`, dark-red deltas on the KPI cards). (#110, thanks @Dhruv1401)
+
+- The energy/kWh estimate is gone. Its Joules-per-token coefficients cited a research note outside the repository, and the model matcher that fed them priced Kimi as `llama-405b` and any Gemini "pro" as `claude-opus`; Tokdash does not publish numbers it cannot source. Cost is the proxy that was always there. (#110, thanks @Dhruv1401)
+
+- The version strings in the sidebar and header are read from the running package instead of hardcoded literals that were already stale when written. (#110, thanks @Dhruv1401)
+
+- The Z.ai quota card wears a mark instead of the grey letter tile, and it is Z.ai's own. Until now the card was the one provider in the Quota tab with no local asset, which fell out of `toolBrandMeta`'s letter-tile fallback for an unidentified source. The mark it needed was already in the package: the poll reads the Z.ai key out of the ZCode CLI's own config (`$ZCODE_HOME/v2/config.json`, the very path the consent panel names), so the provider table maps `zai` onto the ZCode entry rather than shipping a second copy of the same glyph -- the same route `commandcode` already takes, since neither provider is ever a tool row on the Overview. The card keeps its own heading, so a Z.ai card still reads `Z.ai`. The test that used `zai` as its example of a provider with no mark now uses a provider that does not exist yet, and the table is pinned to the Quota tab's provider list, so a future card cannot slip onto the letter tile unnoticed. (#123)
+- A bare `tokdash` prints a one-screen command card instead of the full flag reference. Eleven verbs in four groups -- Run, Inspect, Maintain, Help -- each with one line, and a closing line that says nothing was started so the card cannot be misread as the old habit of launching a server. `--help` is still the whole reference and still lists every flag; what changed is its shape. One flat parser carries the flags of all eleven verbs, so argparse used to open with six wrapped lines enumerating forty options before the first help text, then list the flags in the order they happened to be declared: `--verify-period` sitting between `--include-quota` and `--dry-run`, the nine quota-consent flags unlabelled among them. The usage line is now one line and the flags arrive in sections whose heading names every verb that reads them -- `address and port (serve / setup / doctor)`, `server (serve)`, `development fixture (serve)`, `usage window (export / report / tui)`, `output (export / report / db / quota)`, `usage database (db)`, `dry run (db repair / setup / update / uninstall)`, `quota consent (quota consent)`, `lifecycle (setup / doctor / update / uninstall)` -- which is also what let twelve flags stop each repeating `For `tokdash quota consent`:`. A heading is a claim about the code, so it is tested against the code: section titles and memberships are pinned, and because `tui` turns `--json`, `--pretty` and `--output` away it appears in no heading that carries them. An error prints the same short usage, so a mistyped verb no longer buries its own message under the flag list. Parsing is untouched: one flat namespace, every flag still accepted in any position. The verb list has one source of truth now, shared by the parser's `choices` and the card, with a test that fails if a new verb reaches one and not the other. (#125)
+
+### Fixed
+
+- Hermes sessions keep their real end-of-activity timing. An earlier cut of this PR appended a zero-token turn at each session's `ended_at` to extend the active-time span, which credited sessions with hours of idle time between messages; the fabricated turn and the `session_model_usage` read it depended on are out, and `HermesParser.persistent_parser_version` stays 1 so existing parsed caches survive the upgrade. (#110, thanks @Dhruv1401)
+
+- Pi fork replays are counted once. A Pi fork copies its parent's already-billed assistant events into a new session file, and those copies were read as new usage -- so forking a session inflated every total that session touched, and the fork appeared in Sessions as a row whose whole history was replayed rather than written there. Ancestry is now resolved from the `parentSession` header edge, and each event is keyed by an identity corroborated from the immutable copied fields (id, timestamp, provider, model and the five token counts) rather than by its short id alone, which Pi only checks within a session and which therefore cannot mean that two unrelated sessions are the same one. The same ancestry and ownership rules run across live usage, the persistent store and the Sessions assembly, so the three cannot disagree: the original owns the recorded billing, descendants contribute only their own new work, and a session that replayed nothing but history disappears instead of standing as a phantom. Established ancestry is persisted in per-file cache metadata, so deleting an ancestor's log and reopening the dashboard cannot hand the same replay a fresh identity; Pi's parser version moved to 2, which rebuilds available v1 rows once and leaves warm caches and ordinary appends alone. Where an ancestor is genuinely unavailable the copy is kept rather than guessed at -- an absent link is not evidence, and an unproven family keeps its usage until the link appears. A session id containing underscores, a branch whose `parentId` links were rewritten, and two unrelated sessions whose short ids collide are each preserved rather than merged; OMP and every other source keep their existing behavior. (#126, closes #124)
+
+## 2.6.5 - 2026-09-26
+
+### Added
+
+- The Command Code quota card wears Command Code's own mark. It is the 512px icon the site serves for its favicon set, downscaled to 64x64 and shipped beside the other agent marks, so the card opens with the same knot glyph the site's own tab icon carries instead of the grey letter tile a provider with no local asset falls back to. Z.ai is now the only quota provider without a mark in the shipped asset set. (#117)
+
+- A server can hold several addresses. One Tokdash is often reachable more than one way, and adding the second address used to add a second row that counted the same tokens again. Settings now keeps one entry per machine and gives it a row per address: each shows its own latency, the entry reads through the quickest address the browser is allowed to use, and a request that finds its address dead moves to the next one without dropping the machine out of the combined view. Inside the anti-flap band (a challenger must win by 10 ms and 25 %) the address in use is not the fastest one, so the row says which is active and why rather than claiming `Fastest`; pinning an address overrides all of it. An address is probed before it is stored, so one that does not answer, answers as a different Tokdash, or cannot say which Tokdash it is, is refused where it was typed and names the machine that owns it. An address a browser provably cannot read from the page it is on is labelled blocked with the rule that blocks it and a remove button, never merged, and a host whose every address answers as some other Tokdash says so and waits to be removed and re-added. (#120, closes #108)
+
+### Changed
+
+- Quota provider cards lead with the provider's own brand mark. Codex, Claude Code, Antigravity, MiniMax, Kimi Code, Grok Build, OpenCode Go and Command Code open their card with the icon the Overview, the Sessions panels and the Report tab already use, picked through one provider-to-brand table instead of a copy per card, so the mark and the brand colour follow the source registry wherever it changes. Z.ai is the only quota provider with no mark in the shipped asset set, so it keeps the letter tile the dashboard already falls back to for a source it cannot identify rather than borrowing another vendor's. The heading stays the card's own heading: a China-only MiniMax card still reads `MiniMax (China)` and a named Claude Code install still reads `Claude Code (<profile>)`, because the Quota tab's subscription label and the Overview's tool name are two different names for the same thing. (#117)
+
+- The Report tab's agent table prints every tool that recorded tokens. It used to headline the top ten and park the remainder behind an `Other tools on this machine` disclosure, which on a machine with many harnesses meant the folded tail could carry more sessions than the rows above it, one click away and invisible until somebody looked. Ranking by tokens is now the only order, and a tool with no recorded session keeps its row with em dashes in the session and active-time columns: the same rule every other column of that table already applies to a facet it cannot measure. (#117)
+
+### Fixed
+
+- On the TUI period views, `[` / `]` / `0` step by WHOLE calendar periods in the tab's own unit instead of pulling the window's end date one day back and forth. Previously `[` on the month view walked `9.1 → 9.24` into `9.1 → 9.23` -- the same month one day shorter -- instead of onto the previous month. Now one `[` on the month view shows the entire previous month (`8.1 → 8.31`, full extent, never clamped to today), the week view steps the full previous Mon→Sun week, and the year view the full previous calendar year; the "today" view keeps its day-by-day walk because its period *is* a day. The Report pane shares the same counter and steps its own week/month/year windows the same way. The per-load anchor is the resolved window END, so a shifted year's heatmap and today-marker follow that year; the status marker and the date-line suffix count in the pane's unit (`· -1m`, `(viewing 1m back · 0 = today)`). Shift 0 delegates to the unshifted window computation exactly, so today's warm cache keys stay byte-identical. Three same-key fixes ride along: a step is fully inert when nothing is date-pinned (a windowless Overview with Report never started no longer bumps the generation counter and wedges the visible pane's in-flight load on "computing…" with no successor), a stranded load whose pane is the active one is re-issued the moment its superseding load finishes (pressing `p` during a quota fetch no longer wedges the visible Quota pane), and every reload drops the previous window's late-payload slots at load start so a mid-reload repaint can't mix the old window's figures into the one being computed. (#116)
+
+- Three follow-ups from the TUI review: `textual` is pinned `>=8.0,<9` because the app is written against verified Textual 8 facts and a major bump must be deliberate; the quota disabled-poll note rides the markup emitter so it paints yellow instead of a literal `[warn]` tag; and the status-bar/report db footer read (which opens and counts the SQLite files) moved off the event loop into a worker thread behind a `db status pending…` placeholder, so a slow db no longer stalls key handling and a late result can't repaint the previous window's body over a loading clear. (#116)
+
+- Pinned Qoder CLI models are counted. The international CLI (1.1.28, 1.1.63) zero-fills every token field on a hosted model and bills in credits, so Tokdash recovered the prompt from `context_usage_ratio` alone -- and only at a window it already knew, which was `auto` and nothing else. Set a model in `~/.qoder/settings.json` and the whole source went quiet: no rows, no cost, no Sessions panel, and nothing on the dashboard to say the tool had been used at all. Tokdash now reads the window from the CLI's own output, strongest evidence first: the window a session declared itself with `--context-window`, which lands as a `runtime-config` record in the transcript and survives Qoder pruning its run logs, then the per-model window in Qoder's run log (the `model_config` object carrying `max_input_tokens`, latest run winning, decoded for that `key` and that one number with nothing past the object read at all, and bounded to a positive value no larger than 10,000,000, at all three sources -- which matters, because the same line continues with payload and can carry prompt text, so a window read out of a prompt would be a window invented, and because the recovery multiplies the ratio by the window, so a sentinel window would turn an ordinary ratio into a token count no endpoint could have billed). The captured evidence recovers exactly on every path: Qwen3.8-Flash as `qfmodel` at 180,000 and `lite` at 200,000 in the same session, a declared `--context-window 131072` turning 20,783 input tokens into ratio 0.15856170654296875, and a custom OpenAI-compatible provider whose 20,783 real input tokens at ratio 0.08118359375 divide to exactly the 256,000 its endpoint advertises. `QODER_CLI_CONTEXT_WINDOW` still overrides every model and remains the answer on a machine whose run logs Qoder has since pruned. A model with no window evidence anywhere is still skipped rather than counted at a guessed window -- context_usage_ratio is prompt/window, so an invented window would invent tokens -- but it now names itself in a warning instead of vanishing, and Overview and the Sessions panel move together because both read the same resolved table, which is part of both cache identities, so a run log appearing re-parses without a manual reset. Because that table is read as the logs stand today rather than anchored per run, a model whose reported window changes is recounted at the new window for past requests that carry no declared window of their own -- the same credits Qoder billed, divided at a different window, so a historical day can move; a session that ran with --context-window carries its own evidence and never moves. Rows written by the previous parser are replaced on the first scan after the upgrade. (#118)
+
+- Antigravity usage from agy 1.2.x is counted. The CLI stopped writing the `1.9.4` timestamp on `gen_metadata` rows (verified with 1.2.11 on 2026-09-26), and a row with no timestamp is dropped before it ever reaches the usage store, so a 1.2.x session contributed nothing at all -- no day, no cost, nothing on the dashboard. Each row still names the steps it belongs to (top-level field 2 is a list of `steps.idx` values, packed varints or plain) and each `steps.metadata` blob carries its own creation time at `1.1` seconds / `1.2` nanos, so Tokdash now dates a timestamp-less row by the latest step it references. A row whose steps cannot be found, and a database with no readable `steps` table, stay at timestamp 0 exactly as before; the parser's persistent version moved to 2, so rows written under the old rule are replaced on the first scan after the upgrade. (#119, thanks @Tristan816la)
+
+## 2.6.4 - 2026-09-25
+
+### Added
+
+`GET /health` reports `instance_id`, a random UUID4 kept in `<data_dir>/instance.json`, so a dashboard that reaches one machine over several addresses can recognise it as one server rather than counting its tokens twice. Two daemons over one data directory agree on it, two over separate directories differ, and the field is omitted rather than guessed when the file can be neither written nor read. (#112)
+
+Changelog localization. The in-app **What's new** view now overlays Simplified Chinese on the English record when the dashboard language resolves to `zh` -- `zh-CN`, `zh-TW` and `zh-HK` all map to `zh`, and every other locale reads the English record by design, because no other locale ships a sidecar. The overlay is a per-release, per-section list of strings index-aligned with the English bullets, so a missing or misaligned translation can only leave one bullet in English; it cannot shift an entry into the wrong release. Every open re-fetches the sidecar, and a failed fetch is deliberately never cached, so a one-off miss retries on the next open instead of stranding the view in English for the rest of the session; the footer's full-changelog link follows the locale to its documentation page. The Chinese page that link points at, `docs/development/CHANGELOG_CN.md`, is regenerated by `scripts/changelog_cn.py` from the sidecar plus the English section's PR refs, so the app and the page cannot drift; `scripts/release_body.py` writes the bilingual GitHub Release body -- the English section with a `**简体中文：**` link to that version's section on the Chinese page, omitted when the version is untranslated. (#111)
+
+`tokdash tui` opens an interactive terminal dashboard — Overview, Report and Quota tabs over the same in-process compute and caches as the web dashboard, with no server needed. The Overview answers for the selected window only: a filled date header, KPI row, an adaptive local visual (day bars for the week, a heat grid for the month, a calendar heatmap for the year, no chart on today), a per-tool statistics table (Input, Output, Cache, Total, Hit, Cost, Msgs, Time) and a per-tool model list that never truncates. Tool names carry their display names (`claude` → Claude Code). `t/w/m/y/a` pick the period directly on both period tabs, `p` cycles forward, `[` / `]` / `0` pull the window's end date one day back and forth (never into the future), tabs longer than a page scroll with the mouse wheel, and `u` polls quota on demand — the only network path the pane takes. A spelled-out key legend sits at the top of each period tab, every statistics table (tools, models, and the tool/model detail) carries the same field set on one shared fixed-width column grid with right-aligned figures -- so the same column lines up across the three sections -- no table shows a selection cursor (the mouse wheel is the only scroll), and every reload clears its pane and shows a "computing…" notice before repainting, so a previous window's figures never sit on screen pretending to be current. The Quota tab lists one provider name per group rather than repeating it on every window row, with a blank line between providers, and its reset-credits section covers every provider that grants them -- Claude Code limit resets join the Codex card's -- each row naming the provider (and install) it belongs to, sorted by expiry. A TUI started beside `tokdash serve` shares the on-disk usage index instead of reparsing logs. (#115)
+
+`tokdash report` prints a one-shot, ccusage-style activity report for a single window — `tokdash report --period week`; the period is a flag, never a positional argument, so `tokdash report week` errors by design. `--json`, `--pretty` and `--output` follow the `tokdash export` conventions, and piped or file output is always plain text. (#115)
+
+### Changed
+
+A bare `tokdash` with no verb prints the command help and exits instead of silently starting `tokdash serve` and opening a browser. The old default surprised anyone who typed the command just to see what it does, and on a desktop that surprise included a browser window. Nothing unattended relied on it: the systemd unit, the launchd plist, and the Windows scheduler task all embed `serve` explicitly. `tokdash serve` itself is unchanged. (#115)
+
+### Fixed
+
+Claude Code quota bars that read a usage percent of 1 as 100%. The live OAuth usage endpoint (observed 2026-09-24, Max 20x) sends `percent` as an integer on the 0-100 scale, and the normalizer's default treated the closed unit interval as a fraction, so a `1` with `severity: normal` read as fully used and the Quota tab looked empty while Claude Code still ran. Integers, including 0 and 1, now stay on the 0-100 scale; floats strictly inside (0, 1) are still read as fractions, and the legacy `utilization` field keeps its default handling. (#113, thanks @yesme)
+
+Antigravity sign-in detection on macOS. The current agy CLI often leaves no token file at either product-home path and keeps its OAuth blob in the login Keychain instead -- a `go-keyring-base64:` blob under service `gemini`, account `antigravity` -- so quota polls answered `token_not_found` on machines where Antigravity is signed in and working. Tokdash now reads that item read-only through `security find-generic-password` with an argument list (never a shell) and a 10-second timeout, so a locked keychain or an unanswered first-read permission prompt degrades to `token_not_found` for one cycle instead of wedging the poll. A blob that is not JSON is read as a bare token as before, and unrecognized fields in the stored credential are redacted from failure snapshots: only the account and expiry fields Tokdash deliberately exposes are copied through, so a new credential field that lands in the blob cannot reach a stored row. (#114, thanks @yesme)
+
+## 2.6.3 - 2026-09-23
+
+### Added
+
+- Claude Code limit resets show on the Quota tab. An account Anthropic has granted limit resets (the ones Claude Code's `/limit-reset` spends) now lists them in the same **Reset Credits** block the Codex card already uses, each with its expiry, under the install that holds it. They ride in on the request that already fetches the windows, with `?cedar_ember=1` added, so reading them costs no extra call. A proxy or server that does not know the flag gets one retry at the plain URL -- the windows are still worth having -- and 429 stays deliberately outside that retry set, since answering a rate-limited endpoint with a second request doubles the traffic it just asked us to cut. Anthropic decides which surface a grant is offered on from the User-Agent: with Python's default one the block answers `ineligible_reason: "surface"` and lists nothing, so this request opens with the Claude Code CLI's own `claude-cli/…` prefix -- the token polled here *is* a Claude Code CLI sign-in -- and then names `tokdash/<version>`. Reading is all it does; Tokdash never calls the endpoint that spends a reset. A grant counts as spendable only when it has started, has not expired, is not paused and still has a reset left, and the headline count sums the resets the surviving grants hold between them; each carries `resets_left` and `clears`, the limit types it refills, so what a grant was for stays legible. The raw block is stored verbatim and re-read against the current time on every dashboard load, so a grant that expired between polls stops being offered without waiting for the next one, and a grant is still written when the count reaches 0, which is how an exhausted or withdrawn batch stops looking current. Resets show only while they are what that install's newest successful poll said: a poll that answered without the reset block (the flag fell back, or Anthropic stopped honouring it) withdraws them rather than leaving a possibly-spent count up. An install holding no reset omits the key rather than sending a null, so the companion contract fixture's account payload is byte-for-byte what it was. On a multi-install card each install's resets come off its own `accounts[]` entry and close their own group, so a second subscription's grants never read as the default install's, and `providers.claude.reset_credits` belongs to the card's primary install without falling back across installs the way `plan` does. Grants are capped at a million resets apiece because `json.loads` builds arbitrarily long integers, and an `OverflowError` escaping here would cost every provider its polling cycle. (#109)
+
+## 2.6.2 - 2026-09-23
+
+### Changed
+
+- Updated `src/tokdash/pricing_db.json` from pricing DB `2.0.28` to `2.0.29` (`lastUpdated: 2026-09-23T00:00:00Z`) for the September releases from Anthropic and OpenAI. `claude-opus-5.5-fast` prices at 2x the standard Opus 5.5 rate ($8.00 input / $40.00 output, cache $0.40 read / $10.00 write), `claude-mythos-5.1` (Project Glasswing access only) prices the same as `claude-fable-5.1`, and OpenAI's approval-gated `gpt-5.6-cyber` joins at $12.50 / $75.00 (cache $1.25 / $15.625). `gpt-5.6-sol` and `gpt-5.6-sol-pro` drop from $5.00 / $30.00 to $4.00 / $20.00 (cache $0.40 / $5.00) — OpenAI lists the lower rate as promotional pricing from 2026-08-21, available at least through 2026-11-21 — and `claude-sonnet-5`'s $2.00 / $10.00 is confirmed as the standard price after the planned 2026-09-01 increase was cancelled. The new aliases `opus-5-5`, `mythos-5.1` and `mythos-5-1` resolve alongside the raw log ids. (#106, thanks @lushuyu)
+
+## 2.6.1 - 2026-09-22
+
+### Added
+
+- Devin CLI usage tracking. Devin (Cognition) keeps its whole history in one WAL-mode SQLite store, and Tokdash reads `message_nodes.chat_message` for the explicit `input_tokens`, `output_tokens`, `cache_read_tokens` and `cache_creation_tokens` each call persists, taking one entry per billable node with nothing copied into the usage store. The store resolves from `$DEVIN_CLI_DATA_DIRS` (added to the defaults, never replacing them), then `$XDG_DATA_HOME/devin/cli` or `~/.local/share/devin/cli` on Linux and macOS -- the layout Devin's own troubleshooting docs give for both, with `~/Library/Application Support/devin/cli` tried second on macOS in case the Rust build maps app data there -- `%APPDATA%\devin\cli` on Windows, and the Windows-host store under the drvfs mount when Tokdash runs in WSL; `sessions.db` wins over the pre-rename `cli_sessions.db` by precedence rather than union, so a migrated install is not counted twice and an unmigrated one is not dropped. A store behind that mount, behind a UNC path, or carrying a live `-wal`/`-shm` sidecar is copied and read from the copy, because a WAL database that needs recovery cannot be opened read-only and `connect_sqlite_readonly` answers that failure with a read-write connect -- which would replay the WAL inside the user's own store and leave sidecar files beside it. A plain local store still takes the cheap read-only path and is retried once through a copy before any failure is reported, and a failed read is never cached, so a hiccup cannot settle into a cached zero. Timestamps normalize seconds, milliseconds, microseconds and nanoseconds by magnitude, so the unit the CLI happens to write cannot land a year of usage a thousand years out and report a silent zero. Cost is pricing-DB only -- Devin sells seats plus credits and publishes no per-token rate card, so Cognition-hosted models resolve to 0.00 -- and reasoning is zero by construction, because no bucket is persisted. Hidden helper sessions (the summarizer) count as the real spend they are, cache reads are treated as a bucket separate from input, and a node's own model wins over the session's. Not yet verified against a populated store: the schema and record fields come from the shipped v3000.10.31 binary and its docs bundle, and every convention above is pinned by a test so a capture corrects it in one place. No Sessions tab. (#105)
+
+### Changed
+
+- Updated `src/tokdash/pricing_db.json` from pricing DB `2.0.26` to `2.0.28` (`lastUpdated: 2026-09-22T22:01:41Z`). This adds the model pricing entries from the 2026-09-22 pricing-updater scan, including Anthropic's `claude-opus-5.5` ($4.00 input / $20.00 output per MTok), and moves `claude-fable-5.1` into the Anthropic section where it belongs. (#107)
+
+### Fixed
+
+- A signed-out Claude Code profile stops reporting quota it can never refresh. `claude logout` deletes a `~/.claude-<profile>` install's `.credentials.json` and leaves the directory behind, and a sibling is only polled while it has that file, so nothing polled it any more. Retirement keyed on the directory being gone, though, so its stored windows stayed on the card indefinitely, alongside the `stale_token` failure it happened to record last -- whose whole message is to open Claude Code and refresh a sign-in that is no longer there. An install whose sign-in is observably absent now retires the way a deleted one does, and retirement hides stored rows rather than deleting them, so signing in again brings the windows back on the next poll. A credential that is merely unreadable right now -- an `EACCES` on it, an install directory that cannot be searched -- keeps its last-known windows, and one that is only momentarily missing (a relink, a dangling symlink, a rename caught mid-flight) blanks its bars for one poll cycle and gets them back. Something that is not a file at the credential path retires, since the polling rule needs a regular file and so could not poll it either; a sign-in that is still on disk but that Anthropic has stopped accepting does not, and stays reported with its windows and its warning. The default install keeps its old behavior: it is polled with or without a credential, so its own `unavailable` row already explains it. Also stopped an unreadable install's directory from failing the whole quota read: `Path.is_file()` re-raises `EACCES` instead of returning `False`, and it ran on every dashboard load. (#104)
+
+## 2.6.0 - 2026-09-21
+
+### Added
+
+- MiniMax Code usage tracking. The `mcode` CLI (npm `@minimax-ai/code`) is discovered under `$MINIMAX_DATA_DIR` (legacy `$MAVIS_DATA_DIR`, default `~/.minimax`); each session's `messages.jsonl` yields one entry per assistant call, its disjoint `usage` buckets passed through verbatim and priced per call from the pricing DB. MiniMax's quota card already covered the account side; usage now lands in Overview, period filters and Stats alongside it. (#100)
+- Command Code (`commandcode.ai`) subscriptions appear in the Quota tab, behind the usual two-step consent: `tokdash quota consent --credential-scan on --commandcode-api on`. The 5-hour and weekly bars come straight from `GET api.commandcode.ai/alpha/billing/credits` (`windowLimits.fiveHour` / `.weekly`, with `used`, `cap` and `resetAt`). Monthly is derived rather than vendor-reported, because the API has no monthly window object: a static `planId` catalog mirrors the pool Command Code's own CLI bills against (`individual-go` 10 / `individual-goat` 70 / `individual-pro` 30 / `individual-pro-v1` 80 / `individual-max` 150 / `individual-ultra` 300 / `teams-pro` 40 / `individual-provider` 15), resolved longest-alias-first and status-gated to `active`/`trialing`/`past_due`, then reduced by the remaining credits and labelled with the resolved plan. The reported caps imply the same pool ratios, so the derivation cross-checks itself against a live account; the row's `raw_json` keeps the reported windows, the credits block and the derived pool, so catalog drift is diagnosable from stored rows instead of silent. When no active plan resolves, the Monthly bar and its plan label are withdrawn rather than left showing the previous reading. Credentials come from `COMMAND_CODE_API_KEY`, `COMMANDCODE_API_KEY`, `~/.commandcode/auth.json`, or the `commandcode` entry in OpenCode's `auth.json`, and are read only — Tokdash never refreshes or rewrites them. (#98, thanks @blasphemy)
+- OpenCode v2's `session_message` / `session_v2` schema is read. v2 moved message writes from `message` to `session_message` and sessions to `session_v2`, leaving the v1 tables in place but frozen, so a migrated database looked healthy while tokdash counted only its pre-migration totals: the Overview kept its old numbers and the Sessions view stopped at the migration timestamp. Detection is per database, and v2 wins only once `session_message` has a row — the v2 schema can be migrated in before the app switches writes, so an empty `session_message` is a projection, and preferring it would report zero usage from a working v1 database. Exactly one table is read per database, because `session_message` already carries the migrated v1 rows under their original ids and reading both would double-count every legacy message. The role arrives as a `type` column (`assistant` / `user` / `synthetic` / `idle`) instead of `data.role`, and the model nests at `data.model.id` / `data.model.providerID`, read flat-first and nested-second in both the SQL and the raw fallback, with `json_valid` guarding JSON1 so one malformed payload cannot push a whole database through the fallback. Kilo Code's databases (same codebase) are detected the same way and may still be v1; MiMo keeps its existing behavior. The rule lives in one helper shared by the usage parser and both session loaders, and `session_v2` is joined only while v2 is the live message table, so a pre-switch database keeps its legacy titles and projects. (#99, thanks @blasphemy)
+
+### Fixed
+
+- A quota card stops warning "couldn't refresh" once the provider answers again. A poll that finds no credential to read files its failure under a synthetic account name that never receives a success, so per-account recovery could never retire it and a single gap in `~/.codex/auth.json` kept the Codex, Grok and MiniMax cards warning for days after they recovered. A newer success anywhere on the provider now retires that failure. Accounts that have answered at least once are unaffected, `default` included — it is a real account on Antigravity, Kimi, Z.ai and OpenCode Go — and still recover only on their own success. (#96)
+- A second quota collection inside the same wall-clock second no longer vanishes. Quota snapshot writes were `INSERT OR IGNORE` on the key that *is* the observation slot, so a re-taken reading was silently discarded — which is how a withdrawal row (a bucket's `used_percent` and `plan` set to NULL to retire a bar whose plan had gone) could lose its write whenever it landed in the same second as the reading it replaced, leaving the stale bar and plan label on the card until some later cycle happened to fall in a different second. The writer is an in-place upsert now, as the store's other slot-keyed tables already were. `INSERT OR REPLACE` would also let the latest write win and is the smaller diff, but it is a DELETE plus an INSERT that renumbers the rowid, and `quota_history` breaks `captured_at` ties on rowid: since `poll_quota` re-inserts session rows every cycle by design, a REPLACE would let a stale session row leapfrog the newer API row for the same window permanently. Reported `inserted` counts are unchanged, as a same-slot rewrite still moves the count by zero. (#98, thanks @blasphemy)
+
+## 2.5.7 - 2026-09-15
+
+### Added
+
+- The README gallery now includes Usage Report screenshots in English and Chinese, refreshed classic-theme dashboard screenshots, and the Muse Code logo pill across all six languages. (#91)
+
+### Fixed
+
+- Antigravity quota tracking now reads the current OAuth token from `~/.gemini/jetski-standalone-oauth-token`, falls back to the legacy token path, and labels the account from its ID token without retaining credential material. (#94, closes #92)
+- The Quota tab's provider filter is now per host instead of shared across hosts. (#95, closes #93)
+
+## 2.5.6 - 2026-09-14
+
+### Added
+
+- Muse Code usage tracking is enabled. The parser that shipped capture-gated in 2.5.5 now registers as a usage source, reading parent and subagent session logs, expanding retained frames, filtering mirrored child streams and deduplicating stable record ids across forks. (#86)
+- DeepSeek V4.1 Flash is priced: `deepseek-flash` and `deepseek-v4.1-flash` at the official rates. (#89, closes #88)
+
+### Changed
+
+- Share cards now rank the top five harnesses, models and projects, matching what the Report page itself shows. (#87)
+
+### Fixed
+
+- The Refresh button no longer answers from the stale cache when a recompute for the same view is already in flight — the case behind the "not refreshed, served from cache" banner on entries well past the cache TTL. A forced refresh now joins the in-flight recompute, bounded by the new `TOKDASH_FORCE_REFRESH_JOIN_SECONDS` (default 60s), and serves its fresh result; on timeout or failure it falls back to the previous stale body. Plain reads and auto-refresh are unchanged. (#90)
+
+## 2.5.5 - 2026-09-14
+
+### Added
+
+- Added the capture-gated Muse Code usage parser and its full local-log test matrix. The source stays disabled until provider cache inclusion and fork identity are verified. File-backed usage sync also keeps existing rows when a file disappears between discovery and parsing, and equal-timestamp cross-file copies resolve to the same owner with or without the durable database. (#85)
+- Qwen Code appears in the Sessions tab. One turn per usage-bearing chat record, the cache-inclusive prompt split priced with `fresh-input`, and the source-global `qwen:<uuid>` fork dedupe — first-encountered file wins equal timestamps — all consumed through the same module-level reader the Overview parser uses, so the two tabs cannot disagree about which records count. Parity is pinned by a randomized property test over fixture corpora rather than the single 8-record chat file this machine has. Transient read failures degrade to a partial panel and are never cached. UI in all six languages. (#80)
+- OpenClaw appears in the Sessions tab. The per-session drill-down of `/api/sessions?tool=openclaw` consumes the same corpus snapshot the Overview parse produced — one cold pass per corpus change serves both tabs, and one global message-id dedupe decides the winner set in both. Display input folds cache writes the way the Overview fold bills them, and the message's recorded payload cost is the fallback only when the model resolves to nothing in the pricing database; a later rate edit reprices and retires it. The store sync is complete-aware: an unreadable transcript leaves the previous rows and the unrecorded signature in place so the next request retries, and the Sessions view renders the rest as a partial panel. `OPENCLAW_PARSER_VERSION` goes 1 -> 2: after upgrading, the first Overview request rewrites the OpenClaw source rows and pays one cold pass — that request is the repair, not a regression. UI in all six languages. (#81)
+- Qoder CLI gets its own Sessions panel, distinct from the Qoder IDE one. A turn is one request id: the per-file candidate builders, the global first-write-wins fold across all roots, the segment-wins-token merge and the credits-vs-pricing billing split are module functions now shared with the usage parser, so Sessions and Overview resolve a duplicate request id to the same winner and cannot drift. Credit rows keep the provider-reported cost — credits at the estimated `QODER_USD_PER_CREDIT` — through pricing-file edits; token-only rows reprice. The context window is part of the per-file cache key, because it changes candidate buckets, not just costs. The project column shows the segment's sanitized directory name verbatim (the sanitization is not reversible, so no inverse is guessed) and session names fall back to the short id, since every session on a machine shares its project label. A locked stream file degrades the panel to a partial view instead of an empty one. UI in all six languages. (#82)
+- Added opt-in OpenCode Go quota tracking for rolling, weekly and monthly subscription windows through the key-auth usage endpoint. Zen balance remains unavailable because it has no key-auth endpoint. (#83, thanks @blasphemy)
+
+### Changed
+
+- Expanded the secure remote-access guide with Cloudflare Tunnel plus Access and authenticated Caddy/nginx recipes, including subpath and client limitations. Interactive setup defaults Tailscale Serve to No, and automated setup never enables it. (#84)
+
+### Fixed
+
+- Claude Code turns now keep the fullest cumulative usage snapshot, including logs that carry both top-level `type` and `message.role`. This recovers output tokens lost when an early streamed block was kept and preserves later cache reclassification at equal totals. (#77)
+- Static assets load from symlink-based package installations instead of returning 404, while Starlette continues to reject path traversal outside the packaged static directory. (#79, thanks @ppq1024)
+
+## 2.5.4 - 2026-09-08
+
+### Changed
+
+- The Report tab swaps the quick-range presets for period chips -- this and last week, named months, years -- each stepping the window a whole period back. (#76)
+- The share cards follow the app theme, paint at 1800x3200, and carry the theme slug in the filename. The header prints tokens and cost together, with cost on by default and the toggle as the opt-out; the sub line reads days active, sessions, requests and parallel agent time, with no `est.` on a shareable artifact. Month cards use small left-aligned heat squares with outlined boxes for unelapsed days, week cards drop the heat row, and the project card ranks the top 3 projects without the count, the group-by note or the manifest lines. (#76)
+- Durations render in unit words, two units at most: 25 hours reads as "1 day 1 hour", 34 days as "1 month 4 days". (#76)
+- The "at API list prices -- not your bill" qualifier is gone from the Report tab and the share cards. (#76)
+
+- The Report tab is much faster to reopen. Merged sessions are now cached per session, keyed on the files behind each one rather than on the window, so the week, month and year views share one assembly instead of rebuilding it three times and an appended log invalidates only the session it belongs to. On a year window over a 986MB database the tab's three requests fall from 14.92s to 7.07s, of which `/api/active-time` is 10.50s to 2.28s; the first read after a restart is unchanged, since the tab's own windows are warmed at startup. (#74)
+- Session reads merge a session's files in one pass on every harness, not just the store-backed ones. Pi, OMP, Kilo Code and WorkBuddy still folded their files pairwise, which rebuilds the whole accumulated session on every file and grows quadratically with the number of files one session spans -- the shape subagent fan-out produces. (#74)
+- OpenCode, MiMo and Kilo Code no longer key their session cache on the requested window, where three periods took three of the eight slots and a single pricing edit took all of them. They read unwindowed and the window is applied where every other tool applies it. (#74)
+- `TOKDASH_SESSION_CACHE_TURNS` bounds what the new session cache retains, in turns rather than sessions, since one long-running session can outweigh a thousand short ones. The default is 500,000 turns; `0` disables the cache. (#74)
+
+### Fixed
+
+- `claude-3.5-sonnet` prices at $3 / $15 per MTok with cache reads at $0.30 and cache writes at $3.75, the published Anthropic rate, instead of double it. `claude-3-5-sonnet-20241022` and `-20240620` both normalize to that entry, so every 3.5 Sonnet session, Claude Code's default model from Oct 2024 to early Feb 2025, showed twice its real cost in Overview, Stats and Sessions. The bundled database is 2.0.24; stored rows reprice on read through the pricing content signature. (#75, thanks @roy-tong)
+
+## 2.5.3 - 2026-09-05
+
+### Added
+
+- Antigravity usage is now scanned from every product home, not just the CLI's. `~/.gemini/antigravity-acp` (the official `agy_acp_server` kernel, spawned by ACP hosts such as Paseo, Zed and JetBrains) and `~/.gemini/antigravity-ide` write the same `conversations/*.db` schema as `~/.gemini/antigravity-cli`, so sessions run through an ACP host were previously invisible in both Overview and the Sessions tab. All three homes report under the one Antigravity entry, and `ANTIGRAVITY_HOME` (comma-separated) adds further homes without displacing the defaults. Titles and projects merge from each home's `conversation_summaries.db`; the ACP kernel writes none, so its conversations are listed by id. A DB reachable from two homes counts once — both the usage entry id and the session id are the DB stem, and the first home in scan order wins — so upgrading is safe if you worked around this by symlinking ACP DBs into the CLI's conversations dir. Overview and Sessions now share one file scan, so they cannot drift apart. (#73, closes #72, thanks @wangfh5)
+- Seven style themes adapted from cosyncing's theme set: Teal Obsidian, Graphite, Nordic Warmth, Cyber Amber, Royal Navy, Soft Minimalist, and Flat White. Each ships light and dark tokens with its own heatmap and chart palettes, and the picker label is translated in all six UI languages. (#68)
+- The dashboard has a **Report** tab: a period report on a calendar-aligned window — this week, this month, or the year to date. It opens with tokens, cost, estimated active time and active days against the equal window before it, then a day map on the same quantile rule the Stats heatmap uses, a top-of-period podium for harness / model / project, an hour-and-weekday rhythm that names the server's own night window, a row per harness, and the caveats under the fold. It reads `/api/insights`, `/api/usage` and `/api/active-time` rather than adding a fourth copy of the aggregation, so every figure names the scan it came from and a source an older server does not serve degrades into a stated gap rather than a zero; the year view prints no delta, because the equal window before it predates the records. The report covers one server, since the insights facets have no defined merge semantics: its scope line, footer, agent table and share card all name that server, and the version stamp is read from it. Codex review sessions are always counted, whatever the Overview toggle says, because the report claims every agent session on the machine. UI in all six languages. (#69)
+- Two shareable cards at the foot of the Report tab, painted by hand onto a canvas and downloaded as 1080x1920 PNG: an overview card (counts only) and a project-detail card (the same plus the top projects and the reconciliation line against the period total). The on-screen preview is the export rather than a promise of one, since the download reads those same canvases back, and every export writes two files, a light card and a dark card, whatever theme the app is in. Colours in the file are literals rather than live theme tokens, cost stays off until you ask for it, and the machine nickname is yours. When a card runs out of room it shrinks its heat ramp before it drops a project row, so nothing paints over its own footer. (#69)
+- `tokdash serve --dev-fixture dense` now serves `/api/insights` instead of refusing it. The facets are folded by the same `insights._fold_*` helpers production uses, so the nine-facet contract the Report tab reads is exercised against the fixture rather than only against real history; real usage history is still never read while a fixture is active. (#69)
+- A second Claude Code subscription now reaches the Quota tab. Claude Code keeps one sign-in per config directory, so a profile run as `CLAUDE_CONFIG_DIR=~/.claude-academic claude` has its own windows, and only the default install's were ever polled. With credential scanning consented, Tokdash reads every `~/.claude*` install that has its own `.credentials.json` and polls them concurrently. The Claude card groups the windows by install under the directory name it was set up with (`academic`), the consumption chart plots `Claude-academic 5-hour` beside `Claude 5-hour`, and an install whose sign-in expired carries its own notice instead of hiding a working install's numbers. The same sign-in copied into a second directory reports once, matched on the claim inside the token that names the sign-in rather than on the token itself, which refreshes; where two directories hold one sign-in, the one with a live credential reports, so a stale copy cannot make a working subscription look signed out. An install that is renamed or deleted — a `~/.claude-<profile>` sibling or `~/.claude` itself, after migrating away from it — stops holding a card group open, on the strength of its directory being observably gone from the listing that names the installs. An install that is merely unreadable right now (`claude logout`, a permissions error, a dotfile manager mid-relink) keeps its last-known windows, as does every install whenever that listing is unavailable or names no install at all — an empty listing is an unmounted or still-locked home, not the news that every subscription was deleted. Directory presence is also what membership measures, not the name a directory happens to be given on this run: `CLAUDE_CONFIG_DIR` reassigns those names around whichever install it points at, so an install is recognised under every name it could have been stored under. `TOKDASH_CLAUDE_PROFILES` names a path-separated list of installs for machines where they live outside the home directory. Usage totals needed no change: session logs under every `~/.claude*` install have been counted for some time; this is the quota side catching up. (#70)
+- `gpt-6-astra` is in the pricing database at $10 / $50 per MTok, with cached input at $1 and cache writes at $12.50 — OpenAI's published standard short-context rates. Long context (past 272K), Batch, Flex and Fast are all multiples of that tier, so the one row prices them all; a contract test pins it against the official table. (#71)
+
+### Fixed
+
+- The refresh glyph was hardcoded `stroke="white"` in both the header markup and the re-render template, so it disappeared on themes whose primary button is light (studio and brutalist dark, among others). It now follows the button text color. (#68)
+- Overview KPI values in the monospace themes (Terminal, Cyber Amber) wrapped onto two lines; the cards now use trimmed type with the `sm:` step-up preserved at reduced sizes. (#68)
+- Theme `.ui-input` rules used the `background:` shorthand, which resets the `background-image` that paints the select caret — the dropdown arrow vanished on eleven themes (paper, liquid, terminal and brutalist had it before this branch). They set `background-color` now, and the per-theme option styling moved from `.style-select option` to `.ui-input option`, so every themed select — including the Language dropdown — follows the theme instead of falling back to slate in dark mode. (#68)
+- `--color-label` sat below the WCAG AA 4.5:1 floor in nine theme/mode combinations (seven of them new, plus paper light and studio light); the tokens were darkened or made more opaque until they clear the floor on both page and card backgrounds. (#68)
+- Flat White set `--shadow-*: none`, which is only legal as a sole value and invalidated every composed `box-shadow` in the base stylesheet — panels opened with no separation from the page. The tokens now use a transparent zero shadow that composes legally. (#68)
+- Cyber Amber dark's `--color-cta` was nearly identical to its primary, so cta-toned stats read as duplicates of their neighbours; it is now a distinct orange. Terminal dark rendered slate-blue table text on phosphor green — the slate utilities now remap to theme greens — and both monospace themes apply their font stack to form controls, which do not inherit the body font by default. (#68)
+- The Report tab's panels follow the active style theme. They use their own panel class rather than `.surface` — its hover lift would move text under the cursor on a panel you are reading — which also opted them out of every per-theme `.surface` override, so the fill was a literal white or slate blue on all seventeen themes. It comes from `--color-surface-glass` now, the way `.settings-panel` does. (#69)
+- `tokdash serve --dev-fixture dense` no longer answers `/api/insights` with a 500 for a short explicit `date_from`/`date_to` range. Every fixture day had an 11% chance of coming up dark, so a one-day window raised for about one seed in eight and a two-day window about one in sixty: with every day dark there was nowhere to put the window's tokens and the split across day weights raised `ValueError`. The tokens now land on the window's last day, which keeps the facets summing to the header totals Overview shows. (#69)
+- A quota card that measures two accounts stopped blaming one of them for the other's failure. A MiniMax card with both a global and a mainland-China Token Plan took its status from whichever region's row happened to come last, so a failing China plan read as a problem with the healthy global plan, and one region's recovery could not clear the other's stale error. `providers.<provider>.accounts` now carries each account's own status and error, and a card prints the notice under the account that owns it. The provider's own `status_detail` deliberately still reports the newest error of any account: one broken credential has to keep warning a consumer, or it refreshes the other account's stale meter as current. Only the two cards that really measure several accounts (Claude installs, MiniMax regions) get the list. (#70)
+- Companion contract: a quota row's `⚠` prefix and its low-quota eligibility now compare `buckets[].captured_at` against the **owning account's** `status_at` from `providers.*.accounts`, falling back to the provider's when that list is absent. Against the provider's alone, one permanently broken credential advanced `status_at` every cycle and marked every bucket the healthy credential had not refreshed in that same cycle as last-known — which for Claude's `weekly_scoped_opus` and MiniMax's per-model buckets is the normal case, so a working subscription's low-quota alerts went quiet for as long as its sibling stayed broken. A healthy account carries no `status_at` at all, so the rule checks whether the row's own account failed *before* reaching for its timestamp — otherwise the missing-timestamp fallback marks every row of the working install failed instead, the same bug one step further along. `COMPANION_API.md` documents `accounts` and the revised rule; both companions implement it; and `fixtures/quota-multi-account.json`, regenerated from the server's own payload and diffed against it, is the one file the contract, the server and the two clients are all tested against. (#70)
+- A quota card no longer swallows an error that belongs to none of the accounts it lists. The Claude card printed its own `status_detail` only when the payload named no installs at all, so any account list silenced it; the MiniMax card counted the notices it had placed under regions and took a non-zero count as "the card's error is covered". Both come apart in the same ordinary sequence — a credential expires, then its file is removed — where the newest error is the credential-less one that no listed account owns, and neither card printed it while the Servers tab counted that same provider as needing attention. Both cards now gate on `providers.*.status_account`, the field that answers exactly this, shared with the Servers tally so the two cannot drift. (#70)
+- The multi-server views no longer count a working subscription as needing attention. `providers.*.status` reports the newest error of any account behind the card, so a healthy `~/.claude` beside an expired `~/.claude-academic` dropped out of the Servers tab's OK tally with no per-account detail on that screen to explain it; the tally now counts an account-attributed provider as OK when at least one of its accounts is healthy AND the card's own error belongs to one of them, which the new `providers.*.status_account` states outright rather than leaving a consumer to infer — an error no account claims is a provider whose credentials could not be read at all, which the accounts' last-known numbers do not make OK. Inferring that from "does any account carry an error" is not equivalent: a card that cannot read its credentials *and* holds an older per-account failure — a region's key expires, then the credential file is removed — would read as attributed, and an unpollable provider would count as working. Failure is read as the companion contract defines it (a status that is present and not `ok`, **or** a live `status_detail`), because `status` alone is not a verdict: an account with a live error still reports `ok` once any of its window rows sorts after its synthetic `api` row, so reading it alone counted two expired sign-ins as one working provider. (#70)
+
+## 2.5.2 - 2026-09-03
+
+### Added
+
+- Priced Gemini 3.8 Flash, Tencent HY4 Preview, and Muse Spark 1.3 with its contributor tier. All four are listed by tracked providers but were missing from the database. (#67)
+- Model IDs that appeared in session logs with no match now resolve. The `Qwen3.8-Flash-Next` spellings price as Qwen3.8 Flash, `gemini-3.7-flash-control` as Gemini 3.7 Flash, and `doubao-seed-code`, `doubao-seed-2.0-code` and `ark-code` as Seed 2.0 Code. 67M logged tokens were reporting $0. (#67)
+
+## 2.5.1 - 2026-09-02
+
+### Added
+
+- `claude-fable-5.1` is in the pricing database at $10 / $50 per MTok with cache reads at $0.25 and cache writes at $12.50, plus `fable-5.1`, `fable-5-1` and `fable5.1` aliases, so Claude Fable 5.1 usage is priced instead of showing as $0. (#64)
+- `tokdash serve --dev-fixture dense [--dev-seed N]` starts the dashboard against a dense synthetic dataset for UI work. Fixture mode reads no local history, credentials or quota snapshots, skips the background workers and rejects mutating requests; the seed is printed so a dataset can be reproduced. (#63, thanks @674019130)
+
+### Fixed
+
+- A forced Refresh while a large Codex session is streaming no longer takes 30–60 s or pushes the server past 12 GB. Three causes, all on the sync path. The Codex and Claude usage parsers read each changed log with `read_text().splitlines()`, a 3.3 GB transient on a 400 MB rollout; they now stream lines (1.3 s and 55 MB for the same file). Every request thread synced on its own, so a refresh fan-out parsed the same changed file once per route at the same moment; `sync_files` and `sync_session_files` now run one sync per source at a time and a caller that waited for an in-flight sync skips its own. And `/api/usage` and `/api/active-time` synced once for the current window and again for the comparison window, which while a rollout is being appended to found it changed again; the comparison window now reads what the first sync stored. A serial forced Overview refresh with a 450 MB live rollout went from 30–60 s to about 6 s. (#64)
+
+### Changed
+
+- The first request after upgrading re-parses every Codex session file once, because the Codex session-parser signature hashes the whole of `coding_tools.py` and this release edits it. On a large history that is a one-off pause of some tens of seconds. (#64)
+
+## 2.5.0 - 2026-09-01
+
+### Added
+
+- `/api/usage` returns `top_models_by_cost`, the five costliest models ranked by cost, alongside the token-ranked `top_models`. Every other model array is ranked by tokens, and the spend podium cannot be recovered from the token one — the five biggest models need not contain the five costliest — so a consumer that wanted models by money had to pull and sort the whole `combined_models` list. Both podiums come off that same merged list, so they stay consistent with each other. The companion contract and its fixtures carry the new field, and now warn against deriving a cost leader from `top_models` — the costliest model need not be among the five biggest. (#61)
+
+- `GET /api/insights` returns fine-grained usage analytics for report-style consumers: hour-of-day buckets (with the 22:00–02:00 token share), weekday rhythm, a dense 7×24 heatmap, per-project attribution, streaks, model and tool rankings, and first/busiest-day markers. Facets are selected per request (`?facets=hourly,projects`) and served from one composite `GROUP BY` over `usage_entries`, so asking for seven facets costs one scan rather than seven requests — the `/api/sessions` per-tool fan-out is the shape this avoids, since it serialises against the heavy-compute cap. An unknown facet name is a `400` rather than being dropped, and a closed window caches indefinitely, so a past year is computed once. Per-project totals come from the transcript path already on each usage row, joined to the session records that carry the project name; sources whose rows have no usable path land in an explicit `unattributed` bucket instead of being silently dropped. `include_project_names=false` keeps ranks and volumes but replaces names with `project-1`, `project-2`, … for a shareable report. (#59)
+- `/api/stats` now reports `messages`, `most_used_model` and `highest_cost_model`. `sessions` has always been a message count rather than a session count; it keeps its current value and is documented as deprecated, so nothing reading it breaks while consumers migrate to `messages`. (#59)
+- Every response that takes a `period` now carries a `range` block naming the window actually queried (`period_requested`, `period_resolved`, `from`, `to`, `days`, `recognized`). `period` echoes the caller's own token, so on its own it could not show that an unrecognised value had been widened to all time. `period` also accepts `<N><d|w|m|y>` shorthand, so `?period=7d` now means seven days instead of resolving to a century of history under a week's label. (#59)
+
+- Added Session Explorer support for WorkBuddy and Qoder IDE. Both were already counted in Overview and Stats but had no session rows: WorkBuddy sessions come from the same `projects/*/*.jsonl` transcripts as the usage parser (one turn per billed assistant row, cross-file call-id dedupe), and Qoder IDE sessions come from the same `chat_message` rows read through a temp-dir snapshot of `local.db`, titled and grouped by `chat_session` where that table exists. Each has its own dashboard panel, per-session turns and active time, and reuses the parser's token mapping and pricing rules so session sums match Overview. (#56)
+- Added usage sources for Zed, Qwen Code, and Charm Crush. Zed: per-thread `cumulative_token_usage` from `threads/threads.db` (zstd or legacy JSON blobs) — cache-exclusive pass-through, subagent threads counted as separate rows, priced at the thread's current model. Qwen Code: append-only session JSONL under `$QWEN_RUNTIME_DIR`/`$QWEN_HOME`/`~/.qwen` with the Gemini cache-inclusive prompt split and source-global record-uuid dedup for `/branch` fork copies. Crush: per-project `crush.db` behind a required comma-separated `CRUSH_DATA_DIR`, read through the WAL copy-and-snapshot path, one entry per session with non-zero tokens (sub-agent sessions included — Crush folds only cost into a parent) attributed to its last non-summary assistant message; the session counters are a last-step snapshot, so multi-step sessions read low. All three price from the pricing database only and do not appear in the Sessions tab. (#57)
+
+### Changed
+
+- A project name is now taken from the last element of a Windows path as well as a POSIX one. A tool that recorded a native Windows working directory (WorkBuddy on Windows, or any harness read from WSL) reported the whole `C:\Users\...\Project` string as the project name, so its sessions never grouped with the same project seen through a POSIX path. Affects every Session Explorer harness; a POSIX directory whose name contains a literal backslash now splits on it. (#56)
+- `stats.favorite_model` ranks by tokens rather than cost. It accumulated cost, so the priciest model won even when barely used, which is not what "favorite" reads as. The cost ranking is still available as `highest_cost_model`. (#59)
+- `contributions[].intensity` carries a real value. It was written as a literal `0` at every constructor and only ever combined with `max()`, so every day in every response came back `0` and a calendar heatmap had nothing to shade. Each active day is now ranked 1–4 against the other active days in the window — a rank rather than an absolute threshold, so it stays meaningful as usage grows. (#59)
+
+### Fixed
+
+- Both companion apps read the served cost podium. The macOS and Windows clients took a maximum by cost over `combined_models ?? top_models`; the fallback half of that is a trap now that the arrays rank by tokens, because `top_models` holds the five biggest models and the costliest need not be among them. Both now read `top_models_by_cost[0]` and keep the full-list maximum only for servers that predate the field. Their multi-server mergers also handed back one cost-sorted uncapped list under both array names, which contradicted the contract they document; they now mirror the server — full list by tokens, `top_models` its first five, `top_models_by_cost` the five by cost. The shared contract fixture was rebuilt so token order and cost order disagree, since the previous one ranked the same both ways and no client could fail it. (#61)
+
+- Model arrays are ordered by tokens, as documented. `top_models`, `combined_models`, `coding_models`, `openclaw_models` and each `apps[].models` were sorted by cost while the API reference called `top_models` "top N models by token usage", so a podium built from the array named the priciest model rather than the most-used one. Over a week or a month the two orderings usually coincide, which is what hid it; over a year they separate — in one corpus the model with 10.05B tokens ranked below one with 9.25B because the latter cost more. Cost breaks ties, then name, so the order no longer depends on which source was folded in first. The "Top Models by Cost" chart now takes its own top five by cost from the full model list, and combining several servers ranks the merged arrays the same way one server does. (#61)
+
+- `stats.current_streak` and `stats.longest_streak` are computed instead of returning a hardcoded `0`. Both shipped as literal zeros, which a consumer could not tell apart from "no streak" — on a corpus with a 171-day run, both still read `0`. The dates they need are already merged and sorted in the same response, so this is a fold rather than a query. A streak ending yesterday still counts as current, since a day that has not started yet has not broken anything. (#59)
+
+## 2.4.3 - 2026-09-01
+
+### Added
+
+- Hermes named profiles are now scanned by default. Each profile keeps its own session database at `~/.hermes/profiles/<name>/state.db`, which Tokdash previously ignored, so Overview and Session Explorer silently missed that usage unless every profile was listed by hand in `HERMES_HOME`. Profiles are enumerated under each Hermes home, including homes given via `HERMES_HOME`, and a dir listed twice is scanned once. (#54, closes #53, thanks @wangfh5)
+- Yesterday's figures are warmed shortly after the local date rolls over (00:05 by default, `TOKDASH_DAILY_WARM_MINUTE`; disable with `TOKDASH_DAILY_WARM=0`). Every key for a window that can still gain usage goes cold at midnight, and the day that just closed is the one the Yesterday button asks for all day. Its numbers are final, so it is computed once and served from cache from then on. Today is deliberately not warmed at that hour: it holds almost nothing yet, and warming it would put a near-empty snapshot in front of the morning's first request. (#55)
+
+### Changed
+
+- The heavy-compute cap now scales with the CPUs the process may actually use, from the previous fixed 2 up to 8. It reads the scheduler affinity mask and any cgroup CPU quota — including a quota on the process's own sub-cgroup, which is where a systemd unit's `CPUQuota=` lives — rather than the host's core count, so a large machine drains a cold fan-out quickly while a small VPS, Raspberry Pi or CPU-limited container keeps the old ceiling. Running and waiting requests share one thread budget (`TOKDASH_COMPUTE_THREAD_BUDGET`, default 32), so raising `TOKDASH_COMPUTE_CONCURRENCY` spends the waiter allowance instead of pushing the total past the worker pool and starving `/health` and cache hits. (#55)
+
+### Fixed
+
+- Switching to a date range nothing has computed no longer fails most of the Sessions tab. That tab issues one request per tool, so a cold range asks for ~17 distinct keys at once, and a request that could not get a heavy-compute slot was refused outright instead of queued: measured against a running server, 13 of 15 tools took an instant `503` while the slot each needed freed about a second later, and the dashboard retries only three times before a panel gives up. A cold request with nothing to show now waits briefly for a slot (`TOKDASH_COMPUTE_WAIT_SECONDS`, default 15 seconds, capped at 120), bounded by a waiter allowance so a burst cannot park the whole worker pool. A stale value or a background refresh still answers immediately and never waits, and the cap on concurrent computes is unchanged. The same fan-out that lost 13 panels now completes in about 3.7 seconds. (#55)
+
+## 2.4.2 - 2026-08-30
+
+### Fixed
+
+- A past date range is no longer answered from a snapshot taken while that range was still running. The dashboard sends every quick range as an explicit `date_from`/`date_to` pair, so viewing Today on one day and clicking Yesterday on the next built the same response-cache key, and the cache serves a stale entry with no upper bound on its age: the partial mid-day figures came back until the Refresh button forced a recompute. Response-cache keys for a window that can still gain usage now carry the local day they were computed on, so a key without that stamp can only have been filled after its window closed. Yesterday, Last week, Last month, Last year and any custom picker range that repeats an earlier open pair are recomputed once and then cached for good, and the same rule covers `/api/sessions`, `/api/active-time`, `/api/openclaw`, `/api/tools`, `/api/stats` (a past year now caches indefinitely) and `/api/activity-insights`. Today and other ranges that include the current day keep the existing TTL, background revalidation and Refresh behaviour. (#52)
+
+## 2.4.1 - 2026-08-28
+
+### Fixed
+
+- Quota provider visibility controls are now scoped to each server's reported harnesses in multi-server mode. The shared show/hide preference updates every rendered server block, including partial loads where only one of several selected servers responds. (#51)
+
+## 2.4.0 - 2026-08-28
+
+### Added
+
+- Added Japanese, Korean, Spanish, and Portuguese dashboard languages alongside English and Simplified Chinese. The System option follows the browser language, dates and numbers use the selected locale, and each language has a linked README. (#49)
+- Added opt-in Z.ai Coding Plan quota tracking. Tokdash discovers Coding Plan keys from ZCode, supported OpenCode/Claude-compatible provider configs, or `ZAI_API_KEY` / `Z_AI_API_KEY`, then reads the provider's 5-hour and weekly credit windows plus legacy MCP limits from Z.ai's quota endpoint without refreshing or writing credentials. (#48, thanks @Werkaninchen)
+- Updated the bundled pricing database to 2.0.20, adding 14 model entries across Z.ai, DeepSeek, Qwen, ByteDance, Tencent, Mistral, Meta, and NVIDIA. (#50)
+
+### Changed
+
+- Usage refresh reports now appear for every repeat refresh of the displayed range, including timer-driven refreshes, while an explicit dismissal remains in effect until the range changes or the user requests another refresh. (#47, thanks @674019130)
+
+## 2.3.1 - 2026-08-27
+
+### Changed
+
+- Sessions panels now carry each harness's brand logo in the panel header, reusing the Overview's identity system. A harness with no sessions in the selected range is hidden instead of rendering an empty panel, and when no harness has sessions in range a single empty-state band replaces them all. A panel whose fetch failed stays visible so its error row is not swallowed. (#45)
+
+### Fixed
+
+- The first dashboard load no longer races the startup cache warmer into a transient `503`. One foreground request per key may join the warm fill already running on its behalf, bounded by `TOKDASH_STARTUP_WARM_JOIN_SECONDS` (default `30` seconds); every other same-key cold miss keeps the existing fail-fast backpressure, and the warmer's own backpressure no longer logs as a warning. The unused period-only Today usage key is no longer warmed, dropping a duplicate of the largest startup aggregation. Direct callers of `/api/usage?period=today` still compute the same data but no longer find it pre-cached. (#42, thanks @674019130)
+
+## 2.3.0 - 2026-08-26
+
+### Added
+
+- Added Session Explorer support for Antigravity CLI, Cline, Grok Build, Hermes, Kilo Code and omp. Each integration reuses the source parser's token mapping and pricing rules, exposes per-session turns and active time, and has its own dashboard panel and regression suite. (#40)
+- Added a Servers tab for comparing configured Tokdash instances, with reachable/stale state, usage shares, leading tools and models, session counts and quota summaries. Session panels can now be collapsed independently. (#36)
+- Refresh now reports source-level changes from the incremental usage scan, including added, updated, removed and unchanged rows. (#39, thanks @674019130)
+
+### Changed
+
+- Overview and session-panel runtime KPIs now show agent time consistently. The Servers tab remains available with one configured server so its health and details are still visible. (#37)
+- Coding-tool rescans now reuse unchanged source entries and update only changed files while preserving the last complete view when a source read is partial or fails. (#39, thanks @674019130)
+
+### Fixed
+
+- Antigravity conversation titles and projects now refresh when only the summary database WAL changes. (#40)
+- Cline now falls back to the session record's working directory when its metadata database has no usable project. (#40)
+- Dashboard refresh requests are queued instead of dropped when another update is in flight, and stale overview breakdowns cannot overwrite the currently selected date range.
+
+## 2.2.0 - 2026-08-22
+
+### Added
+
+- Added omp (oh-my-pi) as a token and cost source. omp is a port of pi-mono, so its session JSONL is field-compatible with Pi's: Tokdash reads `~/.omp/agent/sessions/` (plus the `omp config init-xdg` migration root — `$XDG_DATA_HOME/omp/sessions`, or `~/.local/share/omp/sessions` when the variable is unset — once `omp` has created it, named profiles under `~/.omp/profiles/<name>/agent/sessions/`, and `PI_CONFIG_DIR` config roots) with the same per-message accounting as the Pi parser. omp writes its `model_change` as a provider-qualified id (`vllm-hpc/qwen3.8-27B-FP8`), which the shared fallback now splits into provider + bare model so the pricing lookup resolves. Cost comes from the pricing DB rather than omp's bundled catalog — the same self-hosted endpoint must show one price across tools — so self-hosted ids absent from the DB cost 0.00, and the Pi parser keeps its released "recorded cost wins" behavior. Usage is cache-exclusive: `input + cacheRead` equals the full prompt, verified against cold/warm runs on one endpoint.
+- The usage tracker now assigns each tree-scanned directory to exactly one parser at startup. Two sources claiming the same directory (e.g. `PI_CODING_AGENT_DIR` pointed at an omp tree) used to be a silent 2x on totals, because the usage store dedups on `(source, entry_key)` and never across sources; the later-registered source now drops the conflicting dir and the conflict is reported in `source_errors` on every collect.
+- Added a local omp brand mark to dashboard tool rows and charts.
+- Added Kilo Code as a token and cost source. Kilo is built on the OpenCode codebase (CLI and the current VS Code
+  extension share the store), so Tokdash reads the same `message` table shape the OpenCode parser queries, from
+  `~/.local/share/kilo/kilo.db` (XDG data dir + `kilo`): one row per assistant message, the cache share split out
+  of the exclusive input, model from `data.modelID`. Dev-channel `kilo-<channel>.db` files are merged, and a
+  pre-rename `opencode*.db` in the same data dir is read only while no kilo-named file exists, so a migrated
+  install is never double-read. Recorded cost is ignored in favor of the pricing DB; self-hosted ids absent from
+  the DB cost 0.00. Kilo Code does not appear in the Sessions tab.
+- Added Cline as a token and cost source, file-first. Cline's per-session `<sessionId>.messages.json` files (and
+  their `agent_*` subagent siblings) are the single source of truth: with `enableSpawn` the `sessions` table's
+  `usage` covers only the parent's own model calls and subagent rows carry no usage at all, so a sessions-db parser
+  would undercount every spawn, while the message files are complete and non-duplicating. Cline normalizes every
+  provider so `inputTokens` already includes the cache-read/write portions; the parser splits them into disjoint
+  buckets (clamped, so a malformed row cannot go negative) before pricing. Each message id is a stable,
+  source-global dedup key: resuming rewrites the same file in place and forking copies the parent's message ids
+  into a new session file, so a session-scoped key would double-count replayed calls. Cost is priced from the
+  pricing DB, not `metrics.cost`; self-hosted ids absent from the DB cost 0.00. Cline does not appear in the
+  Sessions tab (the `sessions` table is metadata only for now).
+- Added local Cline, Kilo Code and omp brand marks to dashboard tool rows and charts.
+
+### Changed
+
+- The persistent usage store's cross-file stable-key sync is now a declared capability
+  (`SourceSyncCapability.cross_file_stable_keys`) instead of a hardcoded `source == "codex"`
+  check. Codex sets it (behavior unchanged — its three sync branches key off the flag now)
+  and Cline sets it for forked session files, which copy the parent's message ids under a
+  new session id. Without it, Cline's file-replace sync would let whichever file parsed
+  last own a copied key: deleting the fork file would delete the row with it while the
+  untouched parent is never reparsed, and the usage is gone from totals until the
+  parent's mtime moves. Mirrored store tests cover the Cline fork shape (earliest
+  occurrence canonical, survivor promotion on file removal, promotion on canonical
+  rewrite).
+
+## 2.1.0 - 2026-08-22
+
+### Added
+
+- Added WorkBuddy as a token and cost source. Tokdash reads `~/.workbuddy-ai/projects/*/*.jsonl` (or `WORKBUDDY_DATA_DIR`), treats each assistant message as one model call, splits cached prompt tokens into their own bucket, and keeps reasoning disjoint from output while billing both at the output rate. Explicit model IDs price through the normal database; WorkBuddy's `default-model` router alias remains unpriced. WorkBuddy does not appear in the Sessions tab.
+- Added Qoder as a token and cost source, covering the IDE and the CLI without a Sessions tab. The IDE parser reads every role of `chat_message` from the IDE's `local.db` (international and QoderCN builds; QoderCN first on Windows and WSL) through a disposable snapshot, splits the cached share out of the prompt tokens into its own bucket, and takes the model from `model_key` (`auto` when the router name is absent). The CLI parser merges each request's transcript billing record with its segment token record across all CLI roots (`~/.qoder`, `~/.qoder-cn`, `QODER_CONFIG_DIR`, comma-separated `QODER_CLI_HOME`): rows carrying provider credits keep the provider-reported cost as authoritative, converted at an estimated $0.01 per credit (`QODER_USD_PER_CREDIT` overrides the estimate) and never repriced, while token-only rows price through the normal pricing database. Zero-input records recover input tokens from `context_usage_ratio` against the known context window — `auto` at 180,000 by default, every model once `QODER_CLI_CONTEXT_WINDOW` is set explicitly — and a read failure on any discovered file aborts the whole source instead of replacing the stored corpus with a partial one.
+- Added local WorkBuddy and Qoder brand marks to dashboard tool rows and charts; Qoder IDE and Qoder CLI retain separate labels while sharing the Qoder mark.
+
+### Changed
+
+- The persistent usage cache no longer treats a parser edit or a pricing update as a reason to reread source logs. A cached row used to be validated against one signature that folded in a SHA-1 of the whole `coding_tools.py` module and the complete pricing identity, so adding or changing one parser invalidated every stored coding-tool source (all of them share that file), and adding an unrelated model to the pricing database reparsed every cached log. v2.0.0 shipped both at once and rebuilt the entire cache on upgrade. Three identities are now kept apart: source files, an explicit per-parser `persistent_parser_version`, and pricing. A parser bump invalidates only its own source; the shared `USAGE_ENTRY_FORMAT_VERSION` is the one identity that invalidates all of them, deliberately. DSH still folds in the shared log decoder's own versions, so a decoder bump invalidates DSH and nothing else. Package version, install path and file restamping affect nothing. See `docs/development/technical-notes/USAGE_CACHE_IDENTITY.md`.
+- Pricing changes now reprice cached usage rows instead of reparsing them. Each row stores the billing inputs it was priced from — the exact arguments its parser passes to `PricingDatabase.get_cost`, which are not always the displayed token buckets — so a rate edit, an alias change, a newly added model or a removed one is applied by recomputing the stored cost in a single transaction that opens no source log. Costs the provider itself reported (Pi's `usage.cost.total`, Hermes' actual/estimated cost) are stored as fixed and are never recomputed, and provider-qualified then bare-model fallback order is preserved exactly as a live parse resolves it. The new pricing identity is committed in the same transaction as the rows it describes, so it can never advance ahead of them and a failed pass leaves the last good cache servable. Overview, Stats, contributions, `/api/usage`, `/api/tools` and `tokdash export` all observe the new price immediately.
+- Entry keys for rows a source does not name itself no longer include cost. A repriced row would otherwise stop matching the same logical entry reparsed out of another file, and the duplicate would be counted twice.
+
+- A manually-run `tokdash serve` on the setup port is no longer adopted by setup; the port is reported as busy serving another Tokdash install (use `--port`, or stop the manual instance, then re-run setup).
+
+### Fixed
+
+- A usage sync that finishes after another process changed pricing can no longer strand stale costs in the cache. Parsing runs outside the store lock, so a sync could begin under one pricing database, be overtaken by a process that repriced everything to a newer one, and then commit its older costs while the stored pricing identity claimed the newer — after which every later request matched that identity, returned early, and never revisited those rows. Each row-writing transaction now declares the pricing it parsed under and drops the stored identity in that same transaction when the two disagree, so the next request rebuilds the costs from the stored billing inputs without rereading a log. The sync paths also reprice once more after their writes, so a request that hits this heals before it returns rather than leaving the work for the next one.
+- A pricing identity can no longer describe rates that were never applied. `PricingDatabase` loads its rates into memory when constructed, but the content identity was derived by rereading the file on demand — so a pricing edit landing between the two paired the new file's identity with the old in-memory rates. The cache stamped that identity against costs computed from the superseded rates, and every later request holding the genuinely-new pricing then matched it and skipped repricing for good. `load()` now parses the rates and computes their identity from a single read and publishes both in one snapshot, so `content_signature()` always describes exactly the rates `get_cost` will apply. `signature()` remains the separate drift detector that reads current files to answer "should I reload?".
+- Reads can no longer observe a half-repriced usage cache. A superseded write drops the stored pricing identity as it commits, but the repair runs in a later transaction, and in that window the table really does hold two pricing generations — so a request landing there could total costs computed under different rates. Verifying the identity and then reading would not have closed it either, since a write can commit between the two. The read path now takes both in one snapshot: an identity visible there proves every row in that same snapshot was priced under it, and an absent one makes the reader repair and retry rather than report a mixture. The last retry repairs and reads while holding the write lock, so it always terminates. OpenClaw now takes its model totals and contribution grid from a single snapshot instead of two.
+- Reinstalling or upgrading Tokdash no longer rebuilds the usage cache on its own. The parse identity is now free of file paths, mtimes and module content, so a `pipx upgrade` that restamps every installed file — or a wheel that lands at a new path — leaves cached rows alone.
+
+- `tokdash setup` on native Windows: the logon trigger now names the invoking user, so a standard user registers the task without elevation (no more `schtasks /Create` "Access is denied").
+- `tokdash serve` no longer dies on Windows consoles without UTF-8 (or with no console at all under `pythonw.exe`).
+- Setup no longer mis-identifies a WSL-relayed or foreign Tokdash on the default port as its own service; it reports the holder and auto-picks a free port with `--auto`. Re-setup keeps the previously recorded port.
+- Windows re-setup/upgrade: the service port is verified to actually release after `schtasks /End`, and a lingering instance of our own runtime is stopped by PID before the replacement starts. A stale `pythonw.exe` used to keep the port, make the new instance exit with code 3, and let setup report success anyway; `uninstall` now stops and waits on the service the same way, and a foreign occupant (e.g. the WSL relay) is reported, never killed, and never fails the uninstall.
+- Readiness no longer depends on the locale of `schtasks`/`netstat` output (works on non-English Windows).
+- `tokdash doctor` names the stale process still serving the port when the task is inactive.
+
+### Migration
+
+- The usage database moves to schema 9, which adds a `cost_authoritative` column to `usage_entries` so aggregation can keep a provider-reported zero cost (a free request) instead of treating it as unpriced and recomputing it from token buckets. The migration marks every row whose stored billing provenance is `fixed` as authoritative, including pre-v9 fixed rows with `cost = 0`; those rows deliberately stop being dynamically repriced from that point on. Both insert paths and the Codex upsert derive the column from the same billing kind, and the unpriced CASE expressions in aggregation and Stats contribution SQL exclude authoritative rows.
+- The usage database moves to schema 8, which adds a `billing_json` column to `usage_entries`. Rows written before it have no trustworthy billing provenance, so the migration preserves each one's stored cost as a fixed cost rather than guessing at it. Rows whose source file still exists are rebuilt once by the next sync (their parse signature changed shape at the same time) and come back with real provenance; a durable row whose source file is gone keeps exactly the cost it already reported. Session records, quota history and every other durable table are untouched. This is the last global reparse: after it, ordinary parser additions and pricing updates never trigger one again.
+
+## 2.0.0 - 2026-08-20
+
+### Added
+
+- Added ZCode as a token and cost source. Tokdash copies `$ZCODE_HOME/cli/db/db.sqlite` and its live WAL into a disposable snapshot before reading `model_usage`, so SQLite never creates or changes sidecars beside the source database. Each model request is one entry and retries remain separate billable rows. ZCode's `input_tokens` counts cached and uncached prompt tokens together, so the cached share is split into its own `cacheRead` bucket, and reasoning tokens are displayed disjoint from output while billing at the output rate.
+- Added ZCode to the Session Explorer. Turns are read from the same database through the same coherent snapshot the usage parser uses and billed per (turn, model) with the same token rules, top-level sessions only. A turn with no billable tokens still credits its measured time to active time as an activity event, and a boundary turn whose measured work overlaps the selected window is credited even when its session has no in-window token event. A transient read failure surfaces as an error and retries on the next collection instead of blanking the panel or caching an empty result.
+- Added a ZCode brand mark to the dashboard and the README supported-tools strip.
+- Added Qwen3.8 27B pricing from Alibaba Cloud Model Studio's published rate.
+
+### Fixed
+
+- `tokdash setup` on native Windows can now register its Task Scheduler task. The task definition was written as UTF-8, but `schtasks /Create /XML` hands the file to MSXML as a UTF-16 wide string that refuses a declared UTF-8, so registration failed with "unable to switch the encoding" on every native-Windows setup since v1.0.5 — it failed closed, with no half-installed state. The definition is now declared and written as UTF-16 LE with BOM, matching Task Scheduler's own exports, and read back the same way, including the plain-UTF-8 file a previously failed setup left behind, so an upgrade still recognizes it as setup-owned. A `windows-latest` CI step now renders both task variants and registers them with a real `schtasks` — every unit test fakes `schtasks`, which is exactly why this shipped.
+- A single locked or unreadable file no longer errors a whole dashboard view on native Windows. Session scanners and parsers now skip a file they cannot stat or open (for example one held without share-read by the agent itself, antivirus, or the search indexer) instead of letting the error propagate. That skip lasts one request: neither the per-file parser nor the per-tool loader caches a view assembled while a file was locked, so the session comes back on the next request. Both caches are keyed on (path, mtime, size), which for a finished session file never changes again — memoizing the miss would have hidden that session until tokdash restarted. The usage tracker skips a source that fails outright rather than blanking `/api/usage`. A session view that cannot be read for I/O or SQLite reasons degrades to an empty view with a logged warning instead of a 500 — a loader bug still raises, rather than masquerading as "no sessions".
+- `tokdash db resync` run while the dashboard is up no longer ends in a raw traceback and an orphaned temp database on Windows: replacing a database another process still holds open is now reported as a clear "stop the running `tokdash serve` and retry" failure, any partially-done rename is undone, and the temp files are removed — and the command exits non-zero for any failed resync, including the existing refusal to replace a populated database with an empty result. The undo runs for any failed rename, not just a held file: a cross-device rename or a volume I/O error reports its own cause instead of blaming the server. If the undo itself cannot finish, the response says so (`rollback_ok: false`) and names the `.bak` left on disk, which is then the only intact copy of the old database. `tokdash uninstall --purge` names the same cause when the file it could not delete is the usage database a running server is holding.
+- `tokdash db resync` now repairs a corrupt usage database on native Windows instead of failing on it. `UsageEntryStore._connect` ran schema setup before handing the connection out, so a failure there — the normal path for a corrupt file — escaped past the caller's `closing()` and leaked the handle. On Windows that handle blocked renaming the file, so the resync reported the database as held open by a running `tokdash serve` that was not the cause, on exactly the broken database resync exists to repair. The connection is now closed before the error propagates. Found by the new `windows-latest` CI job.
+- Codex session titles are no longer lost when the path to `state_5.sqlite` contains `#` or `%` — on any platform. The read-only SQLite `file:` URI was built by string interpolation, where `#` truncates the path and `%XX` is percent-decoded; it is now built with `Path.as_uri()`, which encodes both.
+
+### Changed
+
+- `/api/usage` now reports the sources that failed to read in a `source_errors` list (the usage tracker's JSON carries it too), so a source that failed mid-collect can be shown as unavailable instead of a zero that reads as "no usage in range".
+- Reads of live third-party SQLite databases (OpenCode, Hermes, Mimo) now open read-only first with a read-write fallback, matching what the Antigravity reader already did. A plain read-write open takes a write lock that on native Windows can block the client's own writes for the duration of the read.
+- OpenClaw's data location now resolves through the same central path seam as every other client and honors an `OPENCLAW_HOME` override. Its native-Windows location is unverified (no Windows host at research time); if OpenClaw stores its data elsewhere there, point `OPENCLAW_HOME` at it.
+- The Pi override now honors the environment variables the Pi coding agent actually reads: `PI_CODING_AGENT_SESSION_DIR` (the session dir) and `PI_CODING_AGENT_DIR` (the agent dir; sessions live under `<dir>/sessions`). The earlier `PI_AGENT_DIR` comma-separated list still works.
+
+## 1.9.0 - 2026-08-19
+
+### Added
+
+- Added Reasonix as a token, cost and session source. Tokdash reads `$REASONIX_HOME/stats/YYYY-MM-DD.jsonl` for per-request usage and `$REASONIX_HOME/projects/*/sessions/*.jsonl` for the Session Explorer (`REASONIX_HOME` defaults to `~/.reasonix`), attributing the `provider/model` pair from Reasonix's own config and pricing it through the existing pricing database. Reasonix's `prompt` field counts cached and uncached input together, so it is split into Tokdash's disjoint `input` and `cacheRead` buckets rather than copied into both. Reasonix records usage per request without a session id, so session rows carry turns, project and timing but no token counts; Overview and Stats hold the full totals.
+- Added a Reasonix brand mark to the dashboard and the README supported-tools strip.
+- Documented that dashboard days are the host machine's local days, and why a provider's own usage page shows a different number for the same date (`docs/reference/DAY_BOUNDARIES.md`).
+- Active time can now use a duration the source measured itself instead of inferring one from the gap between events. Reasonix logs how long each assistant step took, so its sessions exclude the pause between an answer and the next prompt outright rather than billing it up to the idle cap, and a session's first and last steps are both counted. Tools that log only completion instants are unchanged.
+
+### Fixed
+
+- Restored DeepSeek Harness session loading on the live-parse path. `/api/sessions?tool=dsh` raised `NameError` whenever the persistent store was disabled or its read failed, because the fallback loader had been removed.
+- The Overview no longer shows one date range's breakdowns under another range's label. The date picker writes its new label before the fetch starts, and the Apps & Models and Combined Models tables were painted from an idle callback, so both could outlive the range they belonged to. They are now cleared the moment the selection moves, and the Overview is visibly marked while it is showing a window other than the one on the label.
+- The Agent Time card now shows a loading state instead of an em dash while its own request is in flight. It is fetched after the rest of the KPI row, so a dash there read as "no agent time in this range" rather than "not back yet".
+
+## 1.8.1 - 2026-08-18
+
+### Fixed
+
+- Codex subagent and fork rollouts no longer double-count the parent thread they replay. Codex 0.146+ writes fork files with a single `session_meta` carrying the child's own id and declares ancestry through `forked_from_id` or a top-level `parent_thread_id`, so the previous gate never fired and every replayed event was counted twice. Replay segments are now keyed to the declared parent session so they collapse against the parent's own rows. When the parent is not indexed anywhere the rows survive and are counted once, and sibling forks of the same parent keep exactly one copy between them.
+- Codex usage is no longer attributed to `gpt-5.3-codex` when a rollout records no model. That name is a real, selectable model, so it can no longer stand in for "not known yet": rows written before a file's first model signal take the file's own first model, and files with no model signal at all are labelled `unknown` and priced at zero. `thread_settings_applied` now counts as a model source alongside `turn_context`.
+- A windowed session read no longer keeps a fork's replayed prefix when the window excluded every one of the parent's files.
+
+### Added
+
+- Codex rollouts moved to `~/.codex/archived_sessions` are now read alongside `sessions/`. Identical copies across the two roots collapse by event key rather than counting twice.
+
+### Changed
+
+- Stored session rows belonging to one session now merge in a single pass rather than pairwise. Folding them one at a time re-keyed and re-copied every turn already merged, which is quadratic in the number of files a session spans — and Claude splits one session across every subagent transcript it spawned, several hundred files for a single session id. Output is unchanged.
+
+## 1.8.0 - 2026-08-14
+
+### Added
+
+- Added DeepSeek Harness (`dsh`) as a token, cost and session source. Tokdash reads `$DSH_HOME/sessions/*/*/session.jsonl.zstd` (or an uncompressed `session.jsonl`, defaulting to `~/.dsh`), decodes its concatenated zstd frames, folds each step's early usage chunk into its finalized message instead of double-counting it, skips the parent-owned prefix of forked sessions, and prices DeepSeek models through the existing pricing database. Sessions appear in the Session Explorer with title, project and active time, and sync into the persistent store like the other file-backed clients.
+- Added a DeepSeek Harness brand mark to the dashboard and the README supported-tools strip.
+- Added GLM 5.3, DeepSeek V4 Pro 0813 and Grok 4.6 pricing.
+
+### Changed
+
+- Updated the DeepSeek V4 Flash and V4 Pro rates to the current official prices.
+
+## 1.7.0 - 2026-08-14
+
+### Added
+
+- Added an estimated agent time card to the Overview, after Total Messages, with a change against the previous period. It is backed by a new `/api/active-time` endpoint that merges every session tool into one figure and reports each tool separately.
+- Added estimated active and agent runtime to sessions and per-tool panels. Active time counts each gap between a stream's token events up to an idle cap (`TOKDASH_ACTIVE_GAP_CAP_SECONDS`, default 300s), so a session left open overnight no longer reads as an all-night session; agent time adds concurrent agents up instead of counting the overlap once.
+- Added Kimi to the session explorer, including its persistent cache and per-agent stream timing.
+- Added Gemini 3.7 Flash pricing at list price rather than the current launch discount.
+
+### Changed
+
+- Cached session rows are now price-neutral: they hold each turn's billing inputs and are priced when read. Editing a rate reprices Codex, Claude and Kimi immediately instead of marking every unchanged log as changed — on a corpus of 5301 session files, a pricing edit now reparses none of them and rewrites no rows. Two Tokdash builds sharing one database no longer overwrite each other's costs.
+- Codex rows written before this are rebuilt once. Codex bills under `provider/model` but stores the bare model name, so a row holding only totals cannot prove which pricing entry applied to it.
+- The Overview's total token value drops its unit to save width; the exact count remains in its tooltip and its accessible label.
+
+### Fixed
+
+- Kept the provider's own reported cost for OpenCode and Mimo turns instead of replacing it with Tokdash's estimate.
+- Fixed Mimo's fallback loader for SQLite builds without JSON1, which still required a JSON function to exclude imported messages.
+- Stopped a dashboard load that was superseded mid-flight from committing its results or reporting its errors under the newly selected range, and made a return to a range whose load was already discarded re-request it.
+- Timed Claude subagents as their own streams, so two agents reporting identical usage in the same second are no longer merged into one.
+- Stopped an unwindowed loader from treating a user message just outside a window as the nearest token event when JSON1 is unavailable.
+
+## 1.6.4 - 2026-08-12
+
+### Fixed
+
+- Replaced the quick-range horizontal scrollbar with a responsive, keyboard-accessible disclosure that keeps the active preset visible.
+
+## 1.6.3 - 2026-08-12
+
+### Fixed
+
+- Preserved the persistent usage cache across package upgrades when parser and pricing contents are unchanged, while still invalidating cached costs when pricing data or calculation code changes.
+- Hid the unused single-server quota history shells in multi-server mode, removing the duplicate empty charts above per-server quota sections.
+
+## 1.6.2 - 2026-08-12
+
+### Added
+
+- Added an in-app **What's new** drawer, backed by release notes that ship with the package and a release checklist guard to keep them current.
+- Added compact local brand marks for supported coding tools in the Usage by Tool chart, usage tables, app/model, and combined-session breakdowns.
+
+### Changed
+
+- Unified dashboard loading placeholders with the Profile Activity shimmer while preserving localized status text for assistive technology.
+- Refined the Overview Profile preview's typography and insight hierarchy without a nested card surface, while keeping its heatmap geometry unchanged.
+- Moved the What's new entry from the Tokdash brand lockup into the dashboard action rail and normalized Codex/Grok marks onto transparent backgrounds.
+- Kept quick date ranges compact and on one row, extending from the existing Range control toward the right without stretching individual buttons.
+
+### Fixed
+
+- Prevented gradient theme backgrounds from tiling on long dashboard views, removing the mismatched horizontal seam while preserving the Brutalist theme's intentional grid pattern.
+- Kept the current-day Profile Activity cell synchronized with the already-loaded Today Overview totals, avoiding drift between independently aged response caches without adding another API request.
+- Shared each local tool icon request across repeated dashboard identities, avoiding duplicate transfers under the no-store static asset policy.
+- Allowed dashboards opened through Tailscale Serve to combine Tokdash servers on the same tailnet without per-server CORS configuration; cross-tailnet origins and remote writes remain blocked.
+
+## 1.6.1 - 2026-08-11
+
+### Fixed
+
+- Kept the Settings dropdown above dashboard cards in themes that use blurred surfaces.
+
+## 1.6.0 - 2026-08-10
+
+### Added
+
+- Added multi-server selection to the web dashboard and macOS/Windows companion settings. Reachable server usage is combined for Overview, Sessions, Stats, and companion totals; quota remains grouped by server.
+- Added optional browser-side `/health` testing, syntax-only server adding for offline machines, per-server reachability state, and automatic recovery on a later refresh.
+
+### Changed
+
+- Companion settings now persist schema v2 server entries and migrate the prior single `BaseURL`/`baseURL` without resetting other preferences.
+- Default Sessions requests now run with two-tool concurrency instead of letting a cold Claude scan block every later tool.
+
+### Fixed
+
+- Startup warming now populates the dashboard's explicit-today Sessions keys and Activity Insights instead of warming unused period-only keys.
+- Expired API responses now return stale data immediately while one background refresh recomputes the key; response values and idle per-key locks are bounded, and failed-fill lock cleanup remains atomic with the single-flight registry.
+- Persistent Codex and Claude session records now carry indexed time bounds, so narrow date ranges discard historical sessions before Python deserializes their JSON. Explicit parser versions and content-based pricing identities preserve compatible v1.5.9 rows across code changes and wheel restamps; persistent-cache failures are logged before the source-file fallback.
+
+## 1.5.9 - 2026-08-10
+
+### Added
+
+- Made the active homepage date range immediately visible with a localized, keyboard-accessible range trigger and synchronized quick-range selection, without changing date filtering or refresh behavior.
+
+### Fixed
+
+- Companion apps (macOS/Windows) now show multi-day reset countdowns in days, matching the dashboard. A weekly window read "resets in 3 days" on the dashboard but "resets in 94 hours" in the companion flyout, because the days tier added to the dashboard in 1.5.7 was never added to the companions. The tier boundaries are now pinned to the same values in all three test suites.
+
+## 1.5.8 - 2026-08-05
+
+### Fixed
+
+- Antigravity quota refresh no longer fails for every provider when one model's `quota_info` payload is malformed (non-dict). The defensive guard lost when the reset-time lookup was hoisted out of the broad `try`/`except` is restored.
+
+## 1.5.7 - 2026-08-05
+
+### Changed
+
+- Quota bars now show a relative "resets in 3 days" / "resets in 4 hours" / "resets in 43 minutes" countdown (single unit, matching the companion app's rule) plus the absolute reset timestamp, replacing the per-bar captured-at time.
+
+### Fixed
+
+- Antigravity quota now shows the correct window label ("5-hour" vs "Weekly") on the dashboard and companion apps. The single quota window returned by the API is auto-determined from its reset time instead of always assuming 5-hour, so a weekly limit (e.g. resetting in 3 days) no longer renders as "5-hour".
+- Antigravity models with an exhausted weekly window (`remainingFraction: null`) are now captured instead of skipped, so the dashboard no longer falls back to stale 5-hour data when the weekly limit is hit.
+
+## 1.5.6 - 2026-08-03
+
+### Added
+
+- Added local Codex Activity Insights to Profile and Overview, including recorded chats, reasoning-effort distribution, structured tool usage, ranked tools, and explicit coverage indicators.
+- Activity counts use primary local sessions and exact stable session identifiers; subagents, inferred skills/plugins, and unavailable legacy files are excluded and reflected in coverage.
+- Added a persisted `Readable tokens` setting across the dashboard. Token quantities use adaptive K/M/B/T units by default; disabling the setting restores exact localized counts.
+
+### Changed
+
+- Grouped language, light/dark mode, visual theme, readable-token display, and app installation under one accessible Settings panel.
+
+### Fixed
+
+- Excluded Codex guardian and automatic-review sessions from primary activity insights so reasoning-effort summaries reflect user sessions.
+- Rejected malformed activity fields and refreshed activity insights with manual dashboard updates.
+- Kept the Overview range controls stable after adding readable-token display controls.
+
+## 1.5.5 - 2026-07-31
+
+### Added
+
+- Added official pricing for DeepSeek V4 Flash 0731, including cache-hit, cache-miss, and output rates.
+
+### Changed
+
+- Updated GPT-5.6 Terra and Luna pricing, including their `-pro` mirrors, to the current official OpenAI standard rates.
+
+## 1.5.4 - 2026-07-30
+
+### Fixed
+
+- Deduplicate Codex history copied into ordinary resumed rollout files, preserve the original event dates and explicit thread names, and merge genuine turns across files belonging to the same logical session. Persistent indexing promotes a surviving replay occurrence when a canonical file is rewritten or removed.
+
+## 1.5.3 - 2026-07-29
+
+### Added
+
+- Added a Last Week quick range that selects the previous Monday-through-Sunday calendar week in English and Chinese.
+
+## 1.5.2 - 2026-07-28
+
+### Fixed
+
+- Keep Profile activity tooltips aligned with their heatmap cells across browser zoom, display scaling, scrolling, and viewport edges without hover-position jitter.
+
+## 1.5.1 - 2026-07-28
+
+### Added
+
+- Added a synchronized, locally persisted Milestones switch to the Overview and Profile activity legends. Milestone highlighting defaults to off.
+
+### Changed
+
+- Matched milestone badges and cell glows to each active heatmap theme.
+- Reworked the Paper activity palette around parchment, warm copper, and aged-ink tones in light and dark modes.
+
+## 1.5.0 - 2026-07-28
+
+### Added
+
+- Added a Profile activity dashboard under Stats with recorded-token, peak-day, active-day, and streak summaries.
+- Added synchronized Daily, Weekly, and Cumulative 52-week activity views with token breakdown tooltips, milestone highlights, responsive scrolling, and accessible labels.
+- Embedded a compact Profile activity summary in Overview with shared aggregation controls and a direct path to the full Profile view.
+
+### Changed
+
+- Updated the Paper theme heatmap palette and added theme-aware milestone colors while preserving the existing Month, Year, and 3D Stats views.
+
+### Fixed
+
+- Refresh Profile activity after a manual dashboard update while retaining the one-time background warm cache during normal updates.
+
+## 1.4.5 - 2026-07-26
+
+### Added
+
+- Added MiMo Code and Grok Build icons to the supported-client strips in the README, 中文 README, and supported-clients reference, and added the missing Antigravity icon to the latter two.
+
+### Changed
+
+- Show MiniMax's general quota labels as `5-hour` and `Weekly`, and render status-3 weekly allowances as `Unlimited` without treating them as numeric history data.
+- Follow MiniMax's explicit remaining-percentage and status fields; ambiguous 0/0 count fields are not used as a fallback.
+- Label Kimi Code's plan-wide quota as `Weekly` without changing its stored bucket identity.
+- Preserve distinct Kimi explicit-weekly and plan-weekly windows while deduplicating exact echoes.
+
+## 1.4.4 - 2026-07-25
+
+### Added
+
+- Added pricing for `moonshotai/k3-256k` (Kimi K3 256k context variant), aliased as `kimi-code/k3-256k` and `kimi-k3-256k`, using the same pricing as Kimi K3.
+
+## 1.4.3 - 2026-07-25
+
+### Added
+
+- Added pricing for Claude Opus 5 and Opus 5 Fast, plus Gemini 3 Pro Image, Gemini 3.1 Flash Image, and Gemini 3.1 Flash Lite Image.
+
+### Fixed
+
+- Price Grok inference entries during ingestion so persistent usage totals no longer show known Grok models at zero cost.
+- Keep persistent Overview and Stats costs aligned with live parsing when a model group mixes priced rows with historical zero-cost placeholders.
+
+## 1.4.2 - 2026-07-24
+
+### Changed
+
+- Display MiniMax's mainland-China region in the quota-card title instead of repeating it on every bucket, and map Kimi's internal paid `LEVEL_*` API enums to its advertised membership names.
+
+## 1.4.1 - 2026-07-24
+
+### Fixed
+
+- Fixed the Grok log-signature test on Windows by using platform-native filename extraction.
+- Fixed MiniMax and Grok quota cards showing “not detected” after successful detection when their APIs omit a plan name. Kimi's “Intermediate” suffix remains because it is the membership level returned by Kimi.
+
+## 1.4.0 - 2026-07-24
+
+### Added
+
+- Added opt-in quota polling for MiniMax Token Plans (global and mainland China), Kimi Code, and SuperGrok/Grok Build. Static subscription keys work for MiniMax and Kimi; Grok consumer billing requires the CLI's xAI OAuth sign-in and rejects normal xAI API keys.
+- Added separate local-credential-read consent plus allowlisted OpenCode, active Claude-settings, and read-only CC Switch provider discovery for MiniMax and Kimi. Provider logs and arbitrary file references are never scanned.
+- Added local Grok Build token and cost tracking from `$GROK_HOME/logs/unified.jsonl`, using per-inference prompt, cache, completion, and reasoning counters with per-process model attribution.
+- Added pricing for Gemini 3.5 Flash Lite and Gemini 3.6 Flash.
+
+### Security
+
+- Restricted MiniMax and Kimi quota requests to their official HTTPS hosts before attaching credentials.
+- Gated Claude credential-file and macOS Keychain reads behind the separate local-credential consent.
+
+## 1.3.1 - 2026-07-17
+
+### Fixed
+
+- Persistent parse-cache signatures are now content-based instead of path/mtime-based. After the one-time `v1.3.1` signature migration, a reinstall or upgrade that leaves parser code byte-identical (e.g. `pipx upgrade` restamping every installed file) no longer invalidates the entire usage/session store, so later updates avoid a full-corpus reparse caused only by installer timestamps.
+- Startup cache warming now also precomputes each Sessions tool panel's default view (today), so the first Sessions tab visit after a server restart no longer pays the codex/claude session-store sync serially per tool.
+- Quota polling now samples fixed windows before and after resets without creating provider-wide request bursts: boundary targets are provider-scoped, nearby targets are coalesced, daemon cycles remain at least five minutes apart, HTTP 429 responses are not retried immediately, and post-reset samples stay anchored to the observed reset epoch when a poll crosses the rollover.
+
+## 1.3.0 - 2026-07-16
+
+### Added
+
+- Kimi Code update support: usage tracking for the new `~/.kimi-code` data root and `usage.record` wire schema introduced in Kimi Code 0.26, with automatic fallback to legacy `~/.kimi` installs.
+- Kimi K3 pricing update: added `kimi-k3` launch pricing and the `kimi-code/k3` alias.
+
+## 1.2.2 - 2026-07-14
+
+### Fixed
+
+- Unified Codex live-quota window classification across singular, plural, and metered-feature API schemas. Exact 5-hour and 7-day duration metadata is authoritative; without recognized durations, two returned windows retain primary/secondary semantics while a single pair-shaped live window is treated as weekly during Codex temporary 5-hour disablement. Flat legacy API payloads and local session-log behavior remain unchanged.
+- Kept quota ingestion and stored raw-history re-derivation on the same shared classifier, with round-trip regression coverage for normal, swapped, partial-duration, weekly-only, legacy, and metered response shapes.
+
+## 1.2.1 - 2026-07-12
+
+### Fixed
+
+- Updated Codex live-quota handling for the temporary disablement of 5-hour windows. Tokdash now classifies returned windows by their reported duration, displays weekly-only limits when Codex omits the 5-hour window, suppresses stale 5-hour cards while retaining their history, and resumes showing both windows automatically when Codex returns both again.
+
+## 1.2.0 - 2026-07-12
+
+### Added
+
+- Interactive `tokdash setup` now offers an explicit update-notice consent step. The prompt defaults to Yes, remains opt-in, and is skipped for automated, non-interactive, and non-TTY setup.
+- Added a documentation index at `docs/README.md`, with guides, reference material, and maintainer documentation organized into `docs/guides/`, `docs/reference/`, and `docs/development/`.
+- Added a detailed Codex usage-counting design note covering subagent replay detection, safety properties, verification, persistent-store behavior, and the accepted nested-subagent limitation.
+
+### Changed
+
+- Changed `/api/quota/refresh` from `POST` to `GET`. The endpoint polls providers' read-only usage APIs, remains subject to its cooldown and consent settings, and now works through Tailscale Serve, WSL forwarding, and other read-only remote paths.
+- Changed `/api/update-check` from `POST` to `GET`. The endpoint performs only the consented, cached PyPI version check and remains separate from the write-gated consent endpoint.
+- Updated the dashboard to use the new GET endpoints without CSRF tokens.
+- Reorganized documentation into task-oriented guides, API and client references, and development material. Updated both READMEs, CI paths, package metadata, internal references, and public agent guides for the new layout.
+
+### Fixed
+
+- Fixed severe Codex usage inflation caused by MultiAgent V2 `thread_spawn` rollout files replaying their parent thread's `token_count` history. Tokdash now skips direct-parent replay events while preserving genuine subagent usage, primary sessions, and guardian review sessions.
+- Fixed Codex Sessions entries being overwritten by partial parent-history replays from subagent rollout files.
+- Fixed idle Codex quota windows displaying phantom reset times. A window with 0% usage now reports no reset until its rolling timer actually starts.
+- Prevented an idle-to-active Codex quota transition from being counted as false new consumption.
+- Made the update-check kill switch consistently recognize `0`, `false`, `no`, and `off`, including mixed-case and whitespace-padded values.
+
+### Upgrade notes
+
+- API integrations calling `POST /api/quota/refresh` or `POST /api/update-check` must switch to `GET`; the old methods are no longer registered.
+- The persistent usage store automatically reparses Codex rollout files after the parser upgrade, removing previously stored replay entries without requiring `tokdash db resync`.
+- Deduplication currently matches only the declared direct parent. With non-default `agents.max_depth > 1`, grandparent replay events may still be over-counted. This accepted limitation favors visible over-counting over silent deletion of legitimate usage.
+
+## 1.1.5 - 2026-07-11
+
+### Added
+- Added pricing for OpenAI `gpt-5.6-luna-pro`, `gpt-5.6-sol-pro`, and `gpt-5.6-terra-pro`; xAI `grok-4.5`; and Tencent `hy3`.
+- Documented secure remote access options, including Tailscale Serve and Funnel, Cloudflare Tunnel, and reverse-proxy deployments.
+
+## 1.1.4 - 2026-07-10
+
+### Fixed
+- Fixed Codex quota parsing for live API `used_percent` values between 0 and 1: Codex reports percentages on a 0-100 scale, so `1` now means 1% used instead of being normalized to 100% used. A one-time quota DB repair corrects already-stored mis-scaled Codex API rows when their raw payload proves the original value.
+
+### Added
+- Added official OpenAI GPT-5.6 standard short-context pricing for `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` to the bundled pricing DB.
+
+## 1.1.3 - 2026-07-07
+
+### Fixed
+- Codex quota consumption now treats live API polling as authoritative when enabled: stale `codex_session` snapshots are excluded from both quota history and current quota cards, and session-log-only Codex quota data is clearly marked as estimated.
+- Added a guard for reset-boundary torn reads so impossible same-window spikes or carry-over samples do not distort quota history points or consumption bars.
+
+## 1.1.2 - 2026-07-06
+
+### Added
+- Added Mimo / Mimocode usage and session support from `~/.local/share/mimocode/mimocode.db`, including the Sessions tab, API/docs entries, and EN/CN frontend labels.
+
+### Fixed
+- Mimo now follows the OpenCode-style native SQLite design with SQL date windows, WAL/SHM-aware freshness checks, project worktree joins, and native session summaries.
+- Excluded Claude Code history imported into Mimo from Mimo usage and session totals, preventing double-counting with Tokdash's Claude parser.
+
+## 1.1.1 - 2026-07-05
+
+### Fixed
+- **Model name normalization for date-snapshot suffixes.** Providers append release-date snapshots to model IDs (e.g. `volcengine-coding-plan/glm-5-2-260617` = 2026-06-17). The normalizer and pricing resolver previously stripped only `YYYY-MM-DD` / `YYYYMMDD`, so `YYMMDD` snapshots split into separate dashboard rows and priced as $0. The backend normalizer, pricing resolver, and the client-side JS normalizer now strip `YYMMDD` (with month/day bounds so arbitrary numeric identifiers are preserved), and the client-side normalizer was synced with the backend to stop frontend/backend label drift. 4-digit `YYMM` is stripped only in the DB-aware pricing resolver — where exact-match-first protects canonical version stamps like `mistral-large-2512` — never in the grouping normalizer, so distinct priced models stay distinct in the combined view. Adds a node-based frontend/backend normalizer-sync guard.
+- **Codex rolling-window quota consumption.** Codex's 7-day quota buckets are rolling windows where older usage can age out while the reset timestamp stays stable, so a later climb below the prior high is genuine new consumption but was treated as noise, undercounting daily usage. Quota history now uses adjacent-delta semantics for Codex `7d` / `*_7d` buckets and any bucket with a missing reset timestamp, with a recovery band that suppresses a transient low reading recovering to the prior high as fake usage. Fixed-window buckets (Claude weekly, distinct reset epochs) keep the existing running-high behavior.
+
+## 1.1.0 - 2026-07-03
+
+### Added
+- Added Antigravity CLI (`agy`) token-usage parsing from `~/.gemini/antigravity-cli/conversations/*.db`, including WAL-aware change detection, protobuf wire decoding without a new runtime dependency, and pricing aliases for raw Gemini 3 Antigravity model IDs.
+- Dashboard update notice: when the opt-in update check is enabled, the header shows a dismissible "Update available: vX.Y.Z" badge with a copyable `tokdash update` command; when disabled, a muted one-click "Enable update notices" link performs the consent. The web UI only reports availability; it never runs upgrades, and no network check happens without consent.
+- `tokdash doctor` now reports the Tokdash version (first line of the human output; `version` field in `--json`).
+
+### Changed
+- Reworded the quota data-source terminology everywhere it surfaces (setup wizard, Quota-tab consent cards, per-bar source chip, README): "session" vs "API" is now "local logs" vs "live polling", each stated with its consequences — local logs are Codex-only, update only when Codex runs, and never contain reset credits or metered-feature windows; live polling is fresher, adds those, and is the only quota source for Claude Code and Antigravity.
+
+### Fixed
+- Fixed Quota-tab consumption history for reset-window rollovers, transient dips, interleaved account windows, and small reset-time jitter; consumption now counts only increases above each reset window's running high.
+
+## 1.0.7 - 2026-07-02
+
+### Added
+- Added a **Quota tab** tracking subscription quota for Codex, Claude Code, and Antigravity: per-window remaining bars with reset countdowns, Codex reset-credit inventory, remaining/consumption history charts with range and provider-visibility controls, and per-provider consent cards. Provider API polling is opt-in per provider and **off by default**; without consent the tab uses local data only (see "Quota tracking (optional)" in the README and `docs/SECURITY.md`).
+- Added quota API routes: `GET /api/quota` and `GET /api/quota/history`, plus write-gated `POST /api/quota/consent`, `POST /api/quota/settings`, and `POST /api/quota/refresh` (60-second cooldown). Documented in `docs/reference/API.md`.
+- Added `tokdash quota poll|show|consent` CLI verbs, an optional quota step in interactive `tokdash setup`, quota state in `tokdash doctor`, and `tokdash export --include-quota` (exports exclude quota data by default).
+- Added a background quota poller to `tokdash serve` (default every 30 minutes; `quota.poll_interval_minutes` in `config.json`, `TOKDASH_QUOTA_POLL_INTERVAL` env override, `TOKDASH_QUOTA_POLL=0` kill switch, `quota.enabled` master switch) with incremental watermark-based Codex session ingestion and a one-time history backfill.
+- Added `TOKDASH_QUOTA_RETENTION_DAYS` opt-in retention pruning for stored quota snapshots (default: off — snapshots are kept indefinitely).
+- Added macOS Keychain support for Claude quota credentials: Tokdash reads `CLAUDE_CODE_OAUTH_TOKEN` first, then `.credentials.json`, then the `Claude Code-credentials` Keychain item (read-only, via `security find-generic-password`). The env var is the locked/headless-Keychain override and short-circuits the Keychain subprocess. Verified by a macOS CI job (new `macos-latest` matrix entry) — the first macOS CI coverage for the platform's experimental support.
+
+### Changed
+- Usage database schema v4 → v5 (additive): new `quota_snapshots` and `quota_file_state` tables.
+- Codex path resolution (`sessions/`, `state_5.sqlite`) now honors `$CODEX_HOME` across the whole usage pipeline, and a new `$CLAUDE_CONFIG_DIR`-aware resolver locates Claude Code credentials for quota tracking.
+
+## 1.0.6 - 2026-07-01
+
+### Added
+- Added Claude Sonnet 5 introductory API pricing (`claude-sonnet-5`, plus `sonnet-5`, `sonnet5`, and dated aliases) to the bundled pricing database.
+
+### Fixed
+- Manual dashboard Refresh now forces `/api/usage` recomputation while preserving cache backpressure protections, and the button surfaces refreshing, cached, busy, and failure states instead of appearing to do nothing on cache hits.
+- Successful automatic refreshes now clear stale transient manual-refresh labels, and the failure button copy now prompts a retry.
+
+## 1.0.5 - 2026-07-01
+
+### Added
+- Added native Windows support seams and CI coverage, including Windows-aware client path resolution, `msvcrt` file locking, Task Scheduler onboarding support, Windows venv path handling, and PowerShell statusline documentation.
+- Added Windows-focused tests for file locking, client path discovery, service selection, and Task Scheduler rendering.
+
+## 1.0.4 - 2026-06-22
+
+### Added
+- Added ready-made Claude Code statusline templates under `docs/guides/statusline/`: a minimal one-line script and a fuller multi-row dashboard script that read local Tokdash usage totals without calling mutating endpoints.
+
+### Fixed
+- Hardened interactive Tailscale Serve setup so the targeted teardown command is recorded before exposure, failed Serve attempts reconcile the manifest back to the unset state, and post-success URL write failures warn without crashing setup.
+- Tailscale Serve status parsing now always reports the path-scoped `/tokdash` URL instead of accidentally advertising the tailnet host root.
+- Manifest writes and dashboard pricing override writes now clean up `.tmp` sidecars after failed atomic writes.
+- The write-protection loopback check now parses real IP literals, rejecting spoofed host strings such as `127.0.0.1.evil.com`.
+- The full statusline template now supports macOS/BSD `date` for rate-limit countdowns and clamps only the visual context bar when usage exceeds 100%.
+
+## 1.0.3 - 2026-06-21
+
+### Changed
+- `tokdash update` now reports the managed runtime's Tokdash version before and after the upgrade command. If the version is unchanged, human output says Tokdash is already at that version instead of implying a new package was installed; `--json` includes `version_before`, `version_after`, and `updated`.
+- README and onboarding docs now include the explicit migration command for switching an existing conda/system/user-pip service to Tokdash's managed venv runtime: `tokdash setup --runtime venv --force`.
+
+## 1.0.2 - 2026-06-21
+
+### Fixed
+- Interactive `tokdash setup` now opens the dashboard with a detached platform opener whose stdout/stderr are redirected away from the terminal, preventing Chromium/Chrome GPU, voice, TensorFlow Lite, and GCM logs from appearing after setup completes.
+
+## 1.0.1 - 2026-06-21
+
+### Fixed
+- `tokdash setup` no longer fails before writing the setup manifest when a slow `systemctl restart` times out client-side but the Tokdash service becomes healthy. The setup flow now records the restart diagnostic, verifies the `/health` fingerprint, and succeeds only when the configured port is actually serving Tokdash.
+- macOS launchd setup now follows the same readiness-driven behavior for slow `launchctl bootout` / `bootstrap` calls, with longer lifecycle command timeouts and regression coverage for timeout and fail-closed cases.
+
+## 1.0.0 - 2026-06-21
+
+### Added
+- Python-native lifecycle commands: `tokdash setup`, `doctor`, `update`, and `uninstall`. `setup` configures a reversible user-level background service (systemd user service on Linux/WSL2, launchd LaunchAgent on macOS) with no shell scripts and no `sudo`; `doctor` diagnoses runtime/service/port health; `update` upgrades a setup-owned runtime (pipx or managed venv) in place and restarts the service; `uninstall` reverses exactly what setup created, driven by a `<data_dir>/install.json` manifest and ownership markers, keeping usage history unless `--purge`. All commands support `--auto`/`--json` for bundlers and `--dry-run`. See `docs/guides/ONBOARDING.md`.
+- Optional, default-off update check (`TOKDASH_UPDATE_CHECK=1` or persisted consent via `POST /api/update-check/consent`): `tokdash doctor` and `POST /api/update-check` report whether a newer version is on PyPI (PEP 440 comparison). No automatic background checks; it only reports, never upgrades.
+- Dashboard pricing edits now persist to a user override at `<data_dir>/pricing_db.json` instead of the packaged baseline, so they survive `tokdash update` / a pip reinstall and work on a read-only install. The override fully replaces the baseline (WYSIWYG: deletions stick); a missing/corrupt override falls back to the shipped baseline.
+
+### Changed
+- README Quick start now uses the onboarding lifecycle (`tokdash setup` / `doctor` / `update` / `uninstall`) as the default path and removes the old manual systemd/update walkthrough from the main flow.
+- Human onboarding output now uses terminal colors when stdout is a real TTY, while `--json` and captured/scripted output remain plain.
+
+### Fixed
+- Dashboard pricing edits now correctly invalidate pricing-dependent API responses, coding-tools and OpenClaw cost caches, session pricing, and the persistent usage store, so edited rates take effect immediately across Overview/Usage/Tools; previously those layers could keep serving stale costs after an edit or out-of-band override change.
+- `tokdash setup` now verifies that systemd loaded the unit file setup wrote and that the configured port answers with Tokdash's `/health` fingerprint before reporting success; `doctor` flags service/port mismatches, and `uninstall` will not stop a same-named foreign systemd service while cleaning up a setup-written unit.
+- `tokdash setup --force` can now migrate pre-1.0 manual `tokdash.service` installs that already occupy the target port but lack the new `/health` fingerprint; setup rewrites and restarts the unit before readiness probing.
+- Interactive `tokdash setup` now handles Tailscale's "serve config denied" failure by offering the one-time `sudo tailscale set --operator=$USER` operator grant and retrying `tailscale serve`.
+- After a successful interactive Tailscale Serve setup, `tokdash setup` now prints and records the actual `https://...ts.net/tokdash` URL from `tailscale serve status`, uses a path-scoped Serve rule so the tailnet host root remains available for other services, and hides the generic remote-access hint from the final success output.
+- `tokdash uninstall` no longer reports success (and deletes the manifest) when a systemd/launchd stop fails: a failed stop is recorded as an error, leaving the unit and manifest in place for retry.
+- `tokdash update` reports a failed service restart with the platform-correct remediation command instead of crashing with a traceback when `systemctl`/`launchctl` hangs.
+- The write-protection gate returns `403` (not `500`) on a malformed `Referer` header.
+
+## 0.6.2 - 2026-06-19
+
+### Added
+- Added Pi session drill-down support, Codex review-session (auto-permission approval) visibility controls, native session display names, and `scripts/benchmark_api_latency.py` for comparing stable/dev HTTP endpoint latency. The live benchmark can also be run from pytest with `TOKDASH_RUN_API_BENCHMARK=1`.
+
+### Changed
+- Codex session names now come from Codex's local `state_5.sqlite` thread titles when available, with a read-only/query-only SQLite lookup and a 50 ms busy timeout. Pi sessions use `session_info.name` when present and otherwise fall back to the first user message instead of only the project directory.
+- The Sessions frontend now fetches tools independently with short 503 retries, keeps review sessions (auto-permission) hidden by default, supports showing them from a persisted toggle, and includes Pi in the per-tool and combined session views.
+
+
+## 0.6.1 - 2026-06-17
+
+### Changed
+- Made Claude session reads much faster by merging stored session records in one pass instead of repeatedly re-sorting and de-duplicating resumed sessions.
+- Made OpenCode session reads much faster by pushing date windows into OpenCode's native SQLite query and extracting token/model fields with SQLite JSON functions, with raw JSON fallback when needed.
+
+### Fixed
+- Added regression coverage for Claude same-timestamp session merge ordering and OpenCode session window boundaries, malformed JSON handling, multi-session fallback, and API window propagation.
+
+## 0.6.0 - 2026-06-16
+
+### Added
+- Added a default-on persistent SQLite usage index at `~/.tokdash/usage.sqlite3`. It stores normalized usage rows and Codex/Claude session summaries so repeated dashboard/API reads can use indexed SQL instead of reparsing every source log. Disable it with `TOKDASH_USAGE_DB=0`, move it with `TOKDASH_USAGE_DB_PATH` or `TOKDASH_DATA_DIR`, and control missing-source retention with `TOKDASH_USAGE_DB_DURABLE`.
+- Added `tokdash db status`, `sync`, `resync`, `verify`, `repair`, and `watch` for inspecting, rebuilding, validating, repairing, and periodically syncing the local usage DB. `TOKDASH_USAGE_DB_WATCH=1` enables the same polling sync loop inside `tokdash serve`; `TOKDASH_USAGE_DB_WATCH_INTERVAL` controls the interval.
+- Added Cloudflare GLM-5.2 pricing (`glm-5.2`, input $1.40/M, output $4.40/M, cached read $0.26/M).
+
+### Changed
+- Dashboard usage aggregation now uses the persistent DB for the file-backed coding-tool and OpenClaw paths where possible, with live-parser fallback if the DB is disabled or unavailable. OpenCode continues to use its native SQLite source for windowed reads.
+- Local cold-parser benchmarks on a real multi-agent log corpus show about 30x faster usage scans than pre-0.6.0 Tokdash and 15x faster Overview today latency than `ccusage daily --json --offline`.
+
+### Fixed
+- OpenClaw token counting excludes snapshot/checkpoint/backup/sidecar transcripts, deduplicates message ids, and ignores all-zero assistant usage rows, correcting inflated totals from duplicated transcript copies.
+- Added per-test usage DB isolation so the default-on persistent DB cannot leak cached rows between fixtures.
+
+## 0.5.7 - 2026-06-12
+
+### Fixed
+- Claude Code session parsing now reads the role-less `type:"assistant"` streaming-snapshot format emitted by newer CLI builds (observed on 2.1.173+ via OpenAI-compatible endpoints). These assistant turns were previously skipped entirely, under-counting tokens and cost for affected sessions. Duplicate streaming snapshots are deduplicated by message id, keeping the latest (most complete) usage.
+
+## 0.5.6 - 2026-06-09
+
+### Added
+- Added Claude Fable 5 pricing and shorthand aliases (`fable-5`, `fable5`, and `fable`) to the bundled pricing database.
+
+## 0.5.5 - 2026-06-05
+
+### Fixed
+- Pricing lookup now strips common quantization and precision suffixes such as `-FP8`, `-FP16`, `-INT8`, and `-AWQ`, so provider IDs like `vllm-hpc/qwen3.6-27B-FP8` resolve to the base model price instead of showing as zero-cost.
+
+## 0.5.4 - 2026-06-03
+
+### Added
+- `scripts/bench_openclaw.py` — a local benchmark helper for validating OpenClaw parser totals and cold/warm parse latency across common windows.
+- `docs/guides/agents/systemd/health-probe/` — an optional systemd user timer + oneshot that restarts Tokdash if `/health` stops answering after several short attempts, turning an "alive but wedged" hang into automatic recovery.
+
+### Changed
+- **OpenClaw cold-start performance.** OpenClaw session parsing now caches parsed entries by file signature and filters by date from memory, so repeated Overview/Stats calls no longer re-read the full OpenClaw log set. Startup warming also precomputes the dashboard's initial Overview and Stats cache keys, the Overview tab defers `/api/sessions` calls until the Sessions tab opens, and the frontend prefetches Stats in the background.
+- **Overload resilience.** Under a heavy request burst the server could become unresponsive while the process stayed alive (so `systemctl` still reported it healthy). The response cache now does **single-flight with stale-while-revalidate** — concurrent refreshes for the same stale key collapse into one compute and readers get the last value instead of stampeding the parser — and a **global heavy-compute cap** (`TOKDASH_COMPUTE_CONCURRENCY`, default 2) keeps a burst of cold requests from saturating the worker pool. Cold misses over the cap now return `503` quickly instead of queuing inside worker threads. The `/health`, dashboard, manifest, and service-worker handlers are now async so liveness/health probes keep responding even while every worker is busy. `serve` also passes uvicorn backpressure limits (`TOKDASH_LIMIT_CONCURRENCY` default 64, `TOKDASH_KEEPALIVE` default 5).
+- README (English + 中文): documented the new overload/backpressure environment knobs and the optional `/health` watchdog.
+
+### Fixed
+- **OpenClaw duplicate token accounting.** Snapshot/checkpoint/backup/sidecar files such as `*.checkpoint.*.jsonl`, `*.jsonl.bak-*`, `*.trajectory.jsonl`, and `*.acp-stream.jsonl` are excluded from usage parsing, entries are deduplicated by message id, and all-zero assistant usage rows are ignored. This corrects inflated OpenClaw totals caused by duplicated transcript copies.
+- **Pricing DB cache invalidation race.** Pricing updates now reload session pricing before clearing the API response cache, and in-flight computations that started before a cache clear can no longer repopulate stale results.
+- **Frontend `503` handling.** Overview and Sessions now treat fail-fast backpressure responses as errors, keep the last good data on screen, and show a temporary busy status instead of rendering the error body as zero/NaN metrics.
+
+## 0.5.3 - 2026-06-03
+
+### Changed
+- Updated `src/tokdash/pricing_db.json` from pricing DB `2.0.5` to `2.0.7` (`lastUpdated: 2026-06-02T22:39:42Z`). This adds 59 model pricing entries from the pricing-updater proposal, including new Anthropic fast variants, MiniMax M3, GLM vision/exacto entries, OpenAI `gpt-5.5-pro` / `gpt-chat-latest`, additional Gemini/Gemma, Mistral, Qwen, Perplexity Sonar, xAI Grok, Cohere, Baidu, Reka, StepFun, and Tencent models.
+
+## 0.5.2 - 2026-06-02
+
+### Added
+- **Install button for the PWA.** When the dashboard is installable (Chromium browsers, served with the manifest + service worker), an **Install** button appears in the header toolbar so you can pin Tokdash as a desktop/mobile app in one click. It hides itself automatically when the app is already installed or when the browser exposes no install prompt (e.g. iOS Safari).
+- **History-retention guidance.** The README now warns that Claude Code and Gemini CLI delete local sessions older than about 30 days by default, `tokdash serve` prints a one-time reminder with `TOKDASH_NO_RETENTION_NOTICE=1` as an escape hatch, and `docs/reference/HISTORY_RETENTION.md` records the per-client retention survey plus the config-based fix.
+
+### Changed
+- Renamed the **pi-agent** client to **Pi** across the dashboard and docs. The detection path (`~/.pi/agent/sessions/`) and the `PI_AGENT_DIR` override are unchanged — this is a display-name change only.
+- README (English + 中文): added an agent logo strip under the tagline and moved the detailed client list + log paths to [`docs/reference/SUPPORTED_CLIENTS.md`](../reference/SUPPORTED_CLIENTS.md). Demo links now point at `tokdash.github.io/demo/` (the root `tokdash.github.io` is the project home page).
+- Deferred the in-app snapshot-store design in favor of keeping each client's own logs, with the full design retained in `docs/SNAPSHOTS_PLAN.md` for future revisit if client retention policies change.
+
+### Fixed
+- **Stats tab first-load blank state.** A slow or interrupted first `/api/stats` request could leave the Stats tab showing all-zero summary values and empty calendars, and clicking Month/Year during the failed load made the blank state look permanent. The calendar now shows a loading/error banner with Retry, ignores stale overlapping stats responses, and avoids rendering empty grids until the first successful stats load.
+
+## 0.5.1 - 2026-06-01
+
+### Added
+- **`tokdash serve` now opens the dashboard in your browser on startup**, with a new `--no-open` flag to disable it. Auto-open is skipped automatically in headless contexts — CI (`CI` env var), SSH sessions (`SSH_CONNECTION`/`SSH_TTY`), and Linux without an X11/Wayland display — and the bundled systemd/launchd service templates now pass `--no-open`. The browser launch fires from a short-delay daemon timer so the server is listening before the page loads, and any failure to open is swallowed so it can never take down the server. (Thanks @KurokawaShiorei for the original contribution in #5.)
+
+## 0.5.0 - 2026-05-30
+
+### Added
+- **Sortable columns in the Overview breakdown tables.** Tools Breakdown, Apps & Models Breakdown, and Combined Models now support click-to-sort on every column, mirroring the Sessions ranking: click a header to sort, click again to flip direction (numeric columns rank high→low first, the name column A→Z), with a ▲/▼ indicator on the active column. In Apps & Models all per-app sub-tables sort in lockstep, and the active-sort indicator survives a language toggle. The Combined Models list sorts before its top-N cap, so the cap reflects the chosen sort.
+
+### Fixed
+- **Apps & Models Breakdown column alignment.** Each app renders as its own table, which under auto layout sized columns independently so they did not line up across apps. The sub-tables now use a fixed layout with a shared column template, so Input/Output/Cache/… align vertically across every app (long model names ellipsize with a hover tooltip and the table scrolls horizontally on very narrow screens).
+- **Overview "Total Tokens" overflow under wide date ranges.** Large totals (e.g. hundred-million+ under "This Year") overflowed the narrow KPI card. The Total Tokens / Total Cost / Total Messages values now shrink to fit their card only when the number would actually overflow — measured against the real card width, and re-fit on resize. Normal/small values are unchanged.
+
+## 0.4.1 - 2026-05-30
+
+### Fixed
+- **`period=all` / `period=year` silently returned today only.** `period_to_days()` mapped every unrecognised named period — including `all` and `year` — to 1 day, so `/api/usage?period=all` and `?period=year` returned just the current day's data and looked like a large undercount. Named periods now resolve correctly (`year` → 365 days, `all` → all-time), and any unknown period defaults to all-time (which visibly over-reports) rather than collapsing to today. The dashboard UI was unaffected — it sends explicit `date_from`/`date_to` ranges — so this only bit direct API callers.
+- **`/api/sessions` and `/api/usage` disagreed on named periods.** `sessions.py` carried its own copy of the period→days mapping that still collapsed `year`/`all`/unknown to today, so `/api/sessions?period=all` behaved like today while `/api/usage?period=all` spanned all-time. `sessions` now delegates to the single canonical mapping in `compute`, keeping both endpoints consistent (with a regression test locking the alignment).
+
+### Changed
+- Polished the README header (English + 中文): the logo, tagline, badges, and demo callout are now centered, and the wordmark logo serves as the title (the redundant text heading was removed).
+
+## 0.4.0 - 2026-05-29
+
+### Added
+- **Cache Hit Rate** across the dashboard. The metric is the token-weighted share of *prompt input* served from cache — `cacheRead / (input + cacheWrite + cacheRead)` — matching the published definitions of DeepSeek (`prompt_cache_hit_tokens / prompt_tokens`), Anthropic, OpenAI, and Gemini. Cache *writes* (cache creation) count as misses (they are prompt input not served from cache), and output/reasoning tokens are excluded. It appears as: an `Avg Cache Hit Rate` KPI card on the Overview header; a `Hit %` column in the Tools Breakdown, Apps & Models, and Combined Models tables (and per-app in the breakdown headers); a `Hit %` column plus a per-session figure in the Sessions tab (Codex/Claude/OpenCode/Combined); and a `Cache Hit Rate` figure in the Stats Month panel and the Day Details panel (Month and Year tabs). Sources that do not report cache data show `n/a`. Backend exposes `cache_hit_rate` on `/api/usage` (header + `by_tool` + `combined_models`), `/api/tools`, `/api/openclaw`, and `/api/sessions` / `/api/session` (per-session and per-turn).
+
+### Fixed
+- **Gemini CLI token & cost double-count.** Gemini CLI logs `tokens.input` *inclusive* of the cached prompt tokens (`tokens.cached`), but the parser previously also added `cached` separately as cache-read, counting those tokens twice in totals and cost on every cache-hit turn. The parser now subtracts (`input = tokens.input − tokens.cached`) to recover the fresh/uncached portion — matching how the Codex and Copilot parsers already handle cache-inclusive input. Effect: Gemini CLI total tokens and cost now match Gemini's own reported `total` (they decrease for sessions with cache hits); all other tools are unaffected. The session-level `cache_ratio` (cacheRead ÷ all tokens, incl. output) is retained for back-compat but is no longer surfaced as a hit rate; the Sessions panel now shows the faithful `cache_hit_rate`.
+
+## 0.3.3 - 2026-05-29
+
+### Added
+- Added Claude Opus 4.8 pricing entry (`claude-opus-4.8`) with the same rates as Opus 4.7 (input $5 / output $25 per 1M; cache read $0.50 / cache write $6.25), plus an `opus-4.8` shorthand alias. Names such as `claude-opus-4-8` and `opus-4.8` normalize to the canonical entry.
+
+## 0.3.2 - 2026-05-26
+
+### Fixed
+- Claude Code sessions from third-party builds that write a zero-token placeholder entry before the real assistant entry (sharing the same `message.id`) are no longer silently dropped. The deduplication step now ignores placeholders so the real usage gets counted. In practice this restores token, cost, and session-count data from `~/.claude-mi` (mimo-v2.5) and `~/.claude-infini` (glm-5.1) installs; the official `~/.claude` build is unaffected.
+
+## 0.3.1 - 2026-05-25
+
+### Added
+- Added Xiaomi MiMo V2.5 pricing entries: `mimo-v2.5` (input $0.40 / output $2 per 1M) and `mimo-v2.5-pro` (input $1 / output $3 per 1M), matching OpenRouter's published rates.
+- Added a `Monthly Totals` table below the Year heatmap on the `Stats` tab, showing per-month total tokens, total cost, and total energy for the selected year (Jan through the current month for the current year; full year otherwise).
+- Added `Total Tokens` and `Energy` columns to the `Models Used` table in the Day Details panel.
+- Added click-to-navigate from the Year view to the Month view: clicking a month label above the year heatmap, or a row in the Monthly Totals table, jumps to that month.
+
+### Changed
+- Reorganized the Month Stats sidebar into a 2-column grid so the panel takes roughly half the previous vertical space.
+
+### Fixed
+- Year heatmap previous/next arrow buttons now update the title and grid immediately on click instead of waiting for the async year-stats fetch to complete, so rapid back-to-back clicks register correctly.
+
+## 0.3.0 - 2026-05-21
+
+### Added
+- Added support for pi-agent token usage parsing from ~/.pi/agent/sessions/. Override the location via the `PI_AGENT_DIR` env var (comma-separated list of dirs). Captures input/output/cache tokens and per-message cost when present.
+- Added support for Hermes agent token usage parsing from ~/.hermes/state.db. Override the location via the `HERMES_HOME` env var. Reads session-level aggregates including per-session message counts, reasoning tokens, and recorded cost (with pricing-table fallback for subscription-included sessions where Hermes records a zero cost).
+- Added support for GitHub Copilot CLI token usage. Full input/cache/reasoning/cost data is read from OpenTelemetry exporter JSONL at ~/.copilot/otel/ or the file pointed at by `COPILOT_OTEL_FILE_EXPORTER_PATH`. For sessions without OTel enabled, output-only token counts are recovered from ~/.copilot/session-state/*/events.jsonl as a fallback.
+- Added [`docs/reference/API.md`](../reference/API.md) — full HTTP API reference for the Tokdash server, intended for building external integrations (e.g. Claude Code statusline items, IDE plugins, custom dashboards).
+
+### Notes
+- To capture full GitHub Copilot CLI usage (input + cache + cost), set `COPILOT_OTEL_FILE_EXPORTER_PATH` in your shell profile before launching the Copilot CLI; e.g. `export COPILOT_OTEL_FILE_EXPORTER_PATH="$HOME/.copilot/otel/usage.jsonl"`. Without this, Tokdash will still surface output-token counts from the local events log.
+- The Sessions tab does not yet support pi-agent, GitHub Copilot CLI, or Hermes — these agents currently appear only in Overview/Stats aggregates. Per-session drill-down is planned for a follow-up.
+- **Statusline integration**: Tokdash's local HTTP API can power a Claude Code (or any other agent) statusline item showing live token/cost stats. Hand your coding agent the prompt below, plus [`docs/reference/API.md`](../reference/API.md) for endpoint details:
+  > *"I would like to add a statusline item from the tokdash endpoint's API; it should show the total tokens used today."*
+
+## 0.2.7 - 2026-05-20
+
+### Added
+- Added local benchmark scripts for parser-cache and API endpoint latency checks.
+
+### Fixed
+- Included all local `.claude*` project directories when parsing Claude Code usage and session drill-down data, so alternate Claude installs are counted with the default `~/.claude/projects` logs.
+
+## 0.2.6 - 2026-05-11
+
+### Changed
+- Updated the Tokdash logo across the dashboard header, PWA icons, and README assets.
+
+## 0.2.5 - 2026-05-10
+
+### Added
+- Added an opt-in **Energy** metric on the `Stats` tab: a `Total Energy (kWh)` row in the Month Stats sidebar, an `Energy` field in the Day Details modal, and a fourth `Energy` button in the Daily Activity metric switcher that recolors the heatmap, 3D cubes, and Peak Day / Peak Week / Peak Weekday / Avg-Active-Day insight cards. `Overview`, `Sessions`, `Pricing`, and `/api/*` responses are unchanged.
+- Energy is estimated entirely in the frontend from the existing token breakdown using model-family `(prefill, cached, decode)` Joule-per-token coefficients derived from TokenPowerBench (AAAI 2026) and "How Hungry is AI?" (Jegham et al., 2025). Order-of-magnitude accuracy; intended for relative trends rather than absolute reporting. Month totals are shown in kWh; day details and metric values auto-format as Wh or kWh.
+
+## 0.2.4 - 2026-04-24
+
+### Added
+- Added a dashboard `Pricing` tab, contributed by StormTian, for viewing, formatting, validating, reloading, and saving the packaged `pricing_db.json` from the local Tokdash UI.
+- Added `/api/pricing-db` read and write endpoints with JSON parsing, schema-shape validation, atomic file replacement, and test coverage for valid saves, invalid JSON, and missing `models` data.
+- Added `gpt-5.5` pricing support to the local pricing database and release-safe contract tests.
+- Added `deepseek-v4-pro` pricing from OpenRouter at `$1.74` input / `$3.48` output per million tokens.
+- Added `deepseek-v4-flash` pricing from OpenRouter at `$0.14` input / `$0.28` output per million tokens.
+- Added `kimi-k2.6` Moonshot AI pricing at `$0.95` input / `$4.00` output / `$0.16` cache-read per million tokens, including `k2p6`, `k2-6`, `kimi-2.6`, `kimi2.6`, and `moonshot-ai/kimi-k2.6` aliases.
+
+### Changed
+- Normalized saved pricing JSON through the editor API so dashboard edits produce stable, readable formatting before replacing the on-disk database.
+- Expanded Kimi model normalization so K2.6 variants group under `kimi-k2.6` without collapsing into the existing `kimi-k2.5` dashboard bucket.
+- Extended pricing contract coverage so newly added DeepSeek V4 and Kimi K2.6 entries are verified through the same `PricingDatabase` lookup path used at runtime.
+
+### Fixed
+- Cleared cached API responses after pricing database saves so refreshed dashboard views use the updated pricing file.
+- Reloaded the session-level pricing database and cleared parsed session caches after pricing edits, preventing already-parsed Codex, Claude Code, and OpenCode session detail costs from staying stale until process restart.
+
+## 0.2.3 - 2026-04-16
+
+### Added
+- Added `claude-opus-4.7` pricing to the local pricing database with the same rates as `claude-opus-4.6`, plus `opus-4.7` shorthand alias coverage.
+
+## 0.2.2 - 2026-04-15
+
+### Added
+- Added regression coverage for OpenClaw's inner message timestamps and archived/checkpoint transcript discovery.
+
+### Changed
+- Reworked coding-tool parsing caches so repeated API requests can reuse short-lived file signatures, shared parser results, and bounded OpenCode query caches instead of rescanning logs for each date switch.
+
+### Fixed
+- Updated OpenClaw date filtering to prefer each assistant message's inner `message.timestamp`, with fallback to the outer entry timestamp and file mtime, matching current OpenClaw transcript semantics more closely.
+- Restored OpenClaw scanning for archived `.jsonl.deleted.*`, `.jsonl.reset.*`, and checkpoint `.jsonl` transcripts while still excluding `.lock` files.
+
+## 0.2.1 - 2026-04-09
+
+### Added
+- Added `Paper`, `Liquid`, `Vibrant`, `Midnight`, `Terminal`, `Brutalist`, `Arcade`, and `Studio` dashboard style themes, with localized labels in English and Chinese.
+- Added a dedicated `docs/development/RELEASING.md` checklist and linked it from `docs/CONTRIBUTING.md` so the manual tag, push, GitHub Release, and verification steps stay documented.
+
+### Changed
+- Moved theme-specific palettes and overrides out of `src/tokdash/static/index.html` into standalone static assets, reducing dashboard-shell sprawl and making future theme work easier to maintain.
+- Expanded the style selector into a broader theme gallery while keeping light/dark mode compatibility across the dashboard.
+
+### Fixed
+- Fixed charts, heatmaps, and browser `theme-color` metadata to stay synchronized with the selected style theme in both light and dark mode.
+
+## 0.2.0 - 2026-04-09
+
+### Added
+- Added calendar-based custom date range selection with quick presets spanning `Yesterday`, rolling day/week windows, month presets, and year presets.
+- Added a `Style` selector in the dashboard header with `Classic` and `Elevated` presentation modes, alongside the existing light/dark theme toggle.
+- Added `GLM-5.1` pricing and alias resolution (`glm5.1`, `glm-5-1`, `z-ai/glm-5.1`, `zhipu/glm-5.1`) to the local pricing database.
+
+### Changed
+- Reworked the dashboard header controls so the date picker, quick-range actions, refresh button, language toggle, theme toggle, and style selector align more cleanly across desktop widths.
+- Expanded packaged static assets to include the full `static/` tree, ensuring icons, manifest assets, and service-worker resources ship with the installed package.
+- Switched service-worker cache versioning to a content-derived cache name so upgraded installs pick up new static assets more reliably.
+
+### Fixed
+- Fixed custom date-range requests to serialize local calendar dates correctly instead of drifting backward in UTC-positive timezones.
+- Fixed API validation for incomplete, malformed, and reversed `date_from` / `date_to` query pairs.
+- Applied no-cache headers consistently to the dashboard shell, service worker, manifest, and static assets to reduce stale-client behavior after upgrades.
+- Hardened release metadata validation so packaging checks continue to work with the current static-version layout and remain compatible with future dynamic-version setups.
+
+## 0.1.0 - 2026-03-31
+
+### Changed
+- Promoted tokdash to its first minor release after stabilizing the new multi-tool Sessions workflow introduced in `0.0.13`.
+- Refined the Sessions tables with aligned grouped summary rows so headers, project summaries, and nested session rows line up consistently across Codex, Claude Code, OpenCode, and combined views.
+- Added click-to-sort ranking on the session tables for numeric and time columns: input, cache, output, total tokens, cost, and last updated.
+
+### Fixed
+- Fixed grouped project ordering so project rows now follow the active selected sort mode instead of staying token-sorted underneath a different header state.
+- Fixed `Last updated` sorting to compare real timestamps instead of plain strings.
+- Fixed GitHub CI to install dev requirements before running tests, ensuring `httpx` is available for the API smoke test path.
+
+## 0.0.13 - 2026-03-31
+
+### Added
+- Added a dedicated `Sessions` page with Codex, Claude Code, OpenCode, and combined cross-tool session views.
+- Added per-session drill-down charts, including cumulative token trends over turn order and over time.
+- Added `Total Messages` to the Overview KPI bar, alongside period-over-period comparisons for tokens, cost, and messages.
+
+### Changed
+- Moved session analysis out of the Overview page so the top-level dashboard stays focused on aggregate usage.
+- Changed comparison semantics to use prior full calendar blocks: `today` now compares to the full previous day, fixed `N`-day ranges compare to the previous full `N` days, and `month` compares to the full previous calendar month.
+
+### Fixed
+- Fixed Claude Code session undercounting by merging subagent transcript files that share the same session ID.
+- Removed the OpenCode session display cap so long-range views no longer hide many sessions.
+- Replaced the old Codex-only session backend path with the shared multi-tool session API used by the new dashboard.
+- Added the explicit `httpx` dev dependency required by the API smoke tests and removed stale dead code from the previous Codex-only implementation.
+
+## 0.0.11 - 2026-03-20
+
+### Fixed
+- Restored the multilingual README setup with cross-links between the English and Chinese docs.
+- Added `README_CN.md` as the Chinese project README.
+- Restored dashboard language switching between English and Chinese, with browser-language detection used as the default.
+- Restored automatic night mode plus a manual light/dark toggle in the dashboard.
+- Preserved the current Stats calendar view when switching language or theme.
+
+## 0.0.10 - 2026-03-20
+
+### Reverted
+- Removed the unmerged multilingual README additions and deleted the Chinese README variant.
+- Reverted the dashboard language toggle, browser-language auto-selection, automatic night mode, and manual light/dark theme toggle to restore the previous light-only UI.
+
+## 0.0.9 - 2026-03-16
+
+- Renamed the Kimi tool label to `Kimi CLI` in the dashboard.
+- Sorted Tools Breakdown views by token count in descending order.
+- Bumped the package version to `0.0.9`.
+
+## 0.0.8 - 2026-03-16
+
+### Pricing DB
+- Major pricing database overhaul: 61 models -> 137 models across 8 providers.
+- Added DeepSeek (11 models), Xiaomi/MiMo (1 model) as tracked providers.
+- Updated all existing model prices from OpenRouter + official provider USD pricing pages (docs.z.ai, platform.minimax.io, platform.moonshot.ai, api-docs.deepseek.com).
+- Applied conservative `max(openrouter, official)` pricing policy: GLM-5 $0.72->$1.00, Kimi K2.5 $0.45->$0.60, etc.
+- Corrected cache pricing for OpenAI (50% read), Anthropic (10% read / 125% write), Kimi (flat $0.15 read) using official rates instead of generic heuristics.
+- Added many new OpenAI models (o3, o4-mini, gpt-5-pro, gpt-5.4-pro, gpt-4.1-nano, gpt-3.5-turbo, gpt-4-turbo, etc.), Anthropic models (claude-opus-4.1, claude-sonnet-4, claude-haiku-4.5, claude-3.5-haiku, etc.), Google Gemini models (gemini-2.5-pro, gemini-2.5-flash, gemini-3.1-pro, etc.), and Z.ai models (glm-5-turbo).
+
+### Testing
+- Added `tests/test_pricing_db_contract.py`: consumer contract test verifying manual models, aliases, derived models, and per-provider resolution survive pricing DB updates.
+
+## 0.0.7 - 2026-03-06
+
+- Added Kimi CLI accounting support by parsing `~/.kimi/sessions/*/*/wire.jsonl` StatusUpdate events.
+- Registered Kimi as a default coding-tools source and documented the supported Kimi session path in the README.
+- Added a regression test for the Kimi parser and support for overriding the Kimi data directory with `KIMI_SHARE_DIR`.
+- Documented the current Kimi billing-model assumption (`kimi-for-coding` -> `kimi-k2.5`) in code for future timestamp-based model rollovers.
+
+## 0.0.6 - 2026-03-05
+
+- Added GPT-5.4 pricing support to the local pricing database.
+- Bumped the package version to `0.0.6`.
+
+## 0.0.1 - 2026-02-25
+
+- Initial PyPI packaging (`pyproject.toml`) + `tokdash` CLI (`tokdash serve`, `tokdash export`).
+- FastAPI server serving a local dashboard and `/api/*` endpoints.
+- Local parsers for OpenCode, Codex, Claude Code, Gemini CLI, and OpenClaw sessions.

@@ -1,0 +1,26 @@
+{
+  "case": "empty",
+  "period": "today",
+  "fixtures": {
+    "health": "health.json",
+    "usage": "usage-today-empty.json",
+    "active_time": "active-time-zero.json",
+    "insights": "insights-empty.json",
+    "quota": "quota.json"
+  },
+  "expected": {
+    "connection": "Local · Connected",
+    "dot": "ok",
+    "today": {
+      "hero_title": "No usage recorded today",
+      "hero_sub_contains": "Tokdash is running",
+      "cost": null,
+      "active": null
+    },
+    "delta_row": null,
+    "top_ranks": null,
+    "glance": null,
+    "glance_comment": "an all-zero source hides the glance strip; flat 24-bar rows carry no information",
+    "banner": null
+  }
+}
