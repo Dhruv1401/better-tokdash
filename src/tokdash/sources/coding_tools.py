@@ -8239,8 +8239,15 @@ class FreebuffParser(BaseParser):
       * ``cacheWrite`` is not persisted (zero by construction). Freebuff is a
         cloud service: the prompt cache is provider-side and read-only from the
         client's point of view, and no write counter exists in the store.
-      * ``costUsd`` is present and always 0 (Freebuff's free tier bills no
-        per-token USD). It is never read; cost is pricing-DB only.
+      * ``costUsd`` is present and always 0 on every observed row. Freebuff is
+        NOT billed per token: a session buys an HOUR of a model with Freebucks
+        (a daily allowance plus paid top-ups), and messages inside that hour are
+        unlimited, so there is no per-token USD to record. ``costUsd`` is never
+        read; cost is pricing-DB only, and it is an API-equivalent estimate
+        rather than a bill. The authoritative Freebuff spend is the Freebucks
+        burned on session admissions — a session-level ledger that is
+        server-side only (nothing in ``desktop-v2.db`` carries a Freebucks or
+        spend column, verified), so it is out of scope for this parser.
 
     Model attribution: ``threads.model`` is the thread's model and applies to
     every assistant row in it. It is stored in one of two forms:
