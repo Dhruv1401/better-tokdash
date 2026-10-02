@@ -1140,6 +1140,51 @@ def devin_db_paths() -> List[Path]:
     return out
 
 
+# --- Freebuff -----------------------------------------------------------------
+
+
+def freebuff_desktop_home() -> Path:
+    """Freebuff Desktop's own config dir: ``~/.config/freebuff-desktop``.
+
+    The desktop app resolves this as ``join(homedir(), ".config",
+    "freebuff-desktop")`` (verified in the shipped ``orchestrator.js`` string
+    table: ``resolve14(override) : join19(homedir5(), ".config",
+    "freebuff-desktop", "state.json")``). Only ``state.json`` honours a
+    ``FREEBUFF_DESKTOP_STATE_PATH`` override, which re-points the state file
+    and NOT the per-project data tree, so no environment variable relocates
+    the databases this source reads. The ``FREEBUFF_CONFIG_DIR`` override
+    belongs to the CLI (``.config/manicode``) and is deliberately not
+    honoured here.
+    """
+    return Path.home() / ".config" / "freebuff-desktop"
+
+
+def freebuff_desktop_db_paths() -> List[Path]:
+    """Existing per-project ``desktop-v2.db`` stores, sorted, deduplicated.
+
+    The desktop app keeps one SQLite database per opened project under
+    ``<home>/projects/<basename>-<uuid>/desktop-v2.db``; the directory name
+    carries the project basename plus a UUID (the authoritative project path
+    lives in the sibling ``project.json``). Every project is a disjoint store
+    with its own thread ids, so all of them are real usage and a union is
+    correct. ``_wsl_windows_root()`` is deliberately NOT globbed: the app is
+    an Electron desktop build, and a Windows-host install is the only one that
+    writes this tree (same one-directional limit as ``devin_cli_roots``).
+    """
+    projects = freebuff_desktop_home() / "projects"
+    out: List[Path] = []
+    for db in sorted(projects.glob("*/desktop-v2.db")):
+        if not db.is_file():
+            continue
+        try:
+            key = db.resolve()
+        except OSError:
+            key = db
+        if key not in out:
+            out.append(key)
+    return out
+
+
 # --- Tokdash data dir / usage DB -------------------------------------------------
 #
 # Mirrors onboard/paths.py::data_dir() (kept as a separate, untouched copy there —
