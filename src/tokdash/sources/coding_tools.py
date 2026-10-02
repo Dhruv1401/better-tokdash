@@ -8217,10 +8217,31 @@ class FreebuffParser(BaseParser):
       messages(seq INTEGER PRIMARY KEY AUTOINCREMENT, thread_id, role,
                parts_json, metrics_json, ts, ...)  — one row per message.
 
-    Rows: only ``role = 'assistant'`` rows carry usage, in
-    ``metrics_json`` → ``usage``. A live capture holds exactly one assistant
-    row per user turn (verified: 29 user / 28 assistant, no two consecutive
-    assistants), so one entry per assistant row is one entry per model turn.
+    Rows: TWO tables carry billable usage, and both are read.
+
+    1. ``messages.metrics_json`` → ``usage``, on ``role = 'assistant'`` rows.
+       A live capture holds exactly one assistant row per user turn (verified:
+       29 user / 28 assistant, no two consecutive assistants), so one entry
+       per assistant row is one entry per model turn.
+
+    2. ``auto_run_decision_receipts.manager_json`` → ``usage``. The autonomous
+       (mission / auto-run) loop is driven by a mission manager that makes its
+       own model call per decision. That call is billed but is NOT an assistant
+       message: the manager's model is frequently a different one from the
+       thread's, its duration is tens of seconds against the coding turns'
+       minutes, and its usage matches no message row in any live store
+       (verified: 42/42 unmatched). Skipping it undercounts every auto-run
+       thread — 6.76M tokens, 2.35% of the capture.
+
+       The SAME table also carries ``outcome_json.usage``, and that one is a
+       duplicate: it restates the turn's final assistant message, byte for byte
+       (verified: 37/37 matched an existing message row). Reading it would
+       double-count every completed auto-run turn, so it is deliberately NOT
+       read. Only the manager usage is taken.
+
+    A receipt's own ``manager_json.model`` wins over ``threads.model``; 8 of 45
+    live receipts disagree, and those would otherwise price at the wrong model.
+    ``usage: {}`` (a cancelled or failed decision) is skipped, not zero-billed.
 
     metrics_json shape (all four fields observed on every usage row):
       {"usage": {"inputTokens", "cachedInputTokens", "outputTokens",
@@ -8272,10 +8293,13 @@ class FreebuffParser(BaseParser):
     live rows: 1790924652181 → 2026-10-02). One entry per assistant row
     buckets that turn on the day it completed.
 
-    Dedup: ``entry_id`` is ``freebuff:<thread_id>:<seq>``. ``seq`` is the
-    message table's AUTOINCREMENT primary key and is stable for the life of
-    the row, so re-reading a store never re-bills a turn; two projects are
-    disjoint stores with disjoint thread ids, so the key is source-global.
+    Dedup: message entries key on ``freebuff:<thread_id>:<seq>`` (``seq`` is
+    the message table's AUTOINCREMENT primary key, stable for the row's life),
+    and manager entries on ``freebuff:<thread_id>:receipt:<receipt_id>``. The
+    two prefixes cannot collide — ``receipt:`` is not a valid ``seq`` — so a
+    receipt whose id happens to be ``"1"`` never masquerades as message 1.
+    Two projects are disjoint stores with disjoint thread ids, so both keys are
+    source-global.
 
     Storage mode: the store is WAL-mode and the desktop app keeps it open
     while running, so it is read through the shared copy-and-snapshot helper
@@ -8300,7 +8324,13 @@ class FreebuffParser(BaseParser):
     #    (split once on "/"), cached split out of the cache-inclusive input,
     #    reasoning split out of output, milliseconds timestamps, pricing-DB
     #    cost only (costUsd ignored).
-    persistent_parser_version = 1
+    # 2: adds one entry per auto_run_decision_receipts row that carries a
+    #    manager_json.usage — the mission manager's own model call, which is
+    #    billed but is not an assistant message. outcome_json.usage is a
+    #    verified duplicate of the turn's last message row and stays unread.
+    #    Bump is required: rows are stored, so an existing cache must be
+    #    rebuilt to pick the manager entries up.
+    persistent_parser_version = 2
 
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)
@@ -8340,9 +8370,85 @@ class FreebuffParser(BaseParser):
                 return provider.strip(), rest.strip()
         return "", text
 
+    @staticmethod
+    def _split_buckets(usage: Dict[str, Any]) -> Optional[Tuple[int, int, int, int]]:
+        """(fresh_input, cache_read, fresh_output, reasoning) from a usage dict.
+
+        ``cachedInputTokens`` is a SUBSET of ``inputTokens`` and
+        ``reasoningOutputTokens`` a SUBSET of ``outputTokens`` (both verified
+        across every row in four live stores), so each is split into its own
+        bucket. Both splits are clamped, so a future cache-exclusive or
+        reasoning-disjoint build can never produce a negative bucket.
+
+        Returns None when the usage carries no tokens at all: a cancelled or
+        failed call persists ``{}``, and a zero-token "call" is not usage.
+        """
+        input_incl_cache = FreebuffParser._i(usage.get("inputTokens"))
+        cached = FreebuffParser._i(usage.get("cachedInputTokens"))
+        output_incl_reasoning = FreebuffParser._i(usage.get("outputTokens"))
+        reasoning = FreebuffParser._i(usage.get("reasoningOutputTokens"))
+        if not (input_incl_cache or cached or output_incl_reasoning or reasoning):
+            return None
+        cached = min(max(0, cached), input_incl_cache)
+        reasoning = min(max(0, reasoning), output_incl_reasoning)
+        return (
+            max(0, input_incl_cache - cached),
+            cached,
+            max(0, output_incl_reasoning - reasoning),
+            reasoning,
+        )
+
+    def _build_entry(
+        self,
+        *,
+        model_value: Any,
+        usage: Dict[str, Any],
+        ts_ms: int,
+        entry_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """One normalized usage entry, or None when the usage is empty."""
+        buckets = self._split_buckets(usage)
+        if buckets is None or ts_ms <= 0:
+            return None
+        fresh_input, cached, output, reasoning = buckets
+        # Billing uses the FULL completion: reasoning is billed at the output
+        # rate, so the reduced display `output` must not shrink the bill.
+        billed_output = output + reasoning
+
+        provider, model = self._split_model(model_value)
+        model = model or "unknown"
+        # A model with no "/" gets no provider. The handle form (m-<hex>) is
+        # opaque, and inventing a provider for it would fabricate a pair that
+        # never existed (Muse rule).
+        candidates = [c for c in dict.fromkeys(
+            [model, f"{provider}/{model}" if provider else model]
+        ) if c]
+        return {
+            "source": self.source_name,
+            "model": model,
+            "provider": provider,
+            "input": fresh_input,
+            "output": output,
+            "cacheRead": cached,
+            "cacheWrite": 0,
+            "reasoning": reasoning,
+            "cost": self.pricing_db.get_cost(model, fresh_input, billed_output, cached, 0),
+            "timestamp": ts_ms,
+            "entry_id": entry_id,
+            "_billing": usage_billing_pricing(
+                candidates,
+                input_tokens=fresh_input,
+                output_tokens=billed_output,
+                cache_read=cached,
+                cache_write=0,
+            ),
+        }
+
     def _parse_db(self, conn: sqlite3.Connection) -> List[Dict[str, Any]]:
         conn.row_factory = sqlite3.Row
         out: List[Dict[str, Any]] = []
+
+        # --- 1. Assistant message rows: the conversation itself. -------------
         # One pass over assistant rows, joined to their thread's model. The
         # thread's model applies to every row in it, so a per-thread lookup is
         # enough; done as a JOIN rather than two queries so a store with a
@@ -8366,61 +8472,61 @@ class FreebuffParser(BaseParser):
             usage = metrics.get("usage")
             if not isinstance(usage, dict):
                 continue
+            entry = self._build_entry(
+                model_value=row["model"],
+                usage=usage,
+                ts_ms=self._i(row["ts"]),
+                entry_id=f"freebuff:{row['thread_id']}:{row['seq']}",
+            )
+            if entry is not None:
+                out.append(entry)
 
-            input_incl_cache = self._i(usage.get("inputTokens"))
-            cached = self._i(usage.get("cachedInputTokens"))
-            output_incl_reasoning = self._i(usage.get("outputTokens"))
-            reasoning = self._i(usage.get("reasoningOutputTokens"))
-
-            # All-zero rows are not usage: a cancelled or errored turn can
-            # persist an empty metrics object. Skip them so they never become
-            # a zero-token "model call" in the session view.
-            if not (input_incl_cache or output_incl_reasoning or cached or reasoning):
+        # --- 2. Auto-run manager decisions: a SEPARATE model call. -----------
+        # The autonomous (mission/auto-run) loop is driven by a mission manager
+        # that runs its own model call per decision. That call is billed but is
+        # NOT an assistant message: the manager's model is frequently a
+        # different one from the thread's, its duration is tens of seconds
+        # against the coding turns' minutes, and its usage matches no message
+        # row in any live store (verified: 42/42 unmatched).
+        #
+        # The same table also carries outcome_json.usage, and that one IS a
+        # duplicate — it restates the final assistant message of the turn
+        # (verified: 37/37 matched an existing message row, byte-identical
+        # token tuples). Reading it would double-count every completed
+        # auto-run turn, so it is deliberately NOT read. Only the manager
+        # usage is taken.
+        for row in conn.execute(
+            "SELECT r.id AS id, r.thread_id AS thread_id, r.manager_json AS manager_json, "
+            "       r.updated_at AS updated_at, t.model AS thread_model "
+            "FROM auto_run_decision_receipts r JOIN threads t ON t.id = r.thread_id"
+        ):
+            manager_raw = row["manager_json"]
+            if not manager_raw:
                 continue
-
-            ts_ms = self._i(row["ts"])
-            if ts_ms <= 0:
+            try:
+                manager = json.loads(manager_raw)
+            except (TypeError, ValueError):
                 continue
+            if not isinstance(manager, dict):
+                continue
+            usage = manager.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            # A receipt's own model wins over the thread's: the manager can run
+            # a different model, and the 8 of 45 live receipts where the two
+            # disagree would otherwise be priced at the wrong model.
+            model_value = manager.get("model") or row["thread_model"]
+            entry = self._build_entry(
+                model_value=model_value,
+                usage=usage,
+                # updated_at is the decision's finish: it is written alongside
+                # manager_json on the same row.
+                ts_ms=self._i(row["updated_at"]),
+                entry_id=f"freebuff:{row['thread_id']}:receipt:{row['id']}",
+            )
+            if entry is not None:
+                out.append(entry)
 
-            # cachedInputTokens is a SUBSET of inputTokens, and reasoning is a
-            # SUBSET of outputTokens (both verified across every live row).
-            # Split each out, clamped so a future cache-exclusive or
-            # reasoning-disjoint build can never go negative.
-            cached = min(max(0, cached), input_incl_cache)
-            fresh_input = max(0, input_incl_cache - cached)
-            reasoning = min(max(0, reasoning), output_incl_reasoning)
-            output = max(0, output_incl_reasoning - reasoning)
-
-            provider, model = self._split_model(row["model"])
-            model = model or "unknown"
-            if not provider:
-                # A model with no "/" gets no provider. The handle form
-                # (m-<hex>) is opaque, and inventing a provider for it would
-                # fabricate a pair that never existed (Muse rule).
-                provider = ""
-
-            out.append({
-                "source": self.source_name,
-                "model": model,
-                "provider": provider,
-                "input": fresh_input,
-                "output": output,
-                "cacheRead": cached,
-                "cacheWrite": 0,
-                "reasoning": reasoning,
-                "cost": self.pricing_db.get_cost(
-                    model, fresh_input, output_incl_reasoning, cached, 0
-                ),
-                "timestamp": ts_ms,
-                "entry_id": f"freebuff:{row['thread_id']}:{row['seq']}",
-                "_billing": usage_billing_pricing(
-                    [c for c in dict.fromkeys([model, f"{provider}/{model}" if provider else model]) if c],
-                    input_tokens=fresh_input,
-                    output_tokens=output_incl_reasoning,
-                    cache_read=cached,
-                    cache_write=0,
-                ),
-            })
         return out
 
     def _parse_all(self) -> List[Dict[str, Any]]:

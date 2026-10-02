@@ -65,6 +65,25 @@ CREATE TABLE messages (
 )
 """
 
+# The autonomous (mission / auto-run) loop's per-decision ledger. Only
+# manager_json is read by the parser; outcome_json is deliberately not.
+_RECEIPTS_DDL = """
+CREATE TABLE auto_run_decision_receipts (
+  id                  TEXT PRIMARY KEY,
+  thread_id           TEXT NOT NULL,
+  campaign_started_at INTEGER NOT NULL,
+  ordinal             INTEGER NOT NULL,
+  effort              INTEGER NOT NULL,
+  status              TEXT NOT NULL,
+  queue_item_id       TEXT,
+  decision_json       TEXT,
+  manager_json        TEXT NOT NULL,
+  outcome_json        TEXT,
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL
+)
+"""
+
 
 def _metrics(
     *,
@@ -94,12 +113,78 @@ def _metrics(
     })
 
 
+def _manager(
+    *,
+    model=MODEL_HANDLE,
+    input_tokens=0,
+    cached_input=0,
+    output_tokens=0,
+    reasoning=0,
+    duration_ms=20000,
+    usage=True,
+    cost_usd=0,
+):
+    """A ``manager_json`` payload: the mission manager's own model call.
+
+    Shape taken from a live row. ``usage=False`` reproduces a cancelled or
+    failed decision, which persists ``usage: {}``.
+    """
+    payload = {
+        "harnessId": "codebuff",
+        "model": model,
+        "startedAt": TS_MS,
+        "finishedAt": TS_MS + duration_ms,
+        "durationMs": duration_ms,
+        "costUsd": cost_usd,
+    }
+    if usage:
+        payload["usage"] = {
+            "inputTokens": input_tokens,
+            "cachedInputTokens": cached_input,
+            "outputTokens": output_tokens,
+            "reasoningOutputTokens": reasoning,
+            "totalTokens": input_tokens + output_tokens,
+        }
+    else:
+        payload["usage"] = {}
+        payload["usageIncomplete"] = True
+    return json.dumps(payload)
+
+
+def _outcome(
+    *,
+    input_tokens=0,
+    cached_input=0,
+    output_tokens=0,
+    reasoning=0,
+):
+    """An ``outcome_json`` payload.
+
+    Its ``usage`` restates the turn's final assistant message, so the parser
+    must NOT read it — tests use it to prove no double-count.
+    """
+    return json.dumps({
+        "queuedAt": TS_MS,
+        "startedAt": TS_MS,
+        "finishedAt": TS_MS + 1000,
+        "turnOutcome": "completed",
+        "usage": {
+            "inputTokens": input_tokens,
+            "cachedInputTokens": cached_input,
+            "outputTokens": output_tokens,
+            "reasoningOutputTokens": reasoning,
+            "totalTokens": input_tokens + output_tokens,
+        },
+    })
+
+
 def _make_db(
     project_dir: Path,
     *,
     thread_id="t1",
     model=MODEL_QUALIFIED,
     messages=(),
+    receipts=(),
     checkpoint=True,
 ) -> Path:
     """Create one project's ``desktop-v2.db``.
@@ -107,8 +192,14 @@ def _make_db(
     ``messages`` is a sequence of ``(role, metrics_json, ts)``; ``None`` for
     metrics writes the column default ``'{}'`` (the shipped column is
     ``TEXT NOT NULL DEFAULT '{}'``, so a message without usage still holds an
-    object, never SQL NULL). ``checkpoint=False`` leaves the rows in the WAL
-    (never truncating it) so the snapshot path is exercised for real.
+    object, never SQL NULL).
+
+    ``receipts`` is a sequence of ``(receipt_id, manager_json, outcome_json,
+    updated_at)`` for the auto-run ledger; ``None`` manager/outcome writes SQL
+    NULL for that column.
+
+    ``checkpoint=False`` leaves the rows in the WAL (never truncating it) so
+    the snapshot path is exercised for real.
     """
     project_dir.mkdir(parents=True, exist_ok=True)
     db = project_dir / "desktop-v2.db"
@@ -119,6 +210,7 @@ def _make_db(
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(_THREADS_DDL)
         conn.execute(_MESSAGES_DDL)
+        conn.execute(_RECEIPTS_DDL)
         conn.execute(
             "INSERT INTO threads (id, project_id, project_path, title, model, "
             "harness_id, agent_mode, created_at) VALUES (?, 'p1', ?, 'T', ?, "
@@ -130,6 +222,15 @@ def _make_db(
                 "INSERT INTO messages (thread_id, role, metrics_json, ts) "
                 "VALUES (?, ?, ?, ?)",
                 (thread_id, role, metrics_json if metrics_json is not None else "{}", ts),
+            )
+        for receipt_id, manager_json, outcome_json, updated_at in receipts:
+            conn.execute(
+                "INSERT INTO auto_run_decision_receipts (id, thread_id, "
+                "campaign_started_at, ordinal, effort, status, manager_json, "
+                "outcome_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, 1, 3, 'completed', ?, ?, ?, ?)",
+                (receipt_id, thread_id, TS_MS, manager_json, outcome_json,
+                 TS_MS, updated_at),
             )
         conn.commit()
         if checkpoint:
@@ -386,6 +487,7 @@ def test_rows_left_in_the_wal_are_read(monkeypatch, tmp_path):
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(_THREADS_DDL)
         conn.execute(_MESSAGES_DDL)
+        conn.execute(_RECEIPTS_DDL)
         conn.execute(
             "INSERT INTO threads (id, project_id, project_path, title, model, "
             "harness_id, agent_mode, created_at) VALUES ('t1', 'p1', ?, 'T', ?, "
@@ -420,6 +522,7 @@ def test_read_never_creates_sidecars_in_the_source_tree(monkeypatch, tmp_path):
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(_THREADS_DDL)
         conn.execute(_MESSAGES_DDL)
+        conn.execute(_RECEIPTS_DDL)
         conn.execute(
             "INSERT INTO threads (id, project_id, project_path, title, model, "
             "harness_id, agent_mode, created_at) VALUES ('t1', 'p1', ?, 'T', ?, "
@@ -469,7 +572,7 @@ def test_registered_and_declares_capabilities():
     assert parser.sync_capability.session_store is False
     # Stored persistently, so it must declare an identity (the registry test
     # in test_usage_cache_identity enforces the same rule globally).
-    assert parser.persistent_parser_version == 1
+    assert parser.persistent_parser_version == 2
     assert parser.persistent_parser_signature()["object"].endswith("FreebuffParser")
 
 
@@ -496,3 +599,180 @@ def test_billing_record_is_priceable(monkeypatch, tmp_path):
     assert billing["cache_read"] == 400
     assert billing["cache_write"] == 0
     assert ct.usage_entry_cost(billing, PricingDatabase()) == e["cost"]
+
+
+# --- auto-run manager usage -------------------------------------------------
+
+
+def test_manager_usage_is_counted(monkeypatch, tmp_path):
+    """The mission manager's decision call is billed but is NOT an assistant
+    message, so it is its own entry."""
+    _make_db(
+        _projects(tmp_path) / "p1",
+        model=MODEL_QUALIFIED,
+        messages=[("assistant", _metrics(input_tokens=10, output_tokens=5), TS_MS)],
+        receipts=[
+            ("rec-1", _manager(model="m-aaaa1111", input_tokens=1000,
+                               cached_input=400, output_tokens=50, reasoning=10),
+             None, TS_MS + 500),
+        ],
+    )
+    entries = _fresh(monkeypatch, tmp_path)._parse_all()
+
+    assert len(entries) == 2
+    receipt = [e for e in entries if ":receipt:" in e["entry_id"]]
+    assert len(receipt) == 1
+    e = receipt[0]
+    # Same cache/reasoning split as a message row.
+    assert (e["input"], e["cacheRead"]) == (600, 400)
+    assert (e["output"], e["reasoning"]) == (40, 10)
+    # The manager's OWN model wins over the thread's.
+    assert e["model"] == "m-aaaa1111"
+    assert e["timestamp"] == TS_MS + 500
+    assert e["entry_id"] == "freebuff:t1:receipt:rec-1"
+
+
+def test_manager_usage_falls_back_to_the_thread_model(monkeypatch, tmp_path):
+    """A manager payload without its own model prices at the thread's."""
+    _make_db(
+        _projects(tmp_path) / "p1",
+        model=MODEL_QUALIFIED,
+        messages=[],
+        receipts=[
+            ("rec-1", _manager(model=None, input_tokens=10, output_tokens=5),
+             None, TS_MS),
+        ],
+    )
+    e = _fresh(monkeypatch, tmp_path)._parse_all()[0]
+    assert e["model"] == "glm-5.3-flash"
+    assert e["provider"] == "z-ai"
+
+
+def test_outcome_json_is_never_read(monkeypatch, tmp_path):
+    """``outcome_json.usage`` restates the turn's final assistant message.
+
+    It is a verified duplicate in every live store (37/37 matched an existing
+    message row), so reading it would double-count every completed auto-run
+    turn. This is the guard for that.
+    """
+    _make_db(
+        _projects(tmp_path) / "p1",
+        model=MODEL_QUALIFIED,
+        messages=[
+            ("assistant", _metrics(input_tokens=1000, cached_input=900,
+                                   output_tokens=50), TS_MS),
+        ],
+        receipts=[
+            # The outcome restates the message row above, exactly.
+            ("rec-1", _manager(usage=False), 
+             _outcome(input_tokens=1000, cached_input=900, output_tokens=50),
+             TS_MS + 10),
+        ],
+    )
+    entries = _fresh(monkeypatch, tmp_path)._parse_all()
+
+    # Only the message row: the manager had no usage and the outcome is ignored.
+    assert len(entries) == 1
+    assert entries[0]["entry_id"] == "freebuff:t1:1"
+    assert entries[0]["input"] == 100
+
+
+def test_incomplete_manager_usage_is_skipped(monkeypatch, tmp_path):
+    """A cancelled or failed decision persists ``usage: {}`` — not usage."""
+    _make_db(
+        _projects(tmp_path) / "p1",
+        messages=[],
+        receipts=[
+            ("rec-1", _manager(usage=False), None, TS_MS),
+            ("rec-2", _manager(input_tokens=7, output_tokens=3), None, TS_MS + 1),
+        ],
+    )
+    entries = _fresh(monkeypatch, tmp_path)._parse_all()
+    assert [e["entry_id"] for e in entries] == ["freebuff:t1:receipt:rec-2"]
+
+
+def test_manager_and_message_entry_ids_never_collide(monkeypatch, tmp_path):
+    """A receipt key must be distinct from every message key, or the store's
+    (source, entry_key) upsert would silently drop one of them."""
+    _make_db(
+        _projects(tmp_path) / "p1",
+        messages=[
+            ("assistant", _metrics(input_tokens=1, output_tokens=1), TS_MS),
+            ("assistant", _metrics(input_tokens=2, output_tokens=2), TS_MS + 1),
+        ],
+        receipts=[
+            ("1", _manager(input_tokens=3, output_tokens=3), None, TS_MS + 2),
+        ],
+    )
+    entries = _fresh(monkeypatch, tmp_path)._parse_all()
+    ids = [e["entry_id"] for e in entries]
+    assert len(ids) == len(set(ids)) == 3
+    # The receipt id "1" must not masquerade as message seq 1.
+    assert "freebuff:t1:receipt:1" in ids
+    assert "freebuff:t1:1" in ids
+
+
+def test_manager_entries_are_stable_across_reads(monkeypatch, tmp_path):
+    _make_db(
+        _projects(tmp_path) / "p1",
+        messages=[],
+        receipts=[("rec-1", _manager(input_tokens=5, output_tokens=5), None, TS_MS)],
+    )
+    parser = _fresh(monkeypatch, tmp_path)
+    assert [e["entry_id"] for e in parser._parse_all()] == ["freebuff:t1:receipt:rec-1"]
+    assert [e["entry_id"] for e in parser._parse_all()] == ["freebuff:t1:receipt:rec-1"]
+
+
+def test_manager_usage_survives_the_live_wal(monkeypatch, tmp_path):
+    """Manager rows live in the -wal too while the app is open."""
+    project = _projects(tmp_path) / "p1"
+    project.mkdir(parents=True, exist_ok=True)
+    db = project / "desktop-v2.db"
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(_THREADS_DDL)
+        conn.execute(_MESSAGES_DDL)
+        conn.execute(_RECEIPTS_DDL)
+        conn.execute(
+            "INSERT INTO threads (id, project_id, project_path, title, model, "
+            "harness_id, agent_mode, created_at) VALUES ('t1', 'p1', ?, 'T', ?, "
+            "'codebuff', 'build', ?)",
+            (str(project), MODEL_QUALIFIED, TS_MS),
+        )
+        conn.execute(
+            "INSERT INTO auto_run_decision_receipts (id, thread_id, "
+            "campaign_started_at, ordinal, effort, status, manager_json, "
+            "created_at, updated_at) VALUES ('rec-1', 't1', ?, 1, 3, 'completed', ?, ?, ?)",
+            (TS_MS, _manager(input_tokens=42, output_tokens=8), TS_MS, TS_MS + 9),
+        )
+        conn.commit()
+        assert (project / "desktop-v2.db-wal").exists()
+
+        entries = _fresh(monkeypatch, tmp_path)._parse_all()
+        assert len(entries) == 1
+        assert entries[0]["input"] == 42
+    finally:
+        conn.close()
+
+
+def test_manager_billing_record_is_priceable(monkeypatch, tmp_path):
+    _make_db(
+        _projects(tmp_path) / "p1",
+        model=MODEL_QUALIFIED,
+        messages=[],
+        receipts=[
+            ("rec-1", _manager(model=MODEL_QUALIFIED, input_tokens=1000,
+                               cached_input=400, output_tokens=100, reasoning=25),
+             None, TS_MS),
+        ],
+    )
+    e = _fresh(monkeypatch, tmp_path)._parse_all()[0]
+    b = e["_billing"]
+    assert b["kind"] == "pricing"
+    # Billing keeps the FULL completion (reasoning billed at the output rate).
+    assert b["input"] == 600
+    assert b["output"] == 100
+    assert b["cache_read"] == 400
+    assert ct.usage_entry_cost(b, PricingDatabase()) == e["cost"]
+    assert e["cost"] > 0
