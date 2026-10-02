@@ -776,3 +776,55 @@ def test_manager_billing_record_is_priceable(monkeypatch, tmp_path):
     assert b["cache_read"] == 400
     assert ct.usage_entry_cost(b, PricingDatabase()) == e["cost"]
     assert e["cost"] > 0
+
+
+def test_old_store_without_the_receipts_table_still_reads_messages(monkeypatch, tmp_path):
+    """A store written before the auto-run ledger existed must still yield its
+    message usage.
+
+    The desktop app migrates its schema additively, so an older build's store
+    legitimately lacks ``auto_run_decision_receipts``. An unguarded query would
+    raise, and ``_parse_all`` discards the WHOLE database on an error — so the
+    missing table would silently erase every message entry too. Regression test
+    for exactly that.
+    """
+    project = _projects(tmp_path) / "old"
+    project.mkdir(parents=True, exist_ok=True)
+    db = project / "desktop-v2.db"
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(_THREADS_DDL)
+        conn.execute(_MESSAGES_DDL)
+        # Deliberately NO _RECEIPTS_DDL.
+        conn.execute(
+            "INSERT INTO threads (id, project_id, project_path, title, model, "
+            "harness_id, agent_mode, created_at) VALUES ('t1', 'p1', ?, 'T', ?, "
+            "'codebuff', 'build', ?)",
+            (str(project), MODEL_QUALIFIED, TS_MS),
+        )
+        conn.execute(
+            "INSERT INTO messages (thread_id, role, metrics_json, ts) "
+            "VALUES ('t1', 'assistant', ?, ?)",
+            (_metrics(input_tokens=1000, cached_input=900, output_tokens=50,
+                      reasoning=10), TS_MS),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    entries = _fresh(monkeypatch, tmp_path)._parse_all()
+
+    assert len(entries) == 1, "message usage must survive a missing receipts table"
+    e = entries[0]
+    assert (e["input"], e["cacheRead"], e["output"], e["reasoning"]) == (100, 900, 40, 10)
+
+
+def test_has_table_detects_presence_and_absence(monkeypatch, tmp_path):
+    _make_db(_projects(tmp_path) / "p1")
+    conn = sqlite3.connect(_projects(tmp_path) / "p1" / "desktop-v2.db")
+    try:
+        assert FreebuffParser._has_table(conn, "messages") is True
+        assert FreebuffParser._has_table(conn, "auto_run_decision_receipts") is True
+        assert FreebuffParser._has_table(conn, "no_such_table") is False
+    finally:
+        conn.close()

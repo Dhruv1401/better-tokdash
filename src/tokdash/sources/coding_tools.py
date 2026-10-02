@@ -8298,8 +8298,14 @@ class FreebuffParser(BaseParser):
     and manager entries on ``freebuff:<thread_id>:receipt:<receipt_id>``. The
     two prefixes cannot collide — ``receipt:`` is not a valid ``seq`` — so a
     receipt whose id happens to be ``"1"`` never masquerades as message 1.
-    Two projects are disjoint stores with disjoint thread ids, so both keys are
-    source-global.
+
+    The keys are source-global only because the thread id is unique across
+    stores, and that is a property of the app, not of this parser: thread ids
+    are ``crypto.randomUUID()`` (verified in the shipped bundle) and no live
+    thread id appears in more than one project store (verified across four
+    stores). A hypothetical build that copied a thread row between stores
+    would collide on ``(source, entry_key)``, and the store's upsert would keep
+    one — the same exposure every other thread-scoped source has.
 
     Storage mode: the store is WAL-mode and the desktop app keeps it open
     while running, so it is read through the shared copy-and-snapshot helper
@@ -8369,6 +8375,24 @@ class FreebuffParser(BaseParser):
             if provider.strip() and rest.strip():
                 return provider.strip(), rest.strip()
         return "", text
+
+    @staticmethod
+    def _has_table(conn: sqlite3.Connection, name: str) -> bool:
+        """Whether the store carries *name*.
+
+        The desktop app migrates its schema additively, so a store written by
+        an older build legitimately lacks a newer table. Callers use this to
+        degrade to "that feature contributes nothing" instead of raising, which
+        matters because _parse_all discards a whole database on an error.
+        """
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (name,),
+            ).fetchone()
+        except sqlite3.Error:
+            return False
+        return row is not None
 
     @staticmethod
     def _split_buckets(usage: Dict[str, Any]) -> Optional[Tuple[int, int, int, int]]:
@@ -8449,6 +8473,12 @@ class FreebuffParser(BaseParser):
         out: List[Dict[str, Any]] = []
 
         # --- 1. Assistant message rows: the conversation itself. -------------
+        # Guarded like the receipts table below, and for the same reason: a
+        # store old enough to lack this table must degrade to "this source
+        # contributes nothing", not raise into _parse_all's per-database
+        # handler (which would discard the whole store).
+        if not self._has_table(conn, "messages") or not self._has_table(conn, "threads"):
+            return out
         # One pass over assistant rows, joined to their thread's model. The
         # thread's model applies to every row in it, so a per-thread lookup is
         # enough; done as a JOIN rather than two queries so a store with a
@@ -8495,6 +8525,16 @@ class FreebuffParser(BaseParser):
         # token tuples). Reading it would double-count every completed
         # auto-run turn, so it is deliberately NOT read. Only the manager
         # usage is taken.
+        #
+        # The table is a LATER addition to the schema and the app migrates
+        # additively, so a store written by an older build legitimately lacks
+        # it. Absence must cost only the manager entries, never the message
+        # entries above: an unguarded query would raise here, and _parse_all's
+        # per-database handler would then discard the whole store. Checked
+        # rather than caught, so a genuinely malformed table still surfaces as
+        # a real error instead of silently reading as "no manager usage".
+        if not self._has_table(conn, "auto_run_decision_receipts"):
+            return out
         for row in conn.execute(
             "SELECT r.id AS id, r.thread_id AS thread_id, r.manager_json AS manager_json, "
             "       r.updated_at AS updated_at, t.model AS thread_model "
