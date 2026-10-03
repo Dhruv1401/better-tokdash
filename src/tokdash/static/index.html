@@ -970,99 +970,119 @@
       color: var(--color-primary);
     }
 
+    /* Arc UI Segmented Control for Ranges */
+    .arc-segmented-control {
+      grid-area: quick;
+      position: relative;
+      display: inline-flex;
+      min-width: 0;
+      max-width: 100%;
+      flex-shrink: 1;
+      border: 1px solid var(--color-border);
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--color-surface-glass) 88%, var(--color-bg));
+      backdrop-filter: blur(14px);
+      padding: 3px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), inset 0 1px 1px rgba(255, 255, 255, 0.04);
+      justify-self: center;
+      overflow: hidden;
+    }
+
     .quick-range-panel {
       grid-area: quick;
-      display: flex;
-      flex-wrap: nowrap;
-      gap: 8px;
-      align-items: center;
       width: 100%;
       min-width: 0;
-      overflow: visible;
-      /* Centered at every width so the quick-range row reads as one balanced
-         block whether it sits under the picker (wide) or stacked (phone). */
+      display: flex;
       justify-content: center;
-    }
-
-    /* Mid widths: the rail sits beside the logo block, so a preset that no
-       longer fits got tucked into More even though the header had room.
-       Wrapping beats hiding when there is vertical space to spend. */
-    @media (min-width: 640px) and (max-width: 1279px) {
-      .quick-range-panel { flex-wrap: wrap; }
-    }
-
-    /* Report chips have no overflow menu; wrap them on narrow screens. */
-    #reportPeriodChips { flex-wrap: wrap; }
-
-    .quick-range-btn {
-      flex: 0 0 auto;
-      min-height: 32px;
-      padding: 4px 9px;
-      font-size: 12px;
-      white-space: nowrap;
-    }
-
-    .quick-range-more {
-      position: relative;
-      flex: 0 0 auto;
-    }
-
-    .quick-range-more-trigger {
-      display: inline-flex;
       align-items: center;
-      gap: 6px;
-      min-height: 32px;
-      padding: 4px 9px;
-      font-size: 12px;
     }
 
-    .quick-range-more-trigger[aria-pressed="true"] {
-      border-color: color-mix(in srgb, var(--color-primary) 58%, var(--color-border));
-      background: color-mix(in srgb, var(--color-primary) 12%, transparent);
-      color: var(--color-primary);
+    .arc-segmented-track {
+      --fade-start: 0px;
+      --fade-end: 0px;
+      isolation: isolate;
+      position: relative;
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      max-width: 100%;
+      gap: 2px;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      padding: 1px;
+      border-radius: inherit;
+      scrollbar-width: none;
+      -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent);
+      mask-image: linear-gradient(to right, transparent, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent);
+    }
+    .arc-segmented-track::-webkit-scrollbar {
+      display: none;
+    }
+    .arc-segmented-track[data-fade-start] {
+      --fade-start: 22px;
+    }
+    .arc-segmented-track[data-fade-end] {
+      --fade-end: 22px;
     }
 
-    .quick-range-more-chevron {
-      flex: 0 0 auto;
-      transition: transform var(--t-fast) ease;
-    }
-
-    .quick-range-more-trigger[aria-expanded="true"] .quick-range-more-chevron {
-      transform: rotate(180deg);
-    }
-
-    .quick-range-more-menu {
+    .arc-segmented-indicator {
       position: absolute;
-      z-index: 80;
-      top: calc(100% + 7px);
-      right: 0;
-      display: grid;
-      min-width: 168px;
-      gap: 3px;
-      padding: 6px;
-      border: 1px solid color-mix(in srgb, var(--color-primary) 18%, var(--color-border));
-      border-radius: 12px;
-      background: color-mix(in srgb, var(--color-surface-glass) 96%, var(--color-bg));
-      box-shadow: var(--shadow-md), 0 14px 34px color-mix(in srgb, var(--color-text) 13%, transparent);
-      backdrop-filter: blur(16px);
-      transform-origin: top right;
-      animation: quick-range-menu-in var(--t-fast) cubic-bezier(.16, 1, .3, 1);
+      z-index: 1;
+      top: 2px;
+      bottom: 2px;
+      left: 0;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--color-primary) 18%, var(--color-surface));
+      border: 1px solid color-mix(in srgb, var(--color-primary) 40%, var(--color-border));
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18), 0 0 10px color-mix(in srgb, var(--color-primary) 16%, transparent);
+      pointer-events: none;
+      opacity: 0;
+      transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), width 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease;
     }
 
-    .quick-range-more-menu[hidden] { display: none; }
-
-    .quick-range-more-menu .quick-range-btn {
-      width: 100%;
-      justify-content: flex-start;
-      min-height: 34px;
-      border-color: transparent;
-      background: transparent;
+    .quick-range-btn,
+    .arc-segmented-btn {
+      position: relative;
+      z-index: 2;
+      flex: 0 0 auto;
+      min-height: 28px;
+      border: 0 !important;
+      border-radius: 8px;
+      padding: 3px 10px;
+      background: transparent !important;
+      color: var(--color-muted);
+      font: inherit;
+      font-size: 11.5px;
+      font-weight: 500;
+      white-space: nowrap;
+      cursor: pointer;
+      outline: none;
+      box-shadow: none !important;
+      transition: color 0.15s cubic-bezier(0.2, 0, 0, 1);
+      -webkit-tap-highlight-color: transparent;
+    }
+    .quick-range-btn:hover,
+    .arc-segmented-btn:hover {
+      color: var(--color-text);
+    }
+    .quick-range-btn[aria-pressed="true"],
+    .arc-segmented-btn[aria-pressed="true"] {
+      color: var(--color-primary-light, #60a5fa);
+      font-weight: 600;
+      text-shadow: 0 0 12px color-mix(in srgb, var(--color-primary) 40%, transparent);
+    }
+    .quick-range-btn:focus-visible,
+    .arc-segmented-btn:focus-visible {
+      outline: 2px solid var(--color-primary);
+      outline-offset: 1px;
     }
 
-    @keyframes quick-range-menu-in {
-      from { opacity: 0; transform: translateY(-3px) scale(.98); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
+    /* Report window chips: wrap them on narrow screens. */
+    #reportPeriodChips {
+      flex-wrap: wrap;
+      gap: 6px;
     }
+
 
     .topbar-actions {
       grid-area: actions;
@@ -3306,24 +3326,19 @@
         <div class="topbar-control-rail">
           <!-- Quick Range Buttons -->
           <div class="quick-range-panel" id="overviewQuickRanges" role="toolbar" aria-labelledby="dateRangeControlLabel">
-            <button type="button" class="btn btn-ghost quick-range-btn" data-range="today" data-quick-primary aria-pressed="true" data-i18n="today">Today</button>
-            <button type="button" class="btn btn-ghost quick-range-btn" data-range="yesterday" data-quick-primary aria-pressed="false" data-i18n="yesterday">Yesterday</button>
-            <button type="button" class="btn btn-ghost quick-range-btn" data-range="last7days" data-quick-primary aria-pressed="false" data-i18n="last7days">Last 7 Days</button>
-            <button type="button" class="btn btn-ghost quick-range-btn" data-range="lastWeek" data-quick-primary aria-pressed="false" data-i18n="lastWeek">Last Week</button>
-            <button type="button" class="btn btn-ghost quick-range-btn" data-range="thisMonth" data-quick-primary aria-pressed="false" data-i18n="thisMonth">This Month</button>
-            <button type="button" class="btn btn-ghost quick-range-btn" data-range="lastMonth" data-quick-primary aria-pressed="false" data-i18n="lastMonth">Last Month</button>
-            <div class="quick-range-more">
-              <button id="quickRangeMoreToggle" type="button" class="btn btn-ghost quick-range-more-trigger" aria-expanded="false" aria-controls="quickRangeMoreMenu" aria-pressed="false">
-                <span id="quickRangeMoreLabel" data-i18n="moreRanges">More ranges</span>
-                <svg class="quick-range-more-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="m7 10 5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
-              <div id="quickRangeMoreMenu" class="quick-range-more-menu" role="group" aria-labelledby="quickRangeMoreLabel" hidden>
-                <button type="button" class="btn btn-ghost quick-range-btn" data-range="last14days" aria-pressed="false" data-i18n="last14days">Last 14 Days</button>
-                <button type="button" class="btn btn-ghost quick-range-btn" data-range="last4weeks" aria-pressed="false" data-i18n="last4weeks">Last 4 Weeks</button>
-                <button type="button" class="btn btn-ghost quick-range-btn" data-range="thisYear" aria-pressed="false" data-i18n="thisYear">This Year</button>
-                <button type="button" class="btn btn-ghost quick-range-btn" data-range="lastYear" aria-pressed="false" data-i18n="lastYear">Last Year</button>
+            <div class="arc-segmented-control" role="group" aria-label="Date range">
+              <div class="arc-segmented-track" id="quickRangesTrack">
+                <span class="arc-segmented-indicator" id="quickRangesIndicator" aria-hidden="true"></span>
+                <button type="button" class="btn btn-ghost quick-range-btn arc-segmented-btn" data-range="today" aria-pressed="true" data-i18n="today">Today</button>
+                <button type="button" class="btn btn-ghost quick-range-btn arc-segmented-btn" data-range="yesterday" aria-pressed="false" data-i18n="yesterday">Yesterday</button>
+                <button type="button" class="btn btn-ghost quick-range-btn arc-segmented-btn" data-range="last7days" aria-pressed="false" data-i18n="last7days">Last 7 Days</button>
+                <button type="button" class="btn btn-ghost quick-range-btn arc-segmented-btn" data-range="lastWeek" aria-pressed="false" data-i18n="lastWeek">Last Week</button>
+                <button type="button" class="btn btn-ghost quick-range-btn arc-segmented-btn" data-range="last14days" aria-pressed="false" data-i18n="last14days">Last 14 Days</button>
+                <button type="button" class="btn btn-ghost quick-range-btn arc-segmented-btn" data-range="last4weeks" aria-pressed="false" data-i18n="last4weeks">Last 4 Weeks</button>
+                <button type="button" class="btn btn-ghost quick-range-btn arc-segmented-btn" data-range="thisMonth" aria-pressed="false" data-i18n="thisMonth">This Month</button>
+                <button type="button" class="btn btn-ghost quick-range-btn arc-segmented-btn" data-range="lastMonth" aria-pressed="false" data-i18n="lastMonth">Last Month</button>
+                <button type="button" class="btn btn-ghost quick-range-btn arc-segmented-btn" data-range="thisYear" aria-pressed="false" data-i18n="thisYear">This Year</button>
+                <button type="button" class="btn btn-ghost quick-range-btn arc-segmented-btn" data-range="lastYear" aria-pressed="false" data-i18n="lastYear">Last Year</button>
               </div>
             </div>
           </div>
@@ -12851,18 +12866,12 @@
       // A trigger the CDN banner disabled keeps saying why, through every
       // range change and language switch, instead of inviting a click.
       trigger.setAttribute('title', t(trigger.disabled ? 'cdnFlatpickrFailed' : 'selectRange'));
-      let isSecondaryActive = false;
       document.querySelectorAll('.quick-range-btn').forEach((button) => {
         const isActive = button.dataset.range === activeQuickRange;
         button.setAttribute('aria-pressed', String(isActive));
-        if (isActive && button.closest('#quickRangeMoreMenu')) isSecondaryActive = true;
       });
-      const moreToggle = document.getElementById('quickRangeMoreToggle');
-      const moreLabel = document.getElementById('quickRangeMoreLabel');
-      moreToggle?.setAttribute('aria-pressed', String(isSecondaryActive));
-      if (moreLabel) {
-        moreLabel.textContent = isSecondaryActive ? t(activeQuickRange) : t('moreRanges');
-      }
+      if (typeof syncSegmentedIndicator === 'function') syncSegmentedIndicator();
+      if (typeof syncSegmentedEdges === 'function') syncSegmentedEdges();
     }
 
     function syncDatePickerFooter() {
@@ -13063,81 +13072,79 @@
       return { startDate, endDate };
     }
 
-    function setQuickRangeMoreOpen(isOpen, restoreFocus = false) {
-      const toggle = document.getElementById('quickRangeMoreToggle');
-      const menu = document.getElementById('quickRangeMoreMenu');
-      if (!toggle || !menu) return;
-      menu.hidden = !isOpen;
-      toggle.setAttribute('aria-expanded', String(isOpen));
-      if (!isOpen && restoreFocus) toggle.focus();
+    function syncSegmentedEdges() {
+      const track = document.getElementById('quickRangesTrack');
+      if (!track) return;
+      const rest = track.scrollWidth - track.clientWidth - track.scrollLeft;
+      track.toggleAttribute('data-fade-start', track.scrollLeft > 1);
+      track.toggleAttribute('data-fade-end', rest > 1);
     }
 
-    const quickRangeMore = document.querySelector('.quick-range-more');
-    const quickRangeMoreToggle = document.getElementById('quickRangeMoreToggle');
-    const quickRangeMoreMenu = document.getElementById('quickRangeMoreMenu');
-    const quickRangePanel = document.querySelector('.quick-range-panel');
-    const quickRangePrimaryButtons = Array.from(document.querySelectorAll('[data-quick-primary]'));
-    let quickRangeLayoutFrame = null;
+    function syncSegmentedIndicator() {
+      const track = document.getElementById('quickRangesTrack');
+      const indicator = document.getElementById('quickRangesIndicator');
+      if (!track || !indicator) return;
+      const activeBtn = track.querySelector('.arc-segmented-btn[aria-pressed="true"]');
+      if (!activeBtn) {
+        indicator.style.opacity = '0';
+        return;
+      }
+      indicator.style.opacity = '1';
+      indicator.style.transform = `translateX(${activeBtn.offsetLeft}px)`;
+      indicator.style.width = `${activeBtn.offsetWidth}px`;
 
-    function quickRangeRequiredWidth() {
-      if (!quickRangePanel) return 0;
-      const children = Array.from(quickRangePanel.children);
-      const styles = window.getComputedStyle(quickRangePanel);
-      const gap = Number.parseFloat(styles.columnGap || styles.gap) || 0;
-      return children.reduce((total, child) => total + child.offsetWidth, 0)
-        + Math.max(0, children.length - 1) * gap;
+      // Arc UI pattern: ensure selected option is smoothly scrolled into view
+      if (track.scrollWidth > track.clientWidth) {
+        const room = 20;
+        const start = activeBtn.offsetLeft - room;
+        const end = activeBtn.offsetLeft + activeBtn.offsetWidth + room - track.clientWidth;
+        const left = track.scrollLeft > start ? start : track.scrollLeft < end ? end : track.scrollLeft;
+        if (left !== track.scrollLeft) {
+          track.scrollTo({ left: Math.max(0, left), behavior: 'smooth' });
+        }
+      }
     }
 
-    function syncQuickRangeLayout() {
-      if (!quickRangePanel || !quickRangeMore || !quickRangeMoreMenu) return;
-
-      // Start from the preferred desktop set, then progressively move the least
-      // important visible presets into the existing disclosure until one row fits.
-      quickRangePrimaryButtons.forEach((button) => {
-        quickRangePanel.insertBefore(button, quickRangeMore);
+    const quickRangesTrack = document.getElementById('quickRangesTrack');
+    if (quickRangesTrack) {
+      quickRangesTrack.addEventListener('scroll', syncSegmentedEdges, { passive: true });
+      if (typeof ResizeObserver === 'function') {
+        new ResizeObserver(() => {
+          syncSegmentedEdges();
+          syncSegmentedIndicator();
+        }).observe(quickRangesTrack);
+      } else {
+        window.addEventListener('resize', () => {
+          syncSegmentedEdges();
+          syncSegmentedIndicator();
+        }, { passive: true });
+      }
+      document.fonts?.ready?.then(() => {
+        syncSegmentedEdges();
+        syncSegmentedIndicator();
       });
-      syncDateRangeControl();
 
-      // A wrapping row never hides presets — showing them all wins over
-      // single-row fit (see the 640–1279px flex-wrap rule).
-      if (window.getComputedStyle(quickRangePanel).flexWrap !== 'nowrap') return;
-
-      for (let index = quickRangePrimaryButtons.length - 1;
-        index > 0 && quickRangeRequiredWidth() > quickRangePanel.clientWidth;
-        index -= 1) {
-        quickRangeMoreMenu.prepend(quickRangePrimaryButtons[index]);
-        syncDateRangeControl();
-      }
-    }
-
-    function scheduleQuickRangeLayout() {
-      if (quickRangeLayoutFrame !== null) cancelAnimationFrame(quickRangeLayoutFrame);
-      quickRangeLayoutFrame = requestAnimationFrame(() => {
-        quickRangeLayoutFrame = null;
-        syncQuickRangeLayout();
+      quickRangesTrack.addEventListener('keydown', (e) => {
+        const buttons = Array.from(quickRangesTrack.querySelectorAll('.arc-segmented-btn'));
+        const activeIndex = buttons.findIndex(b => b.getAttribute('aria-pressed') === 'true');
+        const lastIndex = buttons.length - 1;
+        let targetIndex = -1;
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+          targetIndex = activeIndex === lastIndex ? 0 : activeIndex + 1;
+        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+          targetIndex = activeIndex === 0 ? lastIndex : activeIndex - 1;
+        } else if (e.key === 'Home') {
+          targetIndex = 0;
+        } else if (e.key === 'End') {
+          targetIndex = lastIndex;
+        }
+        if (targetIndex >= 0 && buttons[targetIndex]) {
+          e.preventDefault();
+          buttons[targetIndex].click();
+          buttons[targetIndex].focus({ preventScroll: true });
+        }
       });
     }
-
-    if (quickRangePanel && typeof ResizeObserver === 'function') {
-      new ResizeObserver(scheduleQuickRangeLayout).observe(quickRangePanel);
-    } else {
-      window.addEventListener('resize', scheduleQuickRangeLayout, { passive: true });
-    }
-    document.fonts?.ready.then(scheduleQuickRangeLayout);
-
-    quickRangeMoreToggle?.addEventListener('click', () => {
-      setQuickRangeMoreOpen(Boolean(quickRangeMoreMenu?.hidden));
-    });
-    document.addEventListener('click', (event) => {
-      if (!quickRangeMoreMenu?.hidden && !quickRangeMore?.contains(event.target)) {
-        setQuickRangeMoreOpen(false);
-      }
-    });
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && !quickRangeMoreMenu?.hidden) {
-        setQuickRangeMoreOpen(false, true);
-      }
-    });
 
     // Quick range buttons
     document.querySelectorAll('.quick-range-btn').forEach(btn => {
@@ -13156,7 +13163,6 @@
           triggerPickerSync: true,
           rangeKey: range,
         });
-        if (this.closest('#quickRangeMoreMenu')) setQuickRangeMoreOpen(false, true);
       });
     });
 
