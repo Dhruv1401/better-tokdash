@@ -20,6 +20,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from tokdash import clientpaths
 from tokdash.pricing import PricingDatabase
 from tokdash.sources import coding_tools as ct
@@ -46,6 +48,8 @@ CREATE TABLE threads (
   title TEXT NOT NULL DEFAULT 'New thread',
   model TEXT,
   harness_id TEXT,
+  sponsored INTEGER DEFAULT 0,
+  byok_connection TEXT,
   agent_mode TEXT NOT NULL DEFAULT 'build',
   created_at INTEGER NOT NULL
 )
@@ -115,6 +119,7 @@ def _metrics(
 
 def _manager(
     *,
+    harness_id="codebuff",
     model=MODEL_HANDLE,
     input_tokens=0,
     cached_input=0,
@@ -130,13 +135,14 @@ def _manager(
     failed decision, which persists ``usage: {}``.
     """
     payload = {
-        "harnessId": "codebuff",
         "model": model,
         "startedAt": TS_MS,
         "finishedAt": TS_MS + duration_ms,
         "durationMs": duration_ms,
         "costUsd": cost_usd,
     }
+    if harness_id is not None:
+        payload["harnessId"] = harness_id
     if usage:
         payload["usage"] = {
             "inputTokens": input_tokens,
@@ -183,6 +189,9 @@ def _make_db(
     *,
     thread_id="t1",
     model=MODEL_QUALIFIED,
+    harness_id="codebuff",
+    sponsored=0,
+    byok_connection=None,
     messages=(),
     receipts=(),
     checkpoint=True,
@@ -213,9 +222,9 @@ def _make_db(
         conn.execute(_RECEIPTS_DDL)
         conn.execute(
             "INSERT INTO threads (id, project_id, project_path, title, model, "
-            "harness_id, agent_mode, created_at) VALUES (?, 'p1', ?, 'T', ?, "
-            "'codebuff', 'build', ?)",
-            (thread_id, str(project_dir), model, TS_MS),
+            "harness_id, sponsored, byok_connection, agent_mode, created_at) "
+            "VALUES (?, 'p1', ?, 'T', ?, ?, ?, ?, 'build', ?)",
+            (thread_id, str(project_dir), model, harness_id, sponsored, byok_connection, TS_MS),
         )
         for role, metrics_json, ts in messages:
             conn.execute(
@@ -572,7 +581,7 @@ def test_registered_and_declares_capabilities():
     assert parser.sync_capability.session_store is False
     # Stored persistently, so it must declare an identity (the registry test
     # in test_usage_cache_identity enforces the same rule globally).
-    assert parser.persistent_parser_version == 2
+    assert parser.persistent_parser_version == 3
     assert parser.persistent_parser_signature()["object"].endswith("FreebuffParser")
 
 
@@ -828,3 +837,149 @@ def test_has_table_detects_presence_and_absence(monkeypatch, tmp_path):
         assert FreebuffParser._has_table(conn, "no_such_table") is False
     finally:
         conn.close()
+
+
+# --- harness filtering & double-counting prevention ------------------------
+
+
+def test_claude_code_and_codex_harnesses_are_skipped(monkeypatch, tmp_path):
+    """Turns running under claude-code or codex harnesses spawn external CLIs
+    that log to ~/.claude and ~/.codex, which Tokdash parses separately.
+    Counting them in Freebuff would double-count."""
+    _make_db(
+        _projects(tmp_path) / "p1",
+        thread_id="t-claude",
+        harness_id="claude-code",
+        messages=[("assistant", _metrics(input_tokens=10, output_tokens=10), TS_MS)],
+    )
+    _make_db(
+        _projects(tmp_path) / "p2",
+        thread_id="t-codex",
+        harness_id="codex",
+        messages=[("assistant", _metrics(input_tokens=20, output_tokens=20), TS_MS + 1)],
+    )
+    _make_db(
+        _projects(tmp_path) / "p3",
+        thread_id="t-codebuff",
+        harness_id="codebuff",
+        messages=[("assistant", _metrics(input_tokens=30, output_tokens=30), TS_MS + 2)],
+    )
+    entries = _fresh(monkeypatch, tmp_path)._parse_all()
+    assert len(entries) == 1
+    assert entries[0]["entry_id"] == "freebuff:t-codebuff:1"
+    assert entries[0]["input"] == 30
+
+
+def test_null_harness_falls_back_to_state_json_agent_harness(monkeypatch, tmp_path):
+    """When threads.harness_id is NULL, effective harness follows state.json.agentHarness
+    (orchestrator.js L199580 & L176831)."""
+    # 1. state.json specifies "claude-code": NULL harness thread must be skipped.
+    state_file = tmp_path / ".config" / "freebuff-desktop" / "state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"agentHarness": "claude-code"}), encoding="utf-8")
+
+    _make_db(
+        _projects(tmp_path) / "p1",
+        thread_id="t-null",
+        harness_id=None,
+        messages=[("assistant", _metrics(input_tokens=10, output_tokens=10), TS_MS)],
+    )
+    parser = _fresh(monkeypatch, tmp_path)
+    assert parser._parse_all() == []
+
+    # 2. state.json specifies "codebuff": NULL harness thread is counted.
+    state_file.write_text(json.dumps({"agentHarness": "codebuff"}), encoding="utf-8")
+    entries = _fresh(monkeypatch, tmp_path)._parse_all()
+    assert len(entries) == 1
+    assert entries[0]["entry_id"] == "freebuff:t-null:1"
+
+    # 3. state.json missing: defaults to "codebuff" fallback and is counted.
+    state_file.unlink()
+    entries = _fresh(monkeypatch, tmp_path)._parse_all()
+    assert len(entries) == 1
+    assert entries[0]["entry_id"] == "freebuff:t-null:1"
+
+
+def test_sponsored_and_byok_turns_always_route_to_codebuff(monkeypatch, tmp_path):
+    """Sponsored tasks and BYOK tasks always route to codebuff even if thread
+    harness_id is set to claude-code or codex (orchestrator.js L199580)."""
+    _make_db(
+        _projects(tmp_path) / "p-sponsored",
+        thread_id="t-spons",
+        harness_id="claude-code",
+        sponsored=1,
+        messages=[("assistant", _metrics(input_tokens=50, output_tokens=5), TS_MS)],
+    )
+    _make_db(
+        _projects(tmp_path) / "p-byok",
+        thread_id="t-byok",
+        harness_id="codex",
+        byok_connection=json.dumps({"connectionId": "byok-1", "revision": 1}),
+        messages=[("assistant", _metrics(input_tokens=70, output_tokens=7), TS_MS + 1)],
+    )
+    entries = _fresh(monkeypatch, tmp_path)._parse_all()
+    assert len(entries) == 2
+    ids = {e["entry_id"] for e in entries}
+    assert ids == {"freebuff:t-spons:1", "freebuff:t-byok:1"}
+
+
+def test_auto_run_receipts_filter_on_manager_harness(monkeypatch, tmp_path):
+    """auto_run_decision_receipts filter on manager_json.harnessId (codebuff only)."""
+    _make_db(
+        _projects(tmp_path) / "p1",
+        messages=[],
+        receipts=[
+            ("rec-claude", _manager(harness_id="claude-code", input_tokens=10, output_tokens=1), None, TS_MS),
+            ("rec-codex", _manager(harness_id="codex", input_tokens=20, output_tokens=2), None, TS_MS + 1),
+            ("rec-codebuff", _manager(harness_id="codebuff", input_tokens=30, output_tokens=3), None, TS_MS + 2),
+            ("rec-default", _manager(harness_id=None, input_tokens=40, output_tokens=4), None, TS_MS + 3),
+        ],
+    )
+    entries = _fresh(monkeypatch, tmp_path)._parse_all()
+    assert len(entries) == 2
+    entry_ids = [e["entry_id"] for e in entries]
+    assert entry_ids == ["freebuff:t1:receipt:rec-codebuff", "freebuff:t1:receipt:rec-default"]
+
+
+# --- state path relocation & strict file parsing ---------------------------
+
+
+def test_freebuff_desktop_state_path_relocates_home_and_projects(monkeypatch, tmp_path):
+    """FREEBUFF_DESKTOP_STATE_PATH relocates state.json and projects directory
+    (orchestrator.js L216763 & L182493)."""
+    custom_state = tmp_path / "relocated" / "custom-state.json"
+    custom_projects = tmp_path / "relocated" / "projects" / "p1"
+    monkeypatch.setenv("FREEBUFF_DESKTOP_STATE_PATH", str(custom_state))
+
+    assert clientpaths.freebuff_desktop_state_path() == custom_state
+    assert clientpaths.freebuff_desktop_home() == custom_state.parent
+
+    _make_db(custom_projects, messages=[("assistant", _metrics(input_tokens=15, output_tokens=5), TS_MS)])
+    db_paths = clientpaths.freebuff_desktop_db_paths()
+    assert len(db_paths) == 1
+    assert db_paths[0].resolve() == (custom_projects / "desktop-v2.db").resolve()
+
+    entries = _fresh(monkeypatch, tmp_path)._parse_all()
+    assert len(entries) == 1
+    assert entries[0]["input"] == 15
+
+
+def test_parse_file_strict_raises_usage_file_vanished_on_missing_db(monkeypatch, tmp_path):
+    parser = _fresh(monkeypatch, tmp_path)
+    missing = tmp_path / "does-not-exist" / "desktop-v2.db"
+    sig = (str(missing), 0, 0)
+    with pytest.raises(ct.UsageFileVanished):
+        parser._parse_file_strict(sig)
+
+
+def test_parse_file_strict_raises_on_corrupt_db(monkeypatch, tmp_path):
+    """A corrupt database raises rather than returning [] so sync_files does not
+    delete existing stored rows."""
+    bad = _projects(tmp_path) / "p-bad" / "desktop-v2.db"
+    bad.parent.mkdir(parents=True, exist_ok=True)
+    bad.write_bytes(b"not a sqlite db")
+    parser = _fresh(monkeypatch, tmp_path)
+    sig = (str(bad), 100, 100)
+    with pytest.raises((ct.ZCodeSnapshotError, sqlite3.Error, OSError)):
+        parser._parse_file_strict(sig)
+

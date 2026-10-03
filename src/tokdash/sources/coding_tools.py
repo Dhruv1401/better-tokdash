@@ -8314,6 +8314,31 @@ class FreebuffParser(BaseParser):
     state in the user's tree. Mode is file_replace: a thread's assistant rows
     are rewritten in place as turns complete, so each sync replaces the
     source's rows with the current values.
+
+    Agent harness filtering: Freebuff Desktop supports multiple agent harnesses
+    (``codebuff``, ``claude-code``, ``codex``). External harnesses (``claude-code``,
+    ``codex``) spawn their respective CLIs and write directly to ``~/.claude`` and
+    ``~/.codex``, which Tokdash already discovers and tracks under their own sources.
+    To prevent double-counting, Freebuff Desktop tracks ONLY turns and receipts whose
+    effective harness is ``codebuff``.
+    For assistant messages, the effective harness matches ``orchestrator.js``:
+      * Sponsored turns (``threads.sponsored``) or BYOK turns (``threads.byok_connection``)
+        always route to ``codebuff``;
+      * Otherwise, ``threads.harness_id ?? state.json.agentHarness ?? "codebuff"``.
+    For auto-run decisions, ``manager_json.harnessId`` (defaulting to ``"codebuff"``)
+    is checked; non-``codebuff`` decisions are skipped.
+
+    Legacy project stores: Older builds stored databases at
+    ``<project root>/.freebuff/desktop-v2.db``; modern builds copy them into
+    central app storage (``~/.config/freebuff-desktop/projects/<basename>-<uuid>/desktop-v2.db``)
+    via ``migrateLegacyDatabase`` on first reopen. Tokdash scans the app storage root;
+    unopened legacy project stores are not read until reopened.
+
+    Message rewinds & thread deletion: Freebuff allows rewinding turns
+    (``rewindAtUserMessage`` runs ``DELETE FROM messages WHERE seq >= $seq``) and
+    deleting threads (``ON DELETE CASCADE``). Because Freebuff syncs under ``file_replace``
+    mode, rewound turns and deleted threads are removed from the Tokdash store on the
+    next sync.
     =======================================================================
     """
 
@@ -8334,9 +8359,10 @@ class FreebuffParser(BaseParser):
     #    manager_json.usage — the mission manager's own model call, which is
     #    billed but is not an assistant message. outcome_json.usage is a
     #    verified duplicate of the turn's last message row and stays unread.
-    #    Bump is required: rows are stored, so an existing cache must be
-    #    rebuilt to pick the manager entries up.
-    persistent_parser_version = 2
+    # 3: filter turns and receipts whose effective harness is not "codebuff"
+    #    (claude-code and codex write to their own native logs, which Tokdash
+    #    already parses; counting them here would double-count).
+    persistent_parser_version = 3
 
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)
@@ -8362,6 +8388,25 @@ class FreebuffParser(BaseParser):
         )
 
     @staticmethod
+    def _read_default_harness() -> str:
+        """The fallback agent harness from Freebuff's ``state.json``.
+
+        ``orchestrator.js`` reads ``state.json.agentHarness``; when absent or
+        unrecognized, it falls back to ``"codebuff"``.
+        """
+        try:
+            state_path = clientpaths.freebuff_desktop_state_path()
+            if state_path.is_file():
+                data = json.loads(state_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    harness = data.get("agentHarness")
+                    if isinstance(harness, str) and harness.strip():
+                        return harness.strip()
+        except Exception:
+            pass
+        return "codebuff"
+
+    @staticmethod
     def _split_model(model: str) -> Tuple[str, str]:
         """(provider, model) for a Freebuff model value.
 
@@ -8381,17 +8426,14 @@ class FreebuffParser(BaseParser):
         """Whether the store carries *name*.
 
         The desktop app migrates its schema additively, so a store written by
-        an older build legitimately lacks a newer table. Callers use this to
-        degrade to "that feature contributes nothing" instead of raising, which
-        matters because _parse_all discards a whole database on an error.
+        an older build legitimately lacks a newer table. Absence yields False.
+        An unreadable or corrupt store raises sqlite3.Error rather than returning
+        False, so callers do not mistake a damaged store for an empty one.
         """
-        try:
-            row = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-                (name,),
-            ).fetchone()
-        except sqlite3.Error:
-            return False
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (name,),
+        ).fetchone()
         return row is not None
 
     @staticmethod
@@ -8479,17 +8521,48 @@ class FreebuffParser(BaseParser):
         # handler (which would discard the whole store).
         if not self._has_table(conn, "messages") or not self._has_table(conn, "threads"):
             return out
+
+        default_harness = self._read_default_harness()
+
+        # Dynamic column check for threads: harness_id, sponsored, byok_connection
+        thread_cols = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(threads)").fetchall()
+        }
+        harness_col = "t.harness_id AS harness_id" if "harness_id" in thread_cols else "NULL AS harness_id"
+        sponsored_col = "t.sponsored AS sponsored" if "sponsored" in thread_cols else "NULL AS sponsored"
+        byok_col = "t.byok_connection AS byok_connection" if "byok_connection" in thread_cols else "NULL AS byok_connection"
+
         # One pass over assistant rows, joined to their thread's model. The
         # thread's model applies to every row in it, so a per-thread lookup is
         # enough; done as a JOIN rather than two queries so a store with a
         # large message table is read once.
         for row in conn.execute(
-            "SELECT m.seq AS seq, m.thread_id AS thread_id, m.metrics_json AS metrics_json, "
-            "       m.ts AS ts, t.model AS model "
-            "FROM messages m JOIN threads t ON t.id = m.thread_id "
-            "WHERE m.role = 'assistant' "
-            "ORDER BY m.seq"
+            f"SELECT m.seq AS seq, m.thread_id AS thread_id, m.metrics_json AS metrics_json, "
+            f"       m.ts AS ts, t.model AS model, "
+            f"       {harness_col}, {sponsored_col}, {byok_col} "
+            f"FROM messages m JOIN threads t ON t.id = m.thread_id "
+            f"WHERE m.role = 'assistant' "
+            f"ORDER BY m.seq"
         ):
+            # Effective harness check: external harnesses (claude-code, codex)
+            # log to their own CLI homes (~/.claude, ~/.codex) which Tokdash
+            # already parses. Counting them here would double-count.
+            # Sponsored or BYOK turns always route to codebuff (orchestrator.js L199580);
+            # otherwise effective harness is thread.harness_id ?? state.json.agentHarness ?? "codebuff".
+            sponsored = bool(row["sponsored"])
+            byok = bool(row["byok_connection"] and str(row["byok_connection"]).strip())
+            if sponsored or byok:
+                effective_harness = "codebuff"
+            else:
+                thread_harness = row["harness_id"]
+                effective_harness = (
+                    str(thread_harness).strip()
+                    if (thread_harness and str(thread_harness).strip())
+                    else default_harness
+                )
+            if effective_harness != "codebuff":
+                continue
+
             metrics_raw = row["metrics_json"]
             if not metrics_raw:
                 continue
@@ -8549,6 +8622,11 @@ class FreebuffParser(BaseParser):
                 continue
             if not isinstance(manager, dict):
                 continue
+            # When manager_json carries harnessId, only codebuff is counted
+            # (defaults to "codebuff" when absent, per orchestrator.js L197546).
+            receipt_harness = str(manager.get("harnessId") or "").strip() or "codebuff"
+            if receipt_harness != "codebuff":
+                continue
             usage = manager.get("usage")
             if not isinstance(usage, dict):
                 continue
@@ -8569,24 +8647,42 @@ class FreebuffParser(BaseParser):
 
         return out
 
+    def _parse_file_strict(self, file_sig: Tuple[str, int, int]) -> List[Dict[str, Any]]:
+        """Strict single-file entry point for the stored sync.
+
+        Raises UsageFileVanished (never returns []) when the enumerated file
+        disappeared between discovery and open — under file_replace, [] means
+        "this file now has zero entries" and the commit would delete every
+        stored row for the path. sync_files catches the typed signal, verifies
+        the path, and skips the file with its rows kept.
+
+        Unreadable stores (locked or corrupt) raise rather than returning []
+        so sync_files does not delete existing stored usage for the database.
+        """
+        db = Path(file_sig[0])
+        if not db.is_file():
+            raise UsageFileVanished(str(db))
+        with zcode_snapshot(db) as snap:
+            return self._parse_db(snap.conn)
+
     def _parse_all(self) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         # Driven off _file_signatures() so file_replace sync's injected
         # single-file scope reparses one project DB, not all of them.
-        for path_str, _, _ in self._file_signatures():
-            db = Path(path_str)
+        for file_sig in self._file_signatures():
             try:
                 # Shared WAL-snapshot helper (first user: ZCodeParser); the
                 # desktop app holds the store open, so the live rows sit in the
                 # -wal and a read-only open in place would miss them.
-                with zcode_snapshot(db) as snap:
-                    out.extend(self._parse_db(snap.conn))
+                out.extend(self._parse_file_strict(file_sig))
+            except UsageFileVanished:
+                continue
             except (ZCodeSnapshotError, sqlite3.Error, OSError):
                 # A locked or corrupt per-project DB must not blank the others;
                 # the signatures move with the app's next write, so the next
                 # collect retries.
                 logger.warning(
-                    "freebuff db %s unreadable; skipped", db, exc_info=True
+                    "freebuff db %s unreadable; skipped", file_sig[0], exc_info=True
                 )
                 continue
         return out

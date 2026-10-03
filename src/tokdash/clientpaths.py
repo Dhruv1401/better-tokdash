@@ -1143,20 +1143,26 @@ def devin_db_paths() -> List[Path]:
 # --- Freebuff -----------------------------------------------------------------
 
 
-def freebuff_desktop_home() -> Path:
-    """Freebuff Desktop's own config dir: ``~/.config/freebuff-desktop``.
-
-    The desktop app resolves this as ``join(homedir(), ".config",
-    "freebuff-desktop")`` (verified in the shipped ``orchestrator.js`` string
-    table: ``resolve14(override) : join19(homedir5(), ".config",
-    "freebuff-desktop", "state.json")``). Only ``state.json`` honours a
-    ``FREEBUFF_DESKTOP_STATE_PATH`` override, which re-points the state file
-    and NOT the per-project data tree, so no environment variable relocates
-    the databases this source reads. The ``FREEBUFF_CONFIG_DIR`` override
-    belongs to the CLI (``.config/manicode``) and is deliberately not
-    honoured here.
+def freebuff_desktop_state_path() -> Path:
+    """Freebuff Desktop's state file: ``$FREEBUFF_DESKTOP_STATE_PATH`` if set,
+    else ``~/.config/freebuff-desktop/state.json``.
     """
-    return Path.home() / ".config" / "freebuff-desktop"
+    explicit = os.environ.get("FREEBUFF_DESKTOP_STATE_PATH", "").strip()
+    return Path(explicit).expanduser() if explicit else Path.home() / ".config" / "freebuff-desktop" / "state.json"
+
+
+def freebuff_desktop_home() -> Path:
+    """Freebuff Desktop's root config/data dir: directory containing ``state.json``.
+
+    The desktop app resolves its state path via ``desktopStatePath()``
+    (honouring ``FREEBUFF_DESKTOP_STATE_PATH``, defaulting to
+    ``~/.config/freebuff-desktop/state.json``) and derives the per-project
+    database root as ``join(dirname(statePath), "projects")``. Relocating the
+    state file therefore relocates the project stores as well. The
+    ``FREEBUFF_CONFIG_DIR`` override belongs to the CLI (``.config/manicode``)
+    and is deliberately not honoured here.
+    """
+    return freebuff_desktop_state_path().parent
 
 
 def freebuff_desktop_db_paths() -> List[Path]:
@@ -1167,9 +1173,8 @@ def freebuff_desktop_db_paths() -> List[Path]:
     carries the project basename plus a UUID (the authoritative project path
     lives in the sibling ``project.json``). Every project is a disjoint store
     with its own thread ids, so all of them are real usage and a union is
-    correct. ``_wsl_windows_root()`` is deliberately NOT globbed: the app is
-    an Electron desktop build, and a Windows-host install is the only one that
-    writes this tree (same one-directional limit as ``devin_cli_roots``).
+    correct. Tokdash reads the store tree for the active environment (or
+    ``FREEBUFF_DESKTOP_STATE_PATH`` relocation).
     """
     projects = freebuff_desktop_home() / "projects"
     out: List[Path] = []
