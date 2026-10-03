@@ -8362,7 +8362,8 @@ class FreebuffParser(BaseParser):
     # 3: filter turns and receipts whose effective harness is not "codebuff"
     #    (claude-code and codex write to their own native logs, which Tokdash
     #    already parses; counting them here would double-count).
-    persistent_parser_version = 3
+    # 4: parse with the default harness captured in the stored sync context.
+    persistent_parser_version = 4
 
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)
@@ -8541,7 +8542,9 @@ class FreebuffParser(BaseParser):
             ),
         }
 
-    def _parse_db(self, conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    def _parse_db(
+        self, conn: sqlite3.Connection, *, default_harness: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         conn.row_factory = sqlite3.Row
         out: List[Dict[str, Any]] = []
 
@@ -8553,7 +8556,8 @@ class FreebuffParser(BaseParser):
         if not self._has_table(conn, "messages") or not self._has_table(conn, "threads"):
             return out
 
-        default_harness = self._read_default_harness()
+        if default_harness is None:
+            default_harness = self._read_default_harness()
 
         # Dynamic column check for threads: harness_id, sponsored, byok_connection
         thread_cols = {
@@ -8706,7 +8710,10 @@ class FreebuffParser(BaseParser):
             raise UsageFileVanished(path_str)
         try:
             with zcode_snapshot(db) as snap:
-                return self._parse_db(snap.conn)
+                context = (getattr(self, "_file_context", None) or {}).get(path_str, {})
+                return self._parse_db(
+                    snap.conn, default_harness=context.get("default_harness")
+                )
         except UsageFileVanished:
             raise
         except (sqlite3.Error, ZCodeSnapshotError) as exc:

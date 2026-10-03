@@ -112,13 +112,13 @@ def _collect_parser_file(
     # (the DB-off live path must not lose every other file's entries to one
     # deletion race), so routing the store through it would defeat the isolation.
     strict = getattr(parser, "_parse_file_strict", None)
-    if strict is not None:
-        return list(strict(file_sig))
     original_file_signatures = parser._file_signatures
     original_context = getattr(parser, "_file_context", None)
     try:
-        parser._file_signatures = lambda: (file_sig,)
         parser._file_context = file_context
+        if strict is not None:
+            return list(strict(file_sig))
+        parser._file_signatures = lambda: (file_sig,)
         return parser._parse_all()
     finally:
         parser._file_signatures = original_file_signatures

@@ -587,7 +587,7 @@ def test_registered_and_declares_capabilities():
     assert parser.sync_capability.session_store is False
     # Stored persistently, so it must declare an identity (the registry test
     # in test_usage_cache_identity enforces the same rule globally).
-    assert parser.persistent_parser_version == 3
+    assert parser.persistent_parser_version == 4
     assert parser.persistent_parser_signature()["object"].endswith("FreebuffParser")
 
 
@@ -1205,6 +1205,54 @@ def test_state_json_context_invalidation_and_unrelated_write(monkeypatch, tmp_pa
     assert len(rows) == 0
 
 
+@pytest.mark.parametrize("captured_harness", ["codebuff", "codex"])
+def test_stored_sync_uses_captured_harness_when_state_changes(monkeypatch, tmp_path, captured_harness):
+    from tokdash.compute import _collect_parser_file
+
+    state_file = tmp_path / ".config" / "freebuff-desktop" / "state.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(json.dumps({"agentHarness": captured_harness}), encoding="utf-8")
+    _make_db(
+        _projects(tmp_path) / "p1", harness_id=None,
+        messages=[("assistant", _metrics(input_tokens=10), TS_MS)],
+    )
+    parser = _fresh(monkeypatch, tmp_path)
+    signatures = parser._file_signatures()
+    context = parser.prepare_file_context(signatures)
+    previous_context = {"sentinel": {"default_harness": "codebuff"}}
+    parser._file_context = previous_context
+    parse_count = 0
+
+    def parse_after_state_change(signature):
+        nonlocal parse_count
+        parse_count += 1
+        changed_harness = "codex" if captured_harness == "codebuff" else "codebuff"
+        state_file.write_text(json.dumps({"agentHarness": changed_harness}), encoding="utf-8")
+        return _collect_parser_file(parser, signature, file_context=context)
+
+    store_path = tmp_path / "usage.sqlite3"
+    store = UsageEntryStore(store_path)
+    store.sync_files(
+        "freebuff", signatures, parser=parser.persistent_parser_signature(),
+        pricing_identity=parser._pricing_signature(),
+        parse_file_entries=parse_after_state_change, file_context=context,
+    )
+    assert parser._file_context is previous_context
+    expected_rows = 1 if captured_harness == "codebuff" else 0
+    assert len(_stored_usage_rows(store_path, "freebuff")) == expected_rows
+
+    # Restoring the captured value must leave correctly parsed rows cached.
+    state_file.write_text(json.dumps({"agentHarness": captured_harness}), encoding="utf-8")
+    assert store.sync_files(
+        "freebuff", signatures, parser=parser.persistent_parser_signature(),
+        pricing_identity=parser._pricing_signature(),
+        parse_file_entries=parse_after_state_change,
+        file_context=parser.prepare_file_context(signatures),
+    ) is False
+    assert parse_count == 1
+    assert len(_stored_usage_rows(store_path, "freebuff")) == expected_rows
+
+
 def test_symlinked_state_json_finds_projects(monkeypatch, tmp_path):
     """A symlinked state.json still finds the projects directory in the symlink parent."""
     dotfiles_dir = tmp_path / "dotfiles"
@@ -1287,5 +1335,3 @@ def test_split_buckets_negative_tokens():
     assert fresh_input >= 0
     assert cache_read >= 0
     assert (fresh_input, cache_read, fresh_output, reasoning) == (0, 0, 20, 0)
-
-
