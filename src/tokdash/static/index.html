@@ -824,6 +824,40 @@
       .arc-announcement-side { display: none; }
     }
 
+    /* Arc UI Tooltip */
+    .arc-tooltip {
+      position: fixed;
+      z-index: 9990;
+      pointer-events: none;
+      padding: 5px 9px;
+      border-radius: 8px;
+      font-size: 11.5px;
+      font-weight: 500;
+      line-height: 1.35;
+      letter-spacing: -0.01em;
+      max-width: 260px;
+      text-align: center;
+      background: color-mix(in srgb, var(--color-text) 94%, var(--color-bg));
+      color: var(--color-bg);
+      border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+      box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.32), 0 2px 6px -1px rgba(0, 0, 0, 0.2);
+      transform-origin: center bottom;
+      transition: opacity 140ms cubic-bezier(0.16, 1, 0.3, 1), transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .arc-tooltip[data-state="closed"] {
+      opacity: 0;
+      transform: translateY(4px) scale(0.96);
+      visibility: hidden;
+    }
+    .arc-tooltip[data-state="open"] {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      visibility: visible;
+    }
+    .arc-tooltip[data-instant="true"] {
+      transition: opacity 80ms ease, transform 80ms ease;
+    }
+
     /* Arc UI Search Field */
     .arc-search-field {
       position: relative;
@@ -4189,7 +4223,7 @@
             <!-- Top action row: Refresh + 1-Click Light/Dark Theme Switch -->
             <div class="flex items-center gap-2">
               <div class="refresh-control">
-                <button id="refreshBtn" class="arc-action-btn" aria-label="Refresh dashboard" aria-controls="refreshReport" aria-expanded="false" data-state="idle">
+                <button id="refreshBtn" class="arc-action-btn" aria-label="Refresh dashboard" aria-controls="refreshReport" aria-expanded="false" data-state="idle" data-arc-tooltip="Refresh dashboard data">
                   <span class="arc-action-content">
                     <span class="arc-action-phase" aria-hidden="true">
                       <svg class="arc-action-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -4283,7 +4317,7 @@
               <label for="dateRangeTrigger" id="dateRangeControlLabel" class="sr-only" data-i18n="range">Range</label>
               <div class="date-range-control">
                 <input type="text" id="dateRangePicker" class="date-range-native-input" readonly tabindex="-1" aria-hidden="true" />
-                <button id="dateRangeTrigger" class="date-range-trigger" type="button" aria-haspopup="dialog" aria-expanded="false" aria-labelledby="dateRangeControlLabel dateRangePresetLabel dateRangeExactLabel">
+                <button id="dateRangeTrigger" class="date-range-trigger" type="button" aria-haspopup="dialog" aria-expanded="false" aria-labelledby="dateRangeControlLabel dateRangePresetLabel dateRangeExactLabel" data-arc-tooltip="Filter by date range or preset">
                   <svg class="date-range-calendar-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <rect x="3" y="5" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.8"/>
                     <path d="M8 3v4M16 3v4M3 10h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
@@ -4601,8 +4635,8 @@
               </span>
             </div>
           </div>
-          <button id="sessionsExpandAll" class="btn btn-ghost" type="button" data-i18n="sessionsExpandAll">Expand all</button>
-          <button id="sessionsCollapseAll" class="btn btn-ghost" type="button" data-i18n="sessionsCollapseAll">Collapse all</button>
+          <button id="sessionsExpandAll" class="btn btn-ghost" type="button" data-i18n="sessionsExpandAll" data-arc-tooltip="Expand all session panels">Expand all</button>
+          <button id="sessionsCollapseAll" class="btn btn-ghost" type="button" data-i18n="sessionsCollapseAll" data-arc-tooltip="Collapse all session panels">Collapse all</button>
         </div>
       </div>
       <div id="sessionsEmptyState" class="surface p-5 mb-6" hidden>
@@ -12161,6 +12195,133 @@
         : '';
       return `${name}${sources}`;
     }
+
+    /* Arc UI Tooltip Engine */
+    let arcTooltipWarm = false;
+    let arcTooltipCoolTimer = null;
+    let arcTooltipShowTimer = null;
+    let arcTooltipActiveEl = null;
+
+    function getOrCreateArcTooltipBubble() {
+      let bubble = document.getElementById('arcGlobalTooltip');
+      if (!bubble) {
+        bubble = document.createElement('div');
+        bubble.id = 'arcGlobalTooltip';
+        bubble.className = 'arc-tooltip';
+        bubble.setAttribute('role', 'tooltip');
+        bubble.setAttribute('data-state', 'closed');
+        document.body.appendChild(bubble);
+      }
+      return bubble;
+    }
+
+    function positionArcTooltip(targetEl, bubble) {
+      const rect = targetEl.getBoundingClientRect();
+      const bubbleRect = bubble.getBoundingClientRect();
+      let left = rect.left + rect.width / 2 - bubbleRect.width / 2;
+      let top = rect.top - bubbleRect.height - 7;
+      if (top < 8) {
+        top = rect.bottom + 7;
+      }
+      if (left < 8) left = 8;
+      if (left + bubbleRect.width > window.innerWidth - 8) {
+        left = window.innerWidth - bubbleRect.width - 8;
+      }
+      bubble.style.left = `${Math.round(left)}px`;
+      bubble.style.top = `${Math.round(top)}px`;
+    }
+
+    function showArcTooltip(targetEl, text) {
+      if (!text) return;
+      const bubble = getOrCreateArcTooltipBubble();
+      arcTooltipActiveEl = targetEl;
+      bubble.textContent = text;
+      bubble.setAttribute('data-instant', arcTooltipWarm ? 'true' : 'false');
+      bubble.style.left = '-9999px';
+      bubble.style.top = '-9999px';
+      bubble.setAttribute('data-state', 'open');
+      positionArcTooltip(targetEl, bubble);
+
+      arcTooltipWarm = true;
+      if (arcTooltipCoolTimer) {
+        clearTimeout(arcTooltipCoolTimer);
+        arcTooltipCoolTimer = null;
+      }
+    }
+
+    function hideArcTooltip() {
+      if (arcTooltipShowTimer) {
+        clearTimeout(arcTooltipShowTimer);
+        arcTooltipShowTimer = null;
+      }
+      arcTooltipActiveEl = null;
+      const bubble = document.getElementById('arcGlobalTooltip');
+      if (bubble) {
+        bubble.setAttribute('data-state', 'closed');
+      }
+      if (arcTooltipCoolTimer) clearTimeout(arcTooltipCoolTimer);
+      arcTooltipCoolTimer = setTimeout(() => {
+        arcTooltipWarm = false;
+      }, 300);
+    }
+
+    function initArcTooltips() {
+      const getTipText = (el) => {
+        if (!el || !(el instanceof Element)) return null;
+        const target = el.closest('[data-arc-tooltip], [data-tooltip], [title]');
+        if (!target) return null;
+        let text = target.getAttribute('data-arc-tooltip') || target.getAttribute('data-tooltip');
+        if (!text && target.hasAttribute('title')) {
+          text = target.getAttribute('title');
+          target.setAttribute('data-arc-tooltip', text);
+          target.removeAttribute('title');
+        }
+        return text ? { el: target, text } : null;
+      };
+
+      document.addEventListener('mouseover', (e) => {
+        const item = getTipText(e.target);
+        if (!item) {
+          if (arcTooltipActiveEl && !arcTooltipActiveEl.contains(e.target)) hideArcTooltip();
+          return;
+        }
+        if (arcTooltipActiveEl === item.el) return;
+        if (arcTooltipShowTimer) clearTimeout(arcTooltipShowTimer);
+        if (arcTooltipWarm) {
+          showArcTooltip(item.el, item.text);
+        } else {
+          arcTooltipShowTimer = setTimeout(() => {
+            showArcTooltip(item.el, item.text);
+          }, 200);
+        }
+      }, { passive: true });
+
+      document.addEventListener('mouseout', (e) => {
+        if (arcTooltipActiveEl && (!e.relatedTarget || !arcTooltipActiveEl.contains(e.relatedTarget))) {
+          hideArcTooltip();
+        }
+      }, { passive: true });
+
+      document.addEventListener('focusin', (e) => {
+        const item = getTipText(e.target);
+        if (item) showArcTooltip(item.el, item.text);
+      }, { passive: true });
+
+      document.addEventListener('focusout', () => {
+        hideArcTooltip();
+      }, { passive: true });
+
+      document.addEventListener('scroll', () => {
+        if (arcTooltipActiveEl) {
+          const bubble = document.getElementById('arcGlobalTooltip');
+          if (bubble && bubble.getAttribute('data-state') === 'open') {
+            positionArcTooltip(arcTooltipActiveEl, bubble);
+          }
+        }
+      }, { passive: true });
+    }
+    window.showArcTooltip = showArcTooltip;
+    window.hideArcTooltip = hideArcTooltip;
 
     function showArcToast({ title, description = '', variant = 'info', duration = 3500 } = {}) {
       let container = document.getElementById('arcToastContainer');
@@ -24671,6 +24832,7 @@
     initReleaseNotes();
     initUpdateNotice();
     initStyleThemePopover();
+    initArcTooltips();
 
     document.getElementById('styleThemeSelect').addEventListener('change', (event) => {
       const next = event.target.value || 'paper';
