@@ -8366,6 +8366,7 @@ class FreebuffParser(BaseParser):
 
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)
+        self._last_parse_failed = False
 
     def _db_paths(self) -> List[Path]:
         return clientpaths.freebuff_desktop_db_paths()
@@ -8373,14 +8374,6 @@ class FreebuffParser(BaseParser):
     def _file_signatures(self) -> tuple:
         def scan() -> tuple:
             out: List[Tuple[str, int, int]] = []
-            state_mtime = 0
-            try:
-                state_path = clientpaths.freebuff_desktop_state_path()
-                if state_path.is_file():
-                    state_mtime = int(state_path.stat().st_mtime_ns)
-            except OSError:
-                pass
-
             for db in self._db_paths():
                 # ONE entry per project DB, WAL sidecars folded in
                 # (_sqlite_db_signature). A per-sidecar entry would make
@@ -8388,11 +8381,6 @@ class FreebuffParser(BaseParser):
                 # three times per sync.
                 sig = _sqlite_db_signature(db)
                 if sig is not None:
-                    if state_mtime:
-                        # Fold state.json mtime in so modifying agentHarness
-                        # in state.json immediately invalidates cached project
-                        # stores that rely on the default harness.
-                        sig = (sig[0], max(sig[1], state_mtime), sig[2])
                     out.append(sig)
             return tuple(out)
 
@@ -8400,12 +8388,33 @@ class FreebuffParser(BaseParser):
             "freebuff:" + ",".join(str(p) for p in self._db_paths()), scan
         )
 
+    def prepare_file_context(
+        self, signatures: tuple, previous_context: Optional[dict] = None
+    ) -> dict:
+        """Resolve cross-file dependencies (state.json default harness) per store.
+
+        Returning the effective default harness per path invalidates only when
+        that value actually changes, catching deletions as well without being
+        triggered by unrelated state.json writes (e.g. UI state / window resize).
+        """
+        default_harness = self._read_default_harness()
+        return {
+            sig[0]: {"default_harness": default_harness}
+            for sig in signatures
+        }
+
+    def runtime_config_signature(self) -> Optional[Dict[str, Any]]:
+        """Effective default harness from state.json, for live cache busting."""
+        return {"default_harness": self._read_default_harness()}
+
     @staticmethod
     def _read_default_harness() -> str:
         """The fallback agent harness from Freebuff's ``state.json``.
 
         ``orchestrator.js`` reads ``state.json.agentHarness``; when absent or
-        unrecognized, it falls back to ``"codebuff"``.
+        unrecognised, it falls back to ``"codebuff"``. Only external harnesses
+        whose turns land in other logs (``"claude-code"``, ``"codex"``) are
+        returned as non-codebuff; anything else is treated as ``"codebuff"``.
         """
         try:
             state_path = clientpaths.freebuff_desktop_state_path()
@@ -8413,8 +8422,11 @@ class FreebuffParser(BaseParser):
                 data = json.loads(state_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     harness = data.get("agentHarness")
-                    if isinstance(harness, str) and harness.strip():
-                        return harness.strip()
+                    if isinstance(harness, str):
+                        h = harness.strip()
+                        if h in ("claude-code", "codex"):
+                            return h
+                        return "codebuff"
         except Exception:
             pass
         return "codebuff"
@@ -8462,18 +8474,18 @@ class FreebuffParser(BaseParser):
         Returns None when the usage carries no tokens at all: a cancelled or
         failed call persists ``{}``, and a zero-token "call" is not usage.
         """
-        input_incl_cache = FreebuffParser._i(usage.get("inputTokens"))
-        cached = FreebuffParser._i(usage.get("cachedInputTokens"))
-        output_incl_reasoning = FreebuffParser._i(usage.get("outputTokens"))
-        reasoning = FreebuffParser._i(usage.get("reasoningOutputTokens"))
+        input_incl_cache = max(0, FreebuffParser._i(usage.get("inputTokens")))
+        cached = max(0, FreebuffParser._i(usage.get("cachedInputTokens")))
+        output_incl_reasoning = max(0, FreebuffParser._i(usage.get("outputTokens")))
+        reasoning = max(0, FreebuffParser._i(usage.get("reasoningOutputTokens")))
         if not (input_incl_cache or cached or output_incl_reasoning or reasoning):
             return None
-        cached = min(max(0, cached), input_incl_cache)
-        reasoning = min(max(0, reasoning), output_incl_reasoning)
+        cached = min(cached, input_incl_cache)
+        reasoning = min(reasoning, output_incl_reasoning)
         return (
-            max(0, input_incl_cache - cached),
+            input_incl_cache - cached,
             cached,
-            max(0, output_incl_reasoning - reasoning),
+            output_incl_reasoning - reasoning,
             reasoning,
         )
 
@@ -8568,17 +8580,18 @@ class FreebuffParser(BaseParser):
             # already parses. Counting them here would double-count.
             # Sponsored or BYOK turns always route to codebuff (orchestrator.js L199580);
             # otherwise effective harness is thread.harness_id ?? state.json.agentHarness ?? "codebuff".
+            # Any unrecognised harness is treated as codebuff; only claude-code and codex are skipped.
             sponsored = bool(row["sponsored"])
             byok = bool(row["byok_connection"] and str(row["byok_connection"]).strip())
             if sponsored or byok:
                 effective_harness = "codebuff"
             else:
                 thread_harness = row["harness_id"]
-                effective_harness = (
-                    str(thread_harness).strip()
-                    if (thread_harness and str(thread_harness).strip())
-                    else default_harness
-                )
+                if thread_harness is not None and str(thread_harness).strip():
+                    th = str(thread_harness).strip()
+                    effective_harness = th if th in ("claude-code", "codex") else "codebuff"
+                else:
+                    effective_harness = default_harness
             if effective_harness != "codebuff":
                 continue
 
@@ -8641,9 +8654,14 @@ class FreebuffParser(BaseParser):
                 continue
             if not isinstance(manager, dict):
                 continue
-            # When manager_json carries harnessId, only codebuff is counted
-            # (defaults to "codebuff" when absent, per orchestrator.js L197546).
-            receipt_harness = str(manager.get("harnessId") or "").strip() or "codebuff"
+            # When manager_json carries harnessId, only external harnesses
+            # (claude-code, codex) are skipped; anything else is treated as codebuff.
+            harness_raw = manager.get("harnessId")
+            if harness_raw is not None and str(harness_raw).strip():
+                rh = str(harness_raw).strip()
+                receipt_harness = rh if rh in ("claude-code", "codex") else "codebuff"
+            else:
+                receipt_harness = "codebuff"
             if receipt_harness != "codebuff":
                 continue
             usage = manager.get("usage")
@@ -8653,12 +8671,14 @@ class FreebuffParser(BaseParser):
             # a different model, and the 8 of 45 live receipts where the two
             # disagree would otherwise be priced at the wrong model.
             model_value = manager.get("model") or row["thread_model"]
+            # When manager_json.finishedAt is set, prefer it over row updated_at/created_at
+            # so the manager call is dated to its own finish rather than the end of the turn.
+            finished_at = self._i(manager.get("finishedAt"))
+            ts_ms = finished_at if finished_at > 0 else self._i(row["updated_at"] or row["created_at"])
             entry = self._build_entry(
                 model_value=model_value,
                 usage=usage,
-                # updated_at is the decision's finish; fall back to created_at
-                # if updated_at is not populated.
-                ts_ms=self._i(row["updated_at"] or row["created_at"]),
+                ts_ms=ts_ms,
                 entry_id=f"freebuff:{row['thread_id']}:receipt:{row['id']}",
             )
             if entry is not None:
@@ -8675,16 +8695,27 @@ class FreebuffParser(BaseParser):
         stored row for the path. sync_files catches the typed signal, verifies
         the path, and skips the file with its rows kept.
 
-        Unreadable stores (locked or corrupt) raise rather than returning []
-        so sync_files does not delete existing stored usage for the database.
+        Unreadable stores (locked or corrupt) raise UsageFileUnreadable rather
+        than returning [] or letting raw sqlite3.Error / ZCodeSnapshotError
+        escape, so sync_files isolates the failure, keeps that file's stored
+        usage, and allows other projects to continue syncing.
         """
         db = Path(file_sig[0])
+        path_str = str(db)
         if not db.is_file():
-            raise UsageFileVanished(str(db))
-        with zcode_snapshot(db) as snap:
-            return self._parse_db(snap.conn)
+            raise UsageFileVanished(path_str)
+        try:
+            with zcode_snapshot(db) as snap:
+                return self._parse_db(snap.conn)
+        except UsageFileVanished:
+            raise
+        except (sqlite3.Error, ZCodeSnapshotError) as exc:
+            if not db.exists():
+                raise UsageFileVanished(path_str) from exc
+            raise UsageFileUnreadable(path_str, str(exc)) from exc
 
     def _parse_all(self) -> List[Dict[str, Any]]:
+        self._last_parse_failed = False
         out: List[Dict[str, Any]] = []
         # Driven off _file_signatures() so file_replace sync's injected
         # single-file scope reparses one project DB, not all of them.
@@ -8696,15 +8727,49 @@ class FreebuffParser(BaseParser):
                 out.extend(self._parse_file_strict(file_sig))
             except UsageFileVanished:
                 continue
-            except (ZCodeSnapshotError, sqlite3.Error, OSError):
+            except (UsageFileUnreadable, ZCodeSnapshotError, sqlite3.Error, OSError):
                 # A locked or corrupt per-project DB must not blank the others;
                 # the signatures move with the app's next write, so the next
                 # collect retries.
+                self._last_parse_failed = True
                 logger.warning(
                     "freebuff db %s unreadable; skipped", file_sig[0], exc_info=True
                 )
                 continue
         return out
+
+    def collect(
+        self,
+        since_date: Optional[datetime] = None,
+        until_date: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """Cached collect: parse once per file-signature, filter by date in memory.
+
+        Partial or failed reads are returned but not cached: the signatures
+        that guard this cache may not have moved, so a cached zero would outlive
+        the hiccup. Same rule the ZCode and Devin collectors follow.
+        """
+        sig = (
+            self._file_signatures(),
+            self._pricing_signature(),
+            self.runtime_config_signature(),
+        )
+        cached = self._entry_cache.get(self.source_name)
+        if cached is not None and cached[0] == sig:
+            all_entries = cached[1]
+        else:
+            all_entries = self._parse_all()
+            if not getattr(self, "_last_parse_failed", False):
+                self._entry_cache[self.source_name] = (sig, all_entries)
+
+        if since_date is None and until_date is None:
+            return list(all_entries)
+
+        s = self._to_utc(since_date)
+        u = self._to_utc(until_date)
+        s_ms = int(s.timestamp() * 1000) if s else 0
+        u_ms = int(u.timestamp() * 1000) if u else 9999999999999
+        return [e for e in all_entries if s_ms <= (e.get("timestamp") or 0) < u_ms]
 
 
 class CodingToolsUsageTracker:

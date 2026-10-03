@@ -31,6 +31,11 @@ from tokdash.sources.coding_tools import (
     FreebuffParser,
     _sig_cache,
 )
+from tokdash.usage_store import (
+    UsageEntryStore,
+    UsageFileUnreadable,
+    UsageFileVanished,
+)
 
 # 2026-10-02T13:04:12.181Z — a live row's timestamp, milliseconds.
 TS_MS = 1_790_924_652_181
@@ -126,6 +131,7 @@ def _manager(
     output_tokens=0,
     reasoning=0,
     duration_ms=20000,
+    finished_at=None,
     usage=True,
     cost_usd=0,
 ):
@@ -137,7 +143,7 @@ def _manager(
     payload = {
         "model": model,
         "startedAt": TS_MS,
-        "finishedAt": TS_MS + duration_ms,
+        "finishedAt": finished_at if finished_at is not None else (TS_MS + duration_ms),
         "durationMs": duration_ms,
         "costUsd": cost_usd,
     }
@@ -621,7 +627,8 @@ def test_manager_usage_is_counted(monkeypatch, tmp_path):
         messages=[("assistant", _metrics(input_tokens=10, output_tokens=5), TS_MS)],
         receipts=[
             ("rec-1", _manager(model="m-aaaa1111", input_tokens=1000,
-                               cached_input=400, output_tokens=50, reasoning=10),
+                               cached_input=400, output_tokens=50, reasoning=10,
+                               finished_at=TS_MS + 500),
              None, TS_MS + 500),
         ],
     )
@@ -973,15 +980,16 @@ def test_parse_file_strict_raises_usage_file_vanished_on_missing_db(monkeypatch,
 
 
 def test_parse_file_strict_raises_on_corrupt_db(monkeypatch, tmp_path):
-    """A corrupt database raises rather than returning [] so sync_files does not
-    delete existing stored rows."""
+    """A corrupt database raises UsageFileUnreadable rather than returning [] so sync_files
+    isolates the failure and keeps existing stored rows."""
     bad = _projects(tmp_path) / "p-bad" / "desktop-v2.db"
     bad.parent.mkdir(parents=True, exist_ok=True)
     bad.write_bytes(b"not a sqlite db")
     parser = _fresh(monkeypatch, tmp_path)
     sig = (str(bad), 100, 100)
-    with pytest.raises((ct.ZCodeSnapshotError, sqlite3.Error, OSError)):
+    with pytest.raises(UsageFileUnreadable) as exc_info:
         parser._parse_file_strict(sig)
+    assert exc_info.value.filename == str(bad)
 
 
 def test_provider_qualified_candidate_precedes_bare_model(monkeypatch, tmp_path):
@@ -1017,32 +1025,267 @@ def test_provider_qualified_candidate_precedes_bare_model(monkeypatch, tmp_path)
     assert entries[0]["cost"] == pytest.approx(10.0)
 
 
-def test_modifying_state_json_updates_file_signatures(monkeypatch, tmp_path):
-    """Modifying state.json updates the file signatures mtime so project DBs
-    are re-synced immediately when default harness changes."""
-    import os
-    import time
+def _stored_usage_rows(db_path: Path, source: str) -> list[sqlite3.Row]:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT * FROM usage_entries WHERE source = ?", (source,)).fetchall()
+    finally:
+        conn.close()
 
-    state_file = tmp_path / ".config" / "freebuff-desktop" / "state.json"
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(json.dumps({"agentHarness": "codebuff"}), encoding="utf-8")
 
-    db = _projects(tmp_path) / "p1" / "desktop-v2.db"
-    _make_db(db.parent, messages=[("assistant", _metrics(input_tokens=10), TS_MS)])
+def test_corrupt_project_db_unreadable_and_other_projects_still_sync(monkeypatch, tmp_path):
+    """A corrupt project DB raises UsageFileUnreadable and the other projects still sync."""
+    good_db = _make_db(_projects(tmp_path) / "p-good", messages=[("assistant", _metrics(input_tokens=50), TS_MS)])
+    bad_db = _projects(tmp_path) / "p-bad" / "desktop-v2.db"
+    bad_db.parent.mkdir(parents=True, exist_ok=True)
+    bad_db.write_bytes(b"not a valid sqlite file")
 
     parser = _fresh(monkeypatch, tmp_path)
-    sigs1 = parser._file_signatures()
-    assert len(sigs1) == 1
+    sigs = parser._file_signatures()
+    assert len(sigs) == 2
 
-    # Update state.json mtime into the future
-    future_time = time.time() + 100
-    os.utime(state_file, (future_time, future_time))
+    store_db = tmp_path / "usage.sqlite3"
+    store = UsageEntryStore(store_db)
+    file_context = parser.prepare_file_context(sigs)
 
-    # Clear signature cache to simulate a later collect pass
-    ct._sig_cache.clear()
-    sigs2 = parser._file_signatures()
-    assert len(sigs2) == 1
-    # Signature mtime advanced to match state.json
-    assert sigs2[0][1] > sigs1[0][1]
+    # sync_files succeeds: the corrupt DB is skipped with UsageFileUnreadable, and good DB commits
+    synced = store.sync_files(
+        "freebuff",
+        sigs,
+        parser=parser.persistent_parser_signature(),
+        pricing_identity=parser._pricing_signature(),
+        parse_file_entries=lambda file_sig: parser._parse_file_strict(file_sig),
+        file_context=file_context,
+    )
+    assert synced is True
+    rows = _stored_usage_rows(store_db, "freebuff")
+    assert len(rows) == 1
+    assert rows[0]["file_path"] == str(good_db)
+    assert rows[0]["input"] == 50
+
+
+def test_deleted_db_before_snapshot_raises_usage_file_vanished(monkeypatch, tmp_path):
+    """A DB deleted before or during snapshot copy raises UsageFileVanished."""
+    db = _make_db(_projects(tmp_path) / "p-del", messages=[("assistant", _metrics(input_tokens=10), TS_MS)])
+    parser = _fresh(monkeypatch, tmp_path)
+    sig = (str(db), 100, 100)
+
+    # 1. Deleted before parse_file_strict opens it
+    db.unlink()
+    with pytest.raises(UsageFileVanished) as exc_info:
+        parser._parse_file_strict(sig)
+    assert exc_info.value.filename == str(db)
+
+    # 2. Deleted between is_file() check and snapshot copy (surfaces as ZCodeSnapshotError when db is gone)
+    db2 = _make_db(_projects(tmp_path) / "p-del2", messages=[("assistant", _metrics(input_tokens=10), TS_MS)])
+    sig2 = (str(db2), 100, 100)
+
+    from contextlib import contextmanager
+    @contextmanager
+    def remove_and_fail_snapshot(path):
+        if db2.exists():
+            db2.unlink()
+        raise ct.ZCodeSnapshotError("snapshot copy failed")
+        yield None
+
+    monkeypatch.setattr(ct, "zcode_snapshot", remove_and_fail_snapshot)
+    with pytest.raises(UsageFileVanished) as exc_info2:
+        parser._parse_file_strict(sig2)
+    assert exc_info2.value.filename == str(db2)
+
+
+def test_agent_harness_unknown_counts_as_codebuff_while_external_skipped(monkeypatch, tmp_path):
+    """agentHarness: 'freebuff' (and any unknown value) counts turns as codebuff;
+    only 'claude-code' and 'codex' are skipped."""
+    state_file = tmp_path / ".config" / "freebuff-desktop" / "state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+
+    _make_db(_projects(tmp_path) / "p1", harness_id=None, messages=[("assistant", _metrics(input_tokens=10), TS_MS)])
+    parser = _fresh(monkeypatch, tmp_path)
+
+    # 'freebuff' harness -> counted
+    state_file.write_text(json.dumps({"agentHarness": "freebuff"}), encoding="utf-8")
+    assert len(parser._parse_all()) == 1
+
+    # unknown harness 'something-new' -> counted
+    state_file.write_text(json.dumps({"agentHarness": "something-new"}), encoding="utf-8")
+    assert len(parser._parse_all()) == 1
+
+    # 'claude-code' harness -> skipped
+    state_file.write_text(json.dumps({"agentHarness": "claude-code"}), encoding="utf-8")
+    assert len(parser._parse_all()) == 0
+
+    # 'codex' harness -> skipped
+    state_file.write_text(json.dumps({"agentHarness": "codex"}), encoding="utf-8")
+    assert len(parser._parse_all()) == 0
+
+    # absent harness -> counted as codebuff
+    state_file.write_text(json.dumps({}), encoding="utf-8")
+    assert len(parser._parse_all()) == 1
+
+
+def test_threads_harness_id_unknown_counts_as_codebuff_while_external_skipped(monkeypatch, tmp_path):
+    """threads.harness_id with 'freebuff' or other unknown harness counts as codebuff;
+    only 'claude-code' and 'codex' are skipped."""
+    p_dir = _projects(tmp_path) / "p-threads"
+    db = p_dir / "desktop-v2.db"
+    p_dir.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db)
+    try:
+        conn.executescript(_THREADS_DDL + ";\n" + _MESSAGES_DDL)
+        # 4 threads: freebuff, unknown, claude-code, codex
+        conn.execute("INSERT INTO threads (id, project_id, project_path, model, harness_id, created_at) VALUES ('t1', 'p', 'path', 'm1', 'freebuff', ?)", (TS_MS,))
+        conn.execute("INSERT INTO threads (id, project_id, project_path, model, harness_id, created_at) VALUES ('t2', 'p', 'path', 'm1', 'future-build-harness', ?)", (TS_MS,))
+        conn.execute("INSERT INTO threads (id, project_id, project_path, model, harness_id, created_at) VALUES ('t3', 'p', 'path', 'm1', 'claude-code', ?)", (TS_MS,))
+        conn.execute("INSERT INTO threads (id, project_id, project_path, model, harness_id, created_at) VALUES ('t4', 'p', 'path', 'm1', 'codex', ?)", (TS_MS,))
+        conn.execute("INSERT INTO messages (thread_id, role, metrics_json, ts) VALUES ('t1', 'assistant', ?, ?)", (_metrics(input_tokens=10), TS_MS))
+        conn.execute("INSERT INTO messages (thread_id, role, metrics_json, ts) VALUES ('t2', 'assistant', ?, ?)", (_metrics(input_tokens=20), TS_MS))
+        conn.execute("INSERT INTO messages (thread_id, role, metrics_json, ts) VALUES ('t3', 'assistant', ?, ?)", (_metrics(input_tokens=30), TS_MS))
+        conn.execute("INSERT INTO messages (thread_id, role, metrics_json, ts) VALUES ('t4', 'assistant', ?, ?)", (_metrics(input_tokens=40), TS_MS))
+        conn.commit()
+    finally:
+        conn.close()
+
+    parser = _fresh(monkeypatch, tmp_path)
+    entries = parser._parse_all()
+    # Only t1 ('freebuff') and t2 ('future-build-harness') are parsed; t3 ('claude-code') and t4 ('codex') are skipped
+    assert sorted(e["input"] for e in entries) == [10, 20]
+
+
+def test_state_json_context_invalidation_and_unrelated_write(monkeypatch, tmp_path):
+    """A state.json change re-syncs; an unrelated state.json write does not invalidate stores."""
+    state_file = tmp_path / ".config" / "freebuff-desktop" / "state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"agentHarness": "codebuff", "ui": "normal"}), encoding="utf-8")
+
+    _make_db(_projects(tmp_path) / "p1", harness_id=None, messages=[("assistant", _metrics(input_tokens=10), TS_MS)])
+    parser = _fresh(monkeypatch, tmp_path)
+    sigs = parser._file_signatures()
+
+    store_db = tmp_path / "usage.sqlite3"
+    store = UsageEntryStore(store_db)
+
+    # Initial sync
+    parse_count = 0
+    def counting_parser(sig):
+        nonlocal parse_count
+        parse_count += 1
+        return parser._parse_file_strict(sig)
+
+    ctx1 = parser.prepare_file_context(sigs)
+    store.sync_files("freebuff", sigs, parser=parser.persistent_parser_signature(),
+                     pricing_identity=parser._pricing_signature(),
+                     parse_file_entries=counting_parser, file_context=ctx1)
+    assert parse_count == 1
+
+    # Unrelated state.json write (window resize / UI state)
+    state_file.write_text(json.dumps({"agentHarness": "codebuff", "ui": "window_resized", "width": 1024}), encoding="utf-8")
+    ctx2 = parser.prepare_file_context(sigs)
+    assert ctx2 == ctx1  # Context unchanged
+
+    store.sync_files("freebuff", sigs, parser=parser.persistent_parser_signature(),
+                     pricing_identity=parser._pricing_signature(),
+                     parse_file_entries=counting_parser, file_context=ctx2)
+    # Did NOT reparse! parse_count still 1
+    assert parse_count == 1
+
+    # Relevant state.json change (agentHarness changed to codex)
+    state_file.write_text(json.dumps({"agentHarness": "codex"}), encoding="utf-8")
+    ctx3 = parser.prepare_file_context(sigs)
+    assert ctx3 != ctx1  # Context changed!
+
+    store.sync_files("freebuff", sigs, parser=parser.persistent_parser_signature(),
+                     pricing_identity=parser._pricing_signature(),
+                     parse_file_entries=counting_parser, file_context=ctx3)
+    # Did reparse! parse_count incremented
+    assert parse_count == 2
+    # Turns are now skipped under codex harness
+    rows = _stored_usage_rows(store_db, "freebuff")
+    assert len(rows) == 0
+
+
+def test_symlinked_state_json_finds_projects(monkeypatch, tmp_path):
+    """A symlinked state.json still finds the projects directory in the symlink parent."""
+    dotfiles_dir = tmp_path / "dotfiles"
+    dotfiles_dir.mkdir(parents=True, exist_ok=True)
+    real_state = dotfiles_dir / "state.json"
+    real_state.write_text(json.dumps({"agentHarness": "codebuff"}), encoding="utf-8")
+
+    app_dir = tmp_path / "app_config"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    symlink_state = app_dir / "state.json"
+    symlink_state.symlink_to(real_state)
+
+    # Project resides under app_dir/projects, NOT dotfiles/projects
+    proj_db = _make_db(app_dir / "projects" / "p1", messages=[("assistant", _metrics(input_tokens=10), TS_MS)])
+
+    monkeypatch.setenv("FREEBUFF_DESKTOP_STATE_PATH", str(symlink_state))
+    assert clientpaths.freebuff_desktop_state_path() == symlink_state
+    assert clientpaths.freebuff_desktop_home() == app_dir
+
+    paths = clientpaths.freebuff_desktop_db_paths()
+    assert proj_db in paths
+
+
+def test_failed_live_read_is_not_cached(monkeypatch, tmp_path):
+    """A failed live read is not cached, so the next collect retries rather than serving zero."""
+    _make_db(_projects(tmp_path) / "p-good", messages=[("assistant", _metrics(input_tokens=10), TS_MS)])
+    bad_db = _projects(tmp_path) / "p-bad" / "desktop-v2.db"
+    bad_db.parent.mkdir(parents=True, exist_ok=True)
+    bad_db.write_bytes(b"corrupt db")
+
+    parser = _fresh(monkeypatch, tmp_path)
+    # Clear entry cache
+    BaseParser._entry_cache.clear()
+
+    # First collect: p-bad fails, p-good succeeds
+    entries1 = parser.collect()
+    assert len(entries1) == 1
+    # Cache must NOT be populated because read had a failure
+    assert "freebuff" not in BaseParser._entry_cache
+
+    # Now fix p-bad so it is valid
+    bad_db.unlink()
+    _make_db(bad_db.parent, messages=[("assistant", _metrics(input_tokens=20), TS_MS)])
+
+    # Second collect: without advancing signatures or clearing cache, it should retry and read both
+    entries2 = parser.collect()
+    assert len(entries2) == 2
+    # Now that both succeeded, it is cached
+    assert "freebuff" in BaseParser._entry_cache
+
+
+def test_manager_receipt_prefers_finished_at(monkeypatch, tmp_path):
+    """Manager receipts prefer manager_json.finishedAt over updated_at/created_at."""
+    _make_db(
+        _projects(tmp_path) / "p1",
+        messages=[],
+        receipts=[
+            ("rec-1", _manager(model="m-aaaa1111", input_tokens=100, duration_ms=5000,
+                              finished_at=TS_MS + 1234),
+             None, TS_MS + 99999),
+        ],
+    )
+    parser = _fresh(monkeypatch, tmp_path)
+    entries = parser._parse_all()
+    assert len(entries) == 1
+    assert entries[0]["timestamp"] == TS_MS + 1234
+
+
+def test_split_buckets_negative_tokens():
+    """Negative input tokens are clamped and cannot produce negative cacheRead (Item O2)."""
+    # Negative inputTokens with positive cachedInputTokens
+    buckets = FreebuffParser._split_buckets({
+        "inputTokens": -10,
+        "cachedInputTokens": 5,
+        "outputTokens": 20,
+        "reasoningOutputTokens": 0,
+    })
+    assert buckets is not None
+    fresh_input, cache_read, fresh_output, reasoning = buckets
+    assert fresh_input >= 0
+    assert cache_read >= 0
+    assert (fresh_input, cache_read, fresh_output, reasoning) == (0, 0, 20, 0)
 
 
