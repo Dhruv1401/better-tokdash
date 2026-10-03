@@ -698,6 +698,163 @@
       color: var(--color-text);
     }
 
+    /* Arc UI Resizable Panels for Sessions Explorer */
+    .arc-resizable-group {
+      display: flex;
+      width: 100%;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      position: relative;
+      align-items: stretch;
+      gap: 0;
+      border-radius: 12px;
+    }
+    .arc-resizable-group[data-resizing="true"] {
+      cursor: col-resize !important;
+      user-select: none !important;
+      -webkit-user-select: none !important;
+    }
+    .arc-resizable-group[data-resizing="true"] * {
+      pointer-events: none !important;
+    }
+
+    .arc-resizable-pane {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      transition: flex-basis 0.22s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease;
+    }
+    .arc-resizable-group[data-resizing="true"] .arc-resizable-pane {
+      transition: none;
+    }
+
+    .arc-table-pane {
+      flex: 1 1 65%;
+      min-width: 320px;
+    }
+    .arc-inspector-pane {
+      flex: 0 0 35%;
+      min-width: 260px;
+      padding-left: 14px;
+    }
+    .arc-inspector-pane[data-collapsed="true"] {
+      display: none !important;
+      width: 0 !important;
+      flex: 0 0 0px !important;
+      min-width: 0 !important;
+      opacity: 0 !important;
+    }
+
+    .arc-resizable-handle {
+      position: relative;
+      z-index: 10;
+      flex: 0 0 1px;
+      background: var(--color-border);
+      cursor: col-resize;
+      touch-action: none;
+      outline: none;
+      margin: 0 6px;
+      transition: background-color 0.15s ease;
+      align-self: stretch;
+    }
+    .arc-resizable-handle::before {
+      position: absolute;
+      inset: 0 -8px;
+      content: "";
+      cursor: col-resize;
+    }
+    .arc-resizable-handle:hover,
+    .arc-resizable-handle[data-active="true"] {
+      background: var(--color-primary);
+    }
+
+    .arc-resizable-grip {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 4px;
+      height: 32px;
+      border-radius: 9999px;
+      background: color-mix(in srgb, var(--color-border) 45%, var(--color-text));
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, -50%) scaleY(0.6);
+      transition: opacity 0.15s ease, background-color 0.15s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .arc-resizable-handle:hover .arc-resizable-grip,
+    .arc-resizable-handle[data-active="true"] .arc-resizable-grip,
+    .arc-resizable-handle:focus-visible .arc-resizable-grip {
+      opacity: 1;
+      background: var(--color-primary);
+      transform: translate(-50%, -50%) scaleY(1);
+      box-shadow: 0 0 8px color-mix(in srgb, var(--color-primary) 50%, transparent);
+    }
+
+    .arc-resizable-restore {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      display: none;
+      width: 22px;
+      height: 44px;
+      place-items: center;
+      border: 1px solid var(--color-border);
+      border-radius: 9999px;
+      background: var(--color-surface);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+      color: var(--color-muted);
+      cursor: pointer;
+      transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .arc-resizable-handle[data-collapsed="true"] {
+      background: transparent;
+      cursor: pointer;
+      margin: 0 10px;
+    }
+    .arc-resizable-handle[data-collapsed="true"]::before {
+      inset: 0 -12px;
+      cursor: pointer;
+    }
+    .arc-resizable-handle[data-collapsed="true"] .arc-resizable-grip {
+      display: none;
+    }
+    .arc-resizable-handle[data-collapsed="true"] .arc-resizable-restore {
+      display: grid;
+    }
+    .arc-resizable-handle[data-collapsed="true"]:hover .arc-resizable-restore {
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+      background: color-mix(in srgb, var(--color-primary) 10%, var(--color-surface));
+      transform: translate(-50%, -50%) scale(1.08);
+      box-shadow: 0 4px 12px color-mix(in srgb, var(--color-primary) 20%, transparent);
+    }
+
+    @media (max-width: 1023px) {
+      .arc-resizable-group {
+        flex-direction: column !important;
+      }
+      .arc-table-pane,
+      .arc-inspector-pane {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+        width: 100% !important;
+        padding-left: 0 !important;
+      }
+      .arc-resizable-handle {
+        display: none !important;
+      }
+      .arc-inspector-pane[data-collapsed="true"] {
+        display: block !important;
+        width: 100% !important;
+        opacity: 1 !important;
+      }
+    }
+
     .refresh-control {
       position: relative;
       display: inline-flex;
@@ -14632,6 +14789,7 @@
       initSortHeaders("openclaw", renderSessionsTab);
       initSortHeaders("qoder_cli", renderSessionsTab);
       initSortHeaders("combined", renderSessionsTab);
+      setupSessionResizablePanels();
     }
 
     function setShareBar(prefix, value, total) {
@@ -20426,6 +20584,174 @@
     }
 
     // ==========================================
+    // Arc UI Resizable Panels for Sessions Explorer
+    // ==========================================
+    function setupSessionResizablePanels() {
+      const bodies = document.querySelectorAll('#sessions-content .session-panel-body');
+      bodies.forEach((body) => {
+        if (body.querySelector('.arc-resizable-group')) return;
+        const latestGrid = body.querySelector('[id$="LatestSession"]');
+        const tableContainer = body.querySelector('.overflow-x-auto');
+        if (!latestGrid || !tableContainer) return;
+
+        const group = document.createElement('div');
+        group.className = 'arc-resizable-group';
+
+        const tablePane = document.createElement('div');
+        tablePane.className = 'arc-resizable-pane arc-table-pane';
+        tablePane.style.flexBasis = '65%';
+
+        const handle = document.createElement('div');
+        handle.className = 'arc-resizable-handle';
+        handle.setAttribute('role', 'separator');
+        handle.setAttribute('tabindex', '0');
+        handle.setAttribute('aria-orientation', 'vertical');
+        handle.setAttribute('aria-label', 'Resize sessions table and details');
+        handle.title = 'Drag to resize, double-click to reset, Enter to toggle details';
+
+        const grip = document.createElement('span');
+        grip.className = 'arc-resizable-grip';
+        grip.setAttribute('aria-hidden', 'true');
+        handle.appendChild(grip);
+
+        const restore = document.createElement('span');
+        restore.className = 'arc-resizable-restore';
+        restore.setAttribute('aria-hidden', 'true');
+        restore.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m15 18-6-6 6-6"/></svg>';
+        handle.appendChild(restore);
+
+        const inspectorPane = document.createElement('div');
+        inspectorPane.className = 'arc-resizable-pane arc-inspector-pane';
+        inspectorPane.style.flexBasis = '35%';
+
+        // Rearrange DOM into group
+        tablePane.appendChild(tableContainer);
+        latestGrid.classList.remove('xl:grid-cols-6');
+        latestGrid.classList.add('grid-cols-1', 'sm:grid-cols-2', 'gap-3', 'mb-0');
+        inspectorPane.appendChild(latestGrid);
+
+        group.appendChild(tablePane);
+        group.appendChild(handle);
+        group.appendChild(inspectorPane);
+        body.appendChild(group);
+
+        attachResizablePanelEvents(group, tablePane, handle, inspectorPane);
+      });
+    }
+
+    function attachResizablePanelEvents(group, tablePane, handle, inspectorPane) {
+      let isDragging = false;
+      let startX = 0;
+      let startTableWidth = 0;
+      let groupWidth = 0;
+      let isCollapsed = false;
+      let lastInspectorBasis = 35;
+
+      function toggleCollapse(collapsed) {
+        if (typeof collapsed === 'boolean') {
+          isCollapsed = collapsed;
+        } else {
+          isCollapsed = !isCollapsed;
+        }
+        handle.setAttribute('data-collapsed', String(isCollapsed));
+        inspectorPane.setAttribute('data-collapsed', String(isCollapsed));
+        if (isCollapsed) {
+          tablePane.style.flexBasis = '100%';
+        } else {
+          tablePane.style.flexBasis = `${100 - lastInspectorBasis}%`;
+          inspectorPane.style.flexBasis = `${lastInspectorBasis}%`;
+        }
+      }
+
+      handle.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        if (isCollapsed) {
+          toggleCollapse(false);
+          return;
+        }
+        isDragging = true;
+        startX = e.clientX;
+        startTableWidth = tablePane.getBoundingClientRect().width;
+        groupWidth = group.getBoundingClientRect().width || 1;
+        group.setAttribute('data-resizing', 'true');
+        handle.setAttribute('data-active', 'true');
+        handle.setPointerCapture(e.pointerId);
+      });
+
+      handle.addEventListener('pointermove', (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - startX;
+        const newTableWidth = startTableWidth + dx;
+        const tablePct = Math.max(30, Math.min(88, (newTableWidth / groupWidth) * 100));
+        const inspectorPct = 100 - tablePct;
+
+        if (inspectorPct < 14) {
+          toggleCollapse(true);
+          isDragging = false;
+          group.removeAttribute('data-resizing');
+          handle.removeAttribute('data-active');
+          return;
+        }
+
+        lastInspectorBasis = inspectorPct;
+        tablePane.style.flexBasis = `${tablePct}%`;
+        inspectorPane.style.flexBasis = `${inspectorPct}%`;
+      });
+
+      function endDrag() {
+        if (!isDragging) return;
+        isDragging = false;
+        group.removeAttribute('data-resizing');
+        handle.removeAttribute('data-active');
+      }
+
+      handle.addEventListener('pointerup', endDrag);
+      handle.addEventListener('pointercancel', endDrag);
+
+      handle.addEventListener('dblclick', () => {
+        isCollapsed = false;
+        lastInspectorBasis = 35;
+        toggleCollapse(false);
+        tablePane.style.flexBasis = '65%';
+        inspectorPane.style.flexBasis = '35%';
+      });
+
+      handle.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          toggleCollapse();
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          if (isCollapsed) {
+            toggleCollapse(false);
+          } else {
+            const curTablePct = parseFloat(tablePane.style.flexBasis) || 65;
+            const nextTablePct = Math.max(30, curTablePct - 5);
+            lastInspectorBasis = 100 - nextTablePct;
+            tablePane.style.flexBasis = `${nextTablePct}%`;
+            inspectorPane.style.flexBasis = `${lastInspectorBasis}%`;
+          }
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          const curTablePct = parseFloat(tablePane.style.flexBasis) || 65;
+          const nextTablePct = Math.min(88, curTablePct + 5);
+          if (nextTablePct >= 86) {
+            toggleCollapse(true);
+          } else {
+            lastInspectorBasis = 100 - nextTablePct;
+            tablePane.style.flexBasis = `${nextTablePct}%`;
+            inspectorPane.style.flexBasis = `${lastInspectorBasis}%`;
+          }
+        } else if (e.key === 'Home') {
+          e.preventDefault();
+          tablePane.style.flexBasis = '35%';
+          inspectorPane.style.flexBasis = '65%';
+        } else if (e.key === 'End') {
+          e.preventDefault();
+          toggleCollapse(true);
+        }
+      });
+    }
     // Token Composition Flow
     // ==========================================
     function resetTokenComposition() {
@@ -23593,6 +23919,7 @@
         Animations.initChipInteractions();
         Animations.initScrollReveals('.dashboard-main');
         Animations.observeCharts();
+        if (typeof setupSessionResizablePanels === 'function') setupSessionResizablePanels();
       }
 
       if (document.readyState === 'loading') {
