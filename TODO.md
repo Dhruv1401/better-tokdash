@@ -9,4 +9,4 @@
 - [x] 7. Arc Resizable Panels: Add resizable split panels to Sessions Explorer with draggable handle grip and collapsible detail view
 - [x] 8. Arc Dialog for Settings: Convert Settings into native Arc UI Dialog with backdrop blur, entrance spring, header, and close button
 - [x] 9. Polish dark mode styling for "elevated" theme across all components
-- [ ] 10. Start server instance on port 55425 and verify all interactions
+- [x] 10. Start server instance on port 55425 and verify all interactions
