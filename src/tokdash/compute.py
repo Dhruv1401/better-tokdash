@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import bisect
 import json
+import logging
 import math
 import os
 import subprocess
@@ -18,6 +19,7 @@ from .sources.openclaw import get_usage_for_month as get_session_usage_month
 from .sources.openclaw import get_usage_for_range as get_session_usage_range
 from .sources.openclaw import get_usage_for_year as get_session_usage_year
 from .sources.coding_tools import CodingToolsUsageTracker
+from .store_logging import log_store_failure
 from .usage_store import (
     UsageDatabaseSchemaTooNewError,
     UsageEntryStore,
@@ -28,6 +30,8 @@ from .usage_store import (
     persistent_usage_db_enabled,
     public_usage_entry,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -402,11 +406,16 @@ def run_local_coding_tools_json(period_args: list[str]) -> Dict[str, Any]:
             # A newer database is terminal for this build; reparsing the logs
             # instead would hide the skew behind a permanent full-history reparse.
             raise
-        except Exception:
+        except Exception as exc:
             # The persistent DB is a cache. If it is corrupt or temporarily
             # unavailable, preserve current behavior by falling back to the live
             # parsers for this request.
-            pass
+            log_store_failure(
+                logger,
+                "tokdash persistent usage cache failed; falling back to live parsers",
+                exc,
+                site="compute.run_local_coding_tools_json",
+            )
     tracker.collect(since, until)
     data = tracker.to_json()
     data["entries"] = [public_usage_entry(entry) for entry in data.get("entries", [])]
@@ -854,10 +863,17 @@ def get_tools_data_for_range(
                 # schema never heals on retry, so degrading here would reparse the
                 # full history on every request.
                 raise
-            except Exception:
+            except Exception as exc:
                 # Keep the DB fail-open: serving correctness should not depend on
-                # cache health while this backend is still evolving.
-                pass
+                # cache health while this backend is still evolving. The answer is
+                # complete either way, so it must not be marked incomplete; the
+                # reasoning lives in store_logging, which owns that rule.
+                log_store_failure(
+                    logger,
+                    "tokdash persistent usage cache failed; falling back to live parsers",
+                    exc,
+                    site="compute.get_tools_data_for_range",
+                )
         tracker.collect(since, until)
         result = parse_entries_json(tracker.to_json())
         result["source_errors"] = [e["source"] for e in tracker.source_errors]
@@ -886,8 +902,13 @@ def get_tools_contributions_for_range(since: Optional[datetime], until: Optional
                 return _merge_contribution_days([store_days, live_days])
             except UsageDatabaseSchemaTooNewError:
                 raise
-            except Exception:
-                pass
+            except Exception as exc:
+                log_store_failure(
+                    logger,
+                    "tokdash persistent usage cache failed for contributions; falling back to live parsers",
+                    exc,
+                    site="compute.get_tools_contributions_for_range",
+                )
         tracker.collect(since, until)
         return _contributions_from_entries(tracker.to_json().get("entries", []))
 
