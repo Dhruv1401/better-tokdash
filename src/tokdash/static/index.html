@@ -601,6 +601,103 @@
       transform: scale(0.9);
     }
 
+    /* Arc UI Switch */
+    .arc-switch {
+      display: inline-flex;
+      min-height: 28px;
+      align-items: center;
+      gap: 9px;
+      padding: 0;
+      border: 0;
+      color: var(--color-text);
+      background: transparent;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+    .arc-switch:disabled,
+    .arc-switch[aria-disabled="true"],
+    .arc-switch:has(input:disabled) {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+    .arc-switch-track {
+      position: relative;
+      box-sizing: border-box;
+      display: flex;
+      flex: 0 0 auto;
+      width: 40px;
+      height: 22px;
+      align-items: center;
+      padding: 2px;
+      border-radius: 9999px;
+      background: rgba(255, 255, 255, 0.16);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      isolation: isolate;
+      transition: background-color 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+                  border-color 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    html:not(.dark) .arc-switch-track {
+      background: #cbd5e1;
+      border-color: #cbd5e1;
+    }
+    .arc-switch-track::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      border-radius: inherit;
+      background: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%);
+      opacity: 0;
+      transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .arc-switch[data-state="checked"] .arc-switch-track::before,
+    .arc-switch[aria-checked="true"] .arc-switch-track::before,
+    .arc-switch:has(input:checked) .arc-switch-track::before {
+      opacity: 1;
+    }
+    .arc-switch-thumb {
+      flex: 0 0 auto;
+      width: 16px;
+      height: 16px;
+      border-radius: 9999px;
+      background: #ffffff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 0 1px rgba(0, 0, 0, 0.2);
+      will-change: transform;
+      transform: translateX(0);
+      transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1),
+                  background-color 0.2s ease;
+    }
+    .arc-switch[data-state="checked"] .arc-switch-thumb,
+    .arc-switch[aria-checked="true"] .arc-switch-thumb,
+    .arc-switch:has(input:checked) .arc-switch-thumb {
+      transform: translateX(18px);
+    }
+    .arc-switch:hover:not(:disabled) .arc-switch-track {
+      background: rgba(255, 255, 255, 0.24);
+    }
+    html:not(.dark) .arc-switch:hover:not(:disabled) .arc-switch-track {
+      background: #94a3b8;
+    }
+    .arc-switch-input {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+      pointer-events: none;
+    }
+    .arc-switch-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--color-muted);
+      line-height: 1.4;
+    }
+    .arc-switch:hover .arc-switch-label {
+      color: var(--color-text);
+    }
+
     .refresh-control {
       position: relative;
       display: inline-flex;
@@ -3642,9 +3739,10 @@
           <summary class="session-panel-summary">
             <h2 class="text-base font-extrabold mono" data-i18n="codexSessions" data-i18n-title="sessionsRangeDesc">Codex Sessions</h2>
             <span id="codexPanelCount" class="session-panel-count"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></span>
-            <label class="flex items-center gap-2 text-xs font-semibold session-panel-toggle" style="color: var(--color-muted);">
-              <input id="codexReviewToggle" type="checkbox" />
-              <span data-i18n="showReviewSessions">Show review sessions</span>
+            <label class="arc-switch session-panel-toggle" for="codexReviewToggle">
+              <input id="codexReviewToggle" type="checkbox" class="arc-switch-input" />
+              <span class="arc-switch-track" aria-hidden="true"><span class="arc-switch-thumb"></span></span>
+              <span class="arc-switch-label" data-i18n="showReviewSessions">Show review sessions</span>
             </label>
             <span id="codexPanelKpis" class="session-panel-kpis" hidden>
               <span class="session-panel-kpi"><span class="session-panel-kpi-label" data-i18n="panelTokens">Tokens</span><span id="codexPanelTokens" class="session-panel-kpi-value mono">—</span></span>
@@ -5998,7 +6096,11 @@
                   <section id="serversSettings" class="servers-settings">
                     <div class="servers-settings-head">
                       <strong class="settings-label" data-i18n="servers">Servers</strong>
-                      <label class="servers-master-toggle"><input id="allServersToggle" type="checkbox"> <span data-i18n="allServers">Use all</span></label>
+                      <label class="arc-switch servers-master-toggle" for="allServersToggle">
+                        <input id="allServersToggle" type="checkbox" class="arc-switch-input">
+                        <span class="arc-switch-track" aria-hidden="true"><span class="arc-switch-thumb"></span></span>
+                        <span class="arc-switch-label" data-i18n="allServers">Use all</span>
+                      </label>
                     </div>
                     <div id="serverSettingsList" class="server-settings-list"></div>
                     <div class="server-add-form">
@@ -6057,8 +6159,8 @@
                     </label>
                     <div class="settings-row">
                       <span class="settings-label" data-i18n="readableTokens">Readable tokens</span>
-                      <button id="readableTokensToggle" class="btn btn-ghost overview-readable-tokens-toggle" type="button" role="switch" aria-checked="true" aria-label="Readable tokens">
-                        <span class="overview-readable-tokens-track" aria-hidden="true"></span>
+                      <button id="readableTokensToggle" class="btn btn-ghost overview-readable-tokens-toggle arc-switch" type="button" role="switch" aria-checked="true" aria-label="Readable tokens">
+                        <span class="arc-switch-track overview-readable-tokens-track" aria-hidden="true"><span class="arc-switch-thumb"></span></span>
                       </button>
                     </div>
                   </div>
