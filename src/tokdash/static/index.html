@@ -858,6 +858,70 @@
       transition: opacity 80ms ease, transform 80ms ease;
     }
 
+    /* Arc UI Text Reveal */
+    .arc-text-reveal {
+      display: inline-block;
+      animation: arcTextReveal 0.65s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    @keyframes arcTextReveal {
+      0% {
+        opacity: 0;
+        transform: translateY(6px);
+        filter: blur(4px);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0);
+        filter: blur(0);
+      }
+    }
+
+    /* Arc UI Text Morph */
+    .arc-text-morph {
+      display: inline-block;
+      transition: opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1), transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), filter 0.18s ease;
+    }
+    .arc-text-morph.morphing {
+      opacity: 0;
+      transform: translateY(-4px) scale(0.97);
+      filter: blur(2px);
+    }
+
+    /* Arc UI Slot Text */
+    .arc-slot-text {
+      display: inline-block;
+      font-variant-numeric: tabular-nums lining-nums;
+      letter-spacing: -0.02em;
+      transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), color 0.2s ease;
+    }
+    .arc-slot-text.slot-bump {
+      animation: arcSlotBump 0.24s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    @keyframes arcSlotBump {
+      0% { transform: translateY(0); }
+      40% { transform: translateY(-2px) scale(1.02); }
+      100% { transform: translateY(0) scale(1); }
+    }
+
+    /* Arc UI Metric Card */
+    .arc-metric-card {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-lg, 12px);
+      background: var(--color-surface, rgba(255, 255, 255, 0.05));
+      backdrop-filter: blur(12px);
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+                  box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+                  border-color 0.2s ease;
+    }
+    .arc-metric-card:hover {
+      transform: translateY(-2px);
+      border-color: color-mix(in srgb, var(--color-primary) 32%, var(--color-border));
+      box-shadow: 0 12px 28px -6px color-mix(in srgb, var(--color-primary) 8%, rgba(0, 0, 0, 0.2)),
+                  0 0 0 1px color-mix(in srgb, var(--color-primary) 20%, transparent);
+    }
+
     /* Arc UI Search Field */
     .arc-search-field {
       position: relative;
@@ -4186,7 +4250,7 @@
           <div>
             <div class="flex flex-wrap items-center gap-2.5">
               <div class="flex items-center gap-2">
-                <h1 class="text-xl sm:text-2xl font-extrabold tracking-tight mono text-slate-900 dark:text-white">Tokdash</h1>
+                <h1 class="text-xl sm:text-2xl font-extrabold tracking-tight mono text-slate-900 dark:text-white arc-text-reveal">Tokdash</h1>
                 <span class="text-[9px] font-bold px-1.5 py-0.5 rounded font-mono arc-version-badge" style="background: color-mix(in srgb, var(--color-text) 7%, transparent); color: var(--color-muted); border: 1px solid var(--color-border);" data-app-version role="button" tabindex="0" onclick="openReleaseNotesModal()" title="View release notes & changelog">v—</span>
               </div>
             </div>
@@ -4363,7 +4427,7 @@
             </div>
           </div>
           <div id="totalTokensWrap" class="overview-token-value-wrap" data-readable="true" style="--kpi-tone: #818cf8;">
-            <div id="totalTokens" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-indigo-400" tabindex="0" aria-describedby="totalTokensExact">-</div>
+            <div id="totalTokens" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-indigo-400 arc-slot-text" tabindex="0" aria-describedby="totalTokensExact">-</div>
             <div id="totalTokensExact" class="overview-token-exact-tooltip" role="tooltip">-</div>
           </div>
           <div id="tokensDelta" class="text-xs font-semibold mt-1 kpi-delta"></div>
@@ -4374,7 +4438,7 @@
             <div class="text-[11px] font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="totalCost">Total Cost</div>
           </div>
           <div id="totalCostWrap" class="overview-token-value-wrap" style="--kpi-tone: #34d399;">
-            <div id="totalCost" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-emerald-400" tabindex="0" aria-describedby="totalCostExact">$-</div>
+            <div id="totalCost" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-emerald-400 arc-slot-text" tabindex="0" aria-describedby="totalCostExact">$-</div>
             <div id="totalCostExact" class="overview-token-exact-tooltip" role="tooltip">-</div>
           </div>
           <div id="costDelta" class="text-xs font-semibold mt-1 kpi-delta"></div>
@@ -4385,7 +4449,7 @@
             <div class="text-[11px] font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="totalMessages">Total Messages</div>
           </div>
           <div id="totalMessagesWrap" class="overview-token-value-wrap" style="--kpi-tone: #c084fc;">
-            <div id="totalMessages" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-purple-400" tabindex="0" aria-describedby="totalMessagesExact">-</div>
+            <div id="totalMessages" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-purple-400 arc-slot-text" tabindex="0" aria-describedby="totalMessagesExact">-</div>
             <div id="totalMessagesExact" class="overview-token-exact-tooltip" role="tooltip">-</div>
           </div>
           <div id="messagesDelta" class="text-xs font-semibold mt-1 kpi-delta"></div>
@@ -4400,7 +4464,7 @@
             <span class="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400 font-mono font-bold">-61%</span>
           </div>
           <div id="overviewActiveTimeWrap" class="overview-token-value-wrap" style="--kpi-tone: #38bdf8;">
-            <div id="overviewActiveTime" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-sky-400" tabindex="0" aria-describedby="overviewActiveTimeExact">-</div>
+            <div id="overviewActiveTime" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-sky-400 arc-slot-text" tabindex="0" aria-describedby="overviewActiveTimeExact">-</div>
             <div id="overviewActiveTimeExact" class="overview-token-exact-tooltip" role="tooltip">-</div>
           </div>
           <div id="overviewActiveDelta" class="text-xs font-semibold mt-1 kpi-delta"></div>
@@ -4416,7 +4480,7 @@
             <span class="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 font-mono font-bold">92%</span>
           </div>
           <div id="avgCacheHitRateWrap" class="overview-token-value-wrap" style="--kpi-tone: #22d3ee;">
-            <div id="avgCacheHitRate" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-cyan-400" tabindex="0" aria-describedby="avgCacheHitRateExact">-</div>
+            <div id="avgCacheHitRate" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-cyan-400 arc-slot-text" tabindex="0" aria-describedby="avgCacheHitRateExact">-</div>
             <div id="avgCacheHitRateExact" class="overview-token-exact-tooltip" role="tooltip">-</div>
           </div>
           <svg id="sparklineCacheRate" class="kpi-sparkline text-cyan-400/60" viewBox="0 0 100 35" preserveAspectRatio="none" fill="none"><defs><linearGradient id="kpiG5" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="currentColor" stop-opacity="0.25"/><stop offset="100%" stop-color="currentColor" stop-opacity="0.0"/></linearGradient></defs><path id="sparklineCacheRatePath" d="M0 20 Q30 18 55 12 T85 10 T100 6" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/><path id="sparklineCacheRateArea" d="M0 20 Q30 18 55 12 T85 10 T100 6 L100 35 L0 35 Z" fill="url(#kpiG5)"/></svg>
@@ -6122,57 +6186,57 @@
     <!-- Stats Tab -->
     <div id="stats-content" class="tab-content">
       <section id="statsSummaryCards" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-6 mb-6">
-        <div class="surface p-4">
+        <div class="surface arc-metric-card p-4">
           <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="topModelCost">Top Model (Cost)</div>
           <div id="statFavoriteModel" class="tokdash-loading-placeholder mt-2 font-extrabold mono"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
-        <div class="surface p-4">
+        <div class="surface arc-metric-card p-4">
           <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="totalTokens">Total Tokens</div>
           <div id="statTotalTokens" class="tokdash-loading-placeholder mt-2 font-extrabold"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
-        <div class="surface p-4">
+        <div class="surface arc-metric-card p-4">
           <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="sessions">Sessions</div>
           <div id="statSessions" class="tokdash-loading-placeholder mt-2 font-extrabold"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
-        <div class="surface p-4">
+        <div class="surface arc-metric-card p-4">
           <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="streak">Streak</div>
           <div id="statCurrentStreak" class="tokdash-loading-placeholder mt-2 font-extrabold"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
-        <div class="surface p-4">
+        <div class="surface arc-metric-card p-4">
           <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="longestStreak">Longest Streak</div>
           <div id="statLongestStreak" class="tokdash-loading-placeholder mt-2 font-extrabold"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
-        <div class="surface p-4">
+        <div class="surface arc-metric-card p-4">
           <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="activeDays">Active Days</div>
           <div id="statActiveDays" class="tokdash-loading-placeholder mt-2 font-extrabold"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
-        <div class="surface p-4">
+        <div class="surface arc-metric-card p-4">
           <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="totalDays">Total Days</div>
           <div id="statTotalDays" class="tokdash-loading-placeholder mt-2 font-extrabold"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
-        <div class="surface p-4">
+        <div class="surface arc-metric-card p-4">
           <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="totalCost">Total Cost</div>
           <div id="statTotalCost" class="tokdash-loading-placeholder mt-2 font-extrabold"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
       </section>
 
       <section id="statsInsightCards" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-x-4 gap-y-6 mb-6">
-        <div class="surface p-4">
+        <div class="surface arc-metric-card p-4">
           <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="peakDay">Peak Day</div>
           <div id="statPeakDay" class="mt-2 font-extrabold mono">—</div>
           <div id="statPeakDayMeta" class="text-sm mt-1" style="color: var(--color-muted);">—</div>
         </div>
-        <div class="surface p-4">
+        <div class="surface arc-metric-card p-4">
           <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="peakWeek">Peak Week</div>
           <div id="statPeakWeek" class="mt-2 font-extrabold mono">—</div>
           <div id="statPeakWeekMeta" class="text-sm mt-1" style="color: var(--color-muted);">—</div>
         </div>
-        <div class="surface p-4">
+        <div class="surface arc-metric-card p-4">
           <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="peakWeekday">Top Weekday</div>
           <div id="statPeakWeekday" class="mt-2 font-extrabold mono">—</div>
           <div id="statPeakWeekdayMeta" class="text-sm mt-1" style="color: var(--color-muted);">—</div>
         </div>
-        <div class="surface p-4">
+        <div class="surface arc-metric-card p-4">
           <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="avgActiveDay">Avg / Active Day</div>
           <div id="statAvgActiveDay" class="mt-2 font-extrabold mono">—</div>
           <div id="statAvgActiveDayMeta" class="text-sm mt-1" style="color: var(--color-muted);" data-i18n="activeDaysOnly">Across active days</div>
@@ -11472,6 +11536,9 @@
     // rule about the counter base.
     function setOverviewCounterText(el, text, value) {
       if (!el) return;
+      if (el.classList && typeof el.classList.toggle === 'function') {
+        el.classList.toggle('slot-bump', true);
+      }
       const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
       if (animations && typeof animations.setCounterText === 'function') {
         animations.setCounterText(el, text, value);
@@ -16189,12 +16256,17 @@
               data: values,
               backgroundColor: colors,
               borderWidth: 0,
+              hoverOffset: 4,
             }],
           },
           options: {
             responsive: true,
             maintainAspectRatio: false,
             animation: false,
+            cutout: '72%',
+            radius: '90%',
+            spacing: 2,
+            borderRadius: 4,
             plugins: {
               legend: { display: false },
               tooltip: {
