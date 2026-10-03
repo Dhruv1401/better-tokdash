@@ -903,29 +903,44 @@
 
     .date-range-trigger {
       width: 100%;
-      min-height: 48px;
+      min-height: 38px;
       display: inline-flex;
       align-items: center;
       gap: 10px;
-      padding: 7px 10px;
+      padding: 5px 12px;
       border: 1px solid var(--color-border);
-      border-radius: 10px;
-      background: var(--color-surface-glass);
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--color-surface-glass) 92%, var(--color-bg));
+      backdrop-filter: blur(12px);
       color: var(--color-text);
       cursor: pointer;
       text-align: left;
-      transition: border-color var(--t-fast) ease, box-shadow var(--t-fast) ease, background var(--t-fast) ease;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), inset 0 1px 1px rgba(255, 255, 255, 0.04);
+      transition: border-color var(--t-fast) cubic-bezier(0.2, 0, 0, 1),
+                  box-shadow var(--t-fast) cubic-bezier(0.2, 0, 0, 1),
+                  background var(--t-fast) cubic-bezier(0.2, 0, 0, 1),
+                  transform var(--t-fast) cubic-bezier(0.2, 0, 0, 1);
     }
 
     .date-range-trigger:hover {
+      border-color: color-mix(in srgb, var(--color-primary) 65%, var(--color-border));
+      background: color-mix(in srgb, var(--color-primary) 8%, var(--color-surface-glass));
+      box-shadow: 0 3px 10px color-mix(in srgb, var(--color-primary) 12%, transparent);
+    }
+
+    .date-range-trigger:active {
+      transform: scale(0.985);
+    }
+
+    .date-range-trigger[aria-expanded="true"] {
       border-color: var(--color-primary);
-      background: color-mix(in srgb, var(--color-primary) 5%, var(--color-surface-glass));
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 22%, transparent);
     }
 
     .date-range-trigger:focus-visible {
       outline: none;
       border-color: var(--color-primary);
-      box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 20%, transparent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 28%, transparent);
     }
 
     .date-range-calendar-icon {
@@ -1832,183 +1847,234 @@
       display: none !important;
     }
 
-    /* Flatpickr Custom Styles */
+    /* Arc UI Date Range Picker Popover */
     .flatpickr-calendar {
-      background: var(--datepickr-panel-bg);
-      border: 1px solid var(--datepickr-panel-border);
-      border-radius: var(--datepickr-radius);
-      box-shadow: var(--shadow-lg);
-      font-family: "Fira Sans", sans-serif;
+      background: color-mix(in srgb, var(--color-surface) 96%, var(--color-bg));
+      border: 1px solid color-mix(in srgb, var(--color-primary) 24%, var(--color-border));
+      border-radius: 18px;
+      box-shadow: 0 20px 48px -8px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      font-family: inherit;
       overflow: hidden;
+      padding: 6px;
+      width: auto;
     }
 
     .flatpickr-months {
-      background: var(--datepickr-header-bg);
-      border-radius: var(--datepickr-radius) var(--datepickr-radius) 0 0;
-      padding: 12px;
+      display: flex;
+      align-items: center;
+      position: relative;
+      padding: 8px 10px;
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
     }
 
     .flatpickr-current-month {
-      color: var(--datepickr-header-fg);
+      color: var(--color-text);
+      font-size: 13.5px;
+      font-weight: 600;
+      padding: 0;
+    }
+    .flatpickr-current-month .cur-month {
+      font-weight: 600;
+    }
+    .flatpickr-current-month .numInputWrapper {
       font-weight: 600;
     }
 
     .flatpickr-prev-month, .flatpickr-next-month {
-      fill: var(--datepickr-header-fg);
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 9999px;
+      color: var(--color-muted);
+      fill: var(--color-muted);
+      cursor: pointer;
+      transition: all 0.15s cubic-bezier(0.2, 0, 0, 1);
     }
 
     .flatpickr-prev-month:hover, .flatpickr-next-month:hover {
-      fill: color-mix(in srgb, var(--datepickr-header-fg) 82%, transparent);
+      color: var(--color-text);
+      fill: var(--color-text);
+      background: color-mix(in srgb, var(--color-text) 8%, transparent);
+      transform: scale(1.05);
+    }
+    .flatpickr-prev-month:active, .flatpickr-next-month:active {
+      transform: scale(0.95);
+    }
+
+    .flatpickr-weekdays {
+      margin-top: 6px;
+      padding: 0 4px;
+    }
+
+    span.flatpickr-weekday {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--color-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .flatpickr-days {
+      padding: 4px;
+    }
+
+    .dayContainer {
+      min-width: 294px;
+      max-width: 294px;
     }
 
     .flatpickr-day {
-      border-radius: var(--datepickr-day-radius);
+      position: relative;
+      width: 40px;
+      height: 36px;
+      line-height: 36px;
+      margin: 1px 0;
+      border-radius: 8px;
+      color: var(--color-text);
+      font-size: 12.5px;
       font-weight: 500;
-      transition: all var(--t-fast) ease;
-      color: var(--datepickr-day-fg);
+      border: 1px solid transparent;
+      transition: background 0.15s cubic-bezier(0.2, 0, 0, 1),
+                  color 0.15s cubic-bezier(0.2, 0, 0, 1),
+                  transform 0.1s ease;
     }
 
-    .flatpickr-day:hover,
-    .flatpickr-day:focus {
-      background: var(--datepickr-day-hover-bg);
-      border-color: var(--datepickr-day-hover-border);
-      outline: none;
+    .flatpickr-day:hover:not(.selected):not(.startRange):not(.endRange) {
+      background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+      border-color: transparent;
+      border-radius: 8px;
+    }
+
+    .flatpickr-day.inRange {
+      background: color-mix(in srgb, var(--color-primary) 20%, transparent) !important;
+      border-color: transparent !important;
+      color: var(--color-text) !important;
+      border-radius: 0 !important;
+      box-shadow: -5px 0 0 color-mix(in srgb, var(--color-primary) 20%, transparent),
+                   5px 0 0 color-mix(in srgb, var(--color-primary) 20%, transparent) !important;
     }
 
     .flatpickr-day.selected,
     .flatpickr-day.startRange,
-    .flatpickr-day.endRange,
-    .flatpickr-day.selected.inRange,
-    .flatpickr-day.startRange.inRange,
-    .flatpickr-day.endRange.inRange,
-    .flatpickr-day.selected:hover,
-    .flatpickr-day.startRange:hover,
-    .flatpickr-day.endRange:hover,
-    .flatpickr-day.selected:focus,
-    .flatpickr-day.startRange:focus,
-    .flatpickr-day.endRange:focus {
-      background: var(--datepickr-day-selected-bg);
-      border-color: var(--datepickr-day-selected-bg);
-      color: var(--datepickr-day-selected-fg);
-      box-shadow: none;
+    .flatpickr-day.endRange {
+      background: var(--color-primary) !important;
+      border-color: var(--color-primary) !important;
+      color: #ffffff !important;
+      font-weight: 600 !important;
+      box-shadow: 0 2px 8px color-mix(in srgb, var(--color-primary) 45%, transparent) !important;
     }
 
-    .flatpickr-day.inRange {
-      background: var(--datepickr-day-range-bg);
-      border-color: transparent;
-      box-shadow:
-        calc(-1 * var(--datepickr-range-join-size)) 0 0 var(--datepickr-day-range-bg),
-        var(--datepickr-range-join-size) 0 0 var(--datepickr-day-range-bg);
-      color: var(--datepickr-day-range-fg);
+    .flatpickr-day.startRange {
+      border-top-left-radius: 8px !important;
+      border-bottom-left-radius: 8px !important;
+      border-top-right-radius: 0 !important;
+      border-bottom-right-radius: 0 !important;
     }
 
-    .flatpickr-day.inRange:hover,
-    .flatpickr-day.inRange:focus,
-    .flatpickr-day.today.inRange,
-    .flatpickr-day.today.inRange:hover,
-    .flatpickr-day.today.inRange:focus {
-      background: var(--datepickr-day-range-bg);
-      border-color: transparent;
-      box-shadow:
-        calc(-1 * var(--datepickr-range-join-size)) 0 0 var(--datepickr-day-range-bg),
-        var(--datepickr-range-join-size) 0 0 var(--datepickr-day-range-bg);
-      color: var(--datepickr-day-range-fg);
+    .flatpickr-day.endRange {
+      border-top-right-radius: 8px !important;
+      border-bottom-right-radius: 8px !important;
+      border-top-left-radius: 0 !important;
+      border-bottom-left-radius: 0 !important;
     }
 
-    .flatpickr-day.selected.startRange,
-    .flatpickr-day.startRange.startRange,
-    .flatpickr-day.endRange.startRange {
-      border-radius: var(--datepickr-day-radius) 0 0 var(--datepickr-day-radius);
+    .flatpickr-day.startRange.endRange {
+      border-radius: 8px !important;
     }
 
-    .flatpickr-day.selected.endRange,
-    .flatpickr-day.startRange.endRange,
-    .flatpickr-day.endRange.endRange {
-      border-radius: 0 var(--datepickr-day-radius) var(--datepickr-day-radius) 0;
-    }
-
-    .flatpickr-day.selected.startRange.endRange,
-    .flatpickr-day.startRange.startRange.endRange,
-    .flatpickr-day.endRange.startRange.endRange {
-      border-radius: var(--datepickr-day-radius);
-    }
-
-    .flatpickr-day.selected.startRange + .endRange:not(:nth-child(7n+1)),
-    .flatpickr-day.startRange.startRange + .endRange:not(:nth-child(7n+1)),
-    .flatpickr-day.endRange.startRange + .endRange:not(:nth-child(7n+1)) {
-      box-shadow: calc(-2 * var(--datepickr-range-join-size)) 0 0 var(--datepickr-day-selected-bg);
-    }
-
-    .flatpickr-day.today.selected,
-    .flatpickr-day.today.startRange,
-    .flatpickr-day.today.endRange,
-    .flatpickr-day.today.selected:hover,
-    .flatpickr-day.today.startRange:hover,
-    .flatpickr-day.today.endRange:hover,
-    .flatpickr-day.today.selected:focus,
-    .flatpickr-day.today.startRange:focus,
-    .flatpickr-day.today.endRange:focus {
-      background: var(--datepickr-day-selected-bg);
-      border-color: var(--datepickr-day-selected-bg);
-      color: var(--datepickr-day-selected-fg);
-      box-shadow: none;
-    }
-
-    .flatpickr-day.today {
-      border-color: var(--datepickr-day-today-border);
-      font-weight: 700;
-    }
-
-    .flatpickr-day.today:hover {
-      background: var(--datepickr-day-today-bg);
-      border-color: var(--datepickr-day-today-border);
-    }
-
-    .flatpickr-weekday {
-      color: var(--datepickr-weekday-fg);
+    .flatpickr-day.today:not(.selected):not(.startRange):not(.endRange)::after {
+      content: '';
+      position: absolute;
+      bottom: 3px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--color-primary);
     }
 
     .flatpickr-calendar.arrowTop:before {
-      border-bottom-color: var(--datepickr-panel-border);
+      border-bottom-color: color-mix(in srgb, var(--color-primary) 24%, var(--color-border));
     }
 
     .flatpickr-calendar.arrowTop:after {
-      border-bottom-color: var(--datepickr-panel-bg);
+      border-bottom-color: color-mix(in srgb, var(--color-surface) 96%, var(--color-bg));
     }
 
     .flatpickr-footer {
       display: flex;
-      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
       gap: 10px;
-      padding: 12px;
-      border-top: 1px solid var(--datepickr-footer-border);
-      background: var(--datepickr-footer-bg);
+      padding: 10px 8px 6px 8px;
+      border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+      background: transparent;
     }
 
     .flatpickr-footer-summary {
-      min-height: 40px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 8px 10px;
-      border-radius: var(--datepickr-day-radius);
-      border: 1px solid var(--datepickr-summary-border);
-      background: var(--datepickr-summary-bg);
-      color: var(--datepickr-summary-fg);
-      font-size: 13px;
-      font-weight: 700;
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--color-text);
+      padding: 5px 10px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--color-surface) 80%, var(--color-bg));
+      border: 1px solid var(--color-border);
       letter-spacing: 0.01em;
-      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .flatpickr-footer-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .flatpickr-cancel-button {
+      font-size: 12px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 8px;
+      color: var(--color-muted);
+      background: transparent;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: all 0.15s cubic-bezier(0.2, 0, 0, 1);
+    }
+    .flatpickr-cancel-button:hover {
+      color: var(--color-text);
+      background: color-mix(in srgb, var(--color-text) 8%, transparent);
     }
 
     .flatpickr-confirm-button {
-      width: 100%;
-      min-height: 40px;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: 8px;
+      color: #ffffff;
+      background: var(--color-primary);
+      border: 1px solid transparent;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15), 0 0 10px color-mix(in srgb, var(--color-primary) 30%, transparent);
+      cursor: pointer;
+      transition: all 0.15s cubic-bezier(0.2, 0, 0, 1);
+    }
+
+    .flatpickr-confirm-button:hover:not(:disabled) {
+      background: var(--color-primary-dark, #2563eb);
+      transform: translateY(-1px);
+      box-shadow: 0 3px 8px color-mix(in srgb, var(--color-primary) 40%, transparent);
     }
 
     .flatpickr-confirm-button:disabled {
       cursor: not-allowed;
-      opacity: 0.55;
+      opacity: 0.45;
       transform: none !important;
       box-shadow: none !important;
     }
@@ -12878,8 +12944,12 @@
       if (!flatpickrInstance?.calendarContainer) return;
       const summary = flatpickrInstance.calendarContainer.querySelector('.flatpickr-footer-summary');
       const button = flatpickrInstance.calendarContainer.querySelector('.flatpickr-confirm-button');
+      const closeBtn = flatpickrInstance.calendarContainer.querySelector('.flatpickr-cancel-button');
       if (summary) {
         summary.textContent = getDisplayRangeText(pendingStartDate, pendingEndDate);
+      }
+      if (closeBtn) {
+        closeBtn.textContent = t('close') || 'Close';
       }
       if (button) {
         button.textContent = t('apply');
@@ -12898,14 +12968,27 @@
       summary.className = 'flatpickr-footer-summary mono';
       footer.appendChild(summary);
 
+      const actions = document.createElement('div');
+      actions.className = 'flatpickr-footer-actions';
+
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'flatpickr-cancel-button';
+      closeBtn.textContent = t('close') || 'Close';
+      closeBtn.addEventListener('click', () => {
+        flatpickrInstance?.close();
+      });
+      actions.appendChild(closeBtn);
+
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'btn btn-primary flatpickr-confirm-button';
+      button.className = 'flatpickr-confirm-button';
       button.addEventListener('click', () => {
         applyPendingDateSelection();
       });
-      footer.appendChild(button);
+      actions.appendChild(button);
 
+      footer.appendChild(actions);
       instance.calendarContainer.appendChild(footer);
       syncDatePickerFooter();
     }

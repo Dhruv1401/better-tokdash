@@ -5,7 +5,7 @@
 - [x] 3. Arc Search Field: Upgrade Sessions Explorer search input to Arc UI search field (icon focus transitions, clear button)
 - [x] 4. Arc Switch: Replace checkboxes with Arc UI switch toggles (Sessions Review toggle and Settings switches)
 - [x] 5. Arc Segmented Control: Replace quick-range button row and remove "More ranges" dropdown with Arc UI segmented control
-- [ ] 6. Arc Date Range Picker: Implement Arc UI Date Range Picker with preset rail, calendar view, range highlight, and clean trigger
+- [x] 6. Arc Date Range Picker: Implement Arc UI Date Range Picker with preset rail, calendar view, range highlight, and clean trigger
 - [ ] 7. Arc Resizable Panels: Add resizable split panels to Sessions Explorer with draggable handle grip and collapsible detail view
 - [ ] 8. Arc Dialog for Settings: Convert Settings into native Arc UI Dialog with backdrop blur, entrance spring, header, and close button
 - [ ] 9. Polish dark mode styling for "elevated" theme across all components
