@@ -728,6 +728,102 @@
       color: var(--color-text);
     }
 
+    /* Arc UI Announcement Bar */
+    .arc-announcement-bar-collapse {
+      overflow: hidden;
+      max-height: 80px;
+      opacity: 1;
+      transition: max-height 360ms cubic-bezier(0.34, 1.56, 0.64, 1), opacity 240ms ease;
+    }
+    .arc-announcement-bar-collapse[data-dismissed="true"] {
+      max-height: 0;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .arc-announcement-bar {
+      display: grid;
+      grid-template-columns: 40px minmax(0, 1fr) 40px;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 16px;
+      border-bottom: 1px solid var(--color-border);
+      background: color-mix(in srgb, var(--color-primary) 12%, var(--color-surface-glass, var(--color-bg)));
+      backdrop-filter: blur(12px);
+      color: var(--color-text);
+      font-size: 13px;
+    }
+    .arc-announcement-viewport {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 28px;
+    }
+    .arc-announcement-message {
+      display: inline-flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin: 0;
+      text-align: center;
+    }
+    .arc-announcement-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      background: var(--color-primary);
+      color: #ffffff;
+      box-shadow: 0 2px 6px color-mix(in srgb, var(--color-primary) 35%, transparent);
+    }
+    .arc-announcement-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--color-border);
+      background: color-mix(in srgb, var(--color-text) 5%, transparent);
+      color: var(--color-text);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+    }
+    .arc-announcement-cta:hover {
+      background: color-mix(in srgb, var(--color-text) 10%, transparent);
+      border-color: var(--color-primary);
+      transform: translateY(-1px);
+    }
+    .arc-announcement-cta:active {
+      transform: scale(0.96);
+    }
+    .arc-announcement-dismiss {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: 0;
+      background: transparent;
+      color: var(--color-muted);
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    .arc-announcement-dismiss:hover {
+      background: color-mix(in srgb, var(--color-text) 8%, transparent);
+      color: var(--color-text);
+    }
+    @media (max-width: 640px) {
+      .arc-announcement-bar {
+        grid-template-columns: minmax(0, 1fr) 32px;
+        padding: 8px 12px;
+      }
+      .arc-announcement-side { display: none; }
+    }
+
     /* Arc UI Search Field */
     .arc-search-field {
       position: relative;
@@ -4019,6 +4115,28 @@
 
   <!-- Main Viewport -->
   <div class="flex-1 min-w-0 flex flex-col min-h-screen overflow-x-hidden dashboard-main">
+    <!-- Arc UI Announcement Bar for Updates -->
+    <aside id="topAnnouncementBar" class="arc-announcement-bar-collapse" role="region" aria-label="Update notice" hidden>
+      <div class="arc-announcement-bar">
+        <div class="arc-announcement-side" aria-hidden="true"></div>
+        <div class="arc-announcement-viewport">
+          <p class="arc-announcement-message">
+            <span class="arc-announcement-badge" data-i18n="updateAvailable">Update available</span>
+            <span id="topAnnouncementText" class="arc-announcement-text">Tokdash update is ready</span>
+            <button id="topAnnouncementCopyBtn" type="button" class="arc-announcement-cta" title="Copy update command">
+              <code class="font-mono text-xs px-1.5 py-0.5 rounded" style="background: color-mix(in srgb, var(--color-text) 10%, transparent);">tokdash update</code>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              <span id="topAnnouncementCopyLabel" data-i18n="updateCopy">Copy</span>
+            </button>
+          </p>
+        </div>
+        <div class="arc-announcement-controls">
+          <button id="topAnnouncementDismiss" type="button" class="arc-announcement-dismiss" aria-label="Dismiss announcement" title="Dismiss">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+    </aside>
     <div class="w-full max-w-[1680px] p-4 sm:p-6 lg:p-8 space-y-4">
 
       <!-- Top bar -->
@@ -24479,9 +24597,47 @@
       document.getElementById('updateSkipBtn').addEventListener('click', () => {
         localStorage.setItem(UPDATE_SKIP_KEY, String(info.latest));
         notice.hidden = true;
+        const topBar = document.getElementById('topAnnouncementBar');
+        if (topBar) {
+          topBar.setAttribute('data-dismissed', 'true');
+          setTimeout(() => { topBar.hidden = true; }, 360);
+        }
         const dot = document.getElementById('updateDot');
         if (dot) dot.hidden = true;
       });
+
+      // Arc UI Top Announcement Bar
+      const topBar = document.getElementById('topAnnouncementBar');
+      if (topBar) {
+        const topText = document.getElementById('topAnnouncementText');
+        if (topText) {
+          topText.textContent = `Tokdash v${info.latest} is now available (current: v${info.current || '?'})`;
+        }
+        topBar.hidden = false;
+        topBar.removeAttribute('data-dismissed');
+
+        const copyBtn = document.getElementById('topAnnouncementCopyBtn');
+        const copyLabel = document.getElementById('topAnnouncementCopyLabel');
+        copyBtn?.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText('tokdash update');
+            if (copyLabel) copyLabel.textContent = (typeof t === 'function' && t('updateCopied')) || 'Copied!';
+            setTimeout(() => {
+              if (copyLabel) copyLabel.textContent = (typeof t === 'function' && t('updateCopy')) || 'Copy';
+            }, 1600);
+          } catch (_) {}
+        });
+
+        const dismissBtn = document.getElementById('topAnnouncementDismiss');
+        dismissBtn?.addEventListener('click', () => {
+          localStorage.setItem(UPDATE_SKIP_KEY, String(info.latest));
+          topBar.setAttribute('data-dismissed', 'true');
+          setTimeout(() => { topBar.hidden = true; }, 360);
+          notice.hidden = true;
+          const dot = document.getElementById('updateDot');
+          if (dot) dot.hidden = true;
+        });
+      }
     }
 
     async function initUpdateNotice() {
