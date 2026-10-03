@@ -630,6 +630,104 @@
       transform: scale(0.96);
     }
 
+    /* Arc UI Toast */
+    .arc-toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      pointer-events: none;
+      max-width: min(420px, calc(100vw - 32px));
+    }
+    .arc-toast {
+      pointer-events: auto;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--color-border);
+      background: color-mix(in srgb, var(--color-surface-glass, var(--color-bg)) 92%, var(--color-bg));
+      color: var(--color-text);
+      backdrop-filter: blur(16px);
+      box-shadow: 0 12px 34px -4px rgba(0, 0, 0, 0.28), 0 0 0 1px color-mix(in srgb, var(--color-border) 60%, transparent);
+      animation: arc-toast-enter 280ms cubic-bezier(0.34, 1.56, 0.64, 1);
+      transition: opacity 200ms ease, transform 200ms ease;
+    }
+    .arc-toast[data-exiting="true"] {
+      opacity: 0;
+      transform: translateY(10px) scale(0.96);
+      pointer-events: none;
+    }
+    @keyframes arc-toast-enter {
+      from { opacity: 0; transform: translateY(16px) scale(0.95); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .arc-toast-icon {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      flex-shrink: 0;
+      font-size: 14px;
+    }
+    .arc-toast[data-variant="success"] .arc-toast-icon {
+      color: #10b981;
+      background: color-mix(in srgb, #10b981 14%, transparent);
+      border: 1px solid color-mix(in srgb, #10b981 30%, transparent);
+    }
+    .arc-toast[data-variant="info"] .arc-toast-icon {
+      color: var(--color-primary);
+      background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+      border: 1px solid color-mix(in srgb, var(--color-primary) 30%, transparent);
+    }
+    .arc-toast[data-variant="error"] .arc-toast-icon {
+      color: #ef4444;
+      background: color-mix(in srgb, #ef4444 14%, transparent);
+      border: 1px solid color-mix(in srgb, #ef4444 30%, transparent);
+    }
+    .arc-toast-body {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      flex: 1;
+      padding-top: 2px;
+    }
+    .arc-toast-title {
+      font-size: 12.5px;
+      font-weight: 600;
+      line-height: 1.3;
+      color: var(--color-text);
+    }
+    .arc-toast-desc {
+      font-size: 11px;
+      line-height: 1.4;
+      color: var(--color-muted);
+    }
+    .arc-toast-close {
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      border: 0;
+      background: transparent;
+      color: var(--color-muted);
+      cursor: pointer;
+      margin-left: 4px;
+      margin-top: 1px;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    .arc-toast-close:hover {
+      background: color-mix(in srgb, var(--color-text) 10%, transparent);
+      color: var(--color-text);
+    }
+
     /* Arc UI Search Field */
     .arc-search-field {
       position: relative;
@@ -11946,6 +12044,58 @@
       return `${name}${sources}`;
     }
 
+    function showArcToast({ title, description = '', variant = 'info', duration = 3500 } = {}) {
+      let container = document.getElementById('arcToastContainer');
+      if (!container) {
+        container = document.createElement('div');
+        container.id = 'arcToastContainer';
+        container.className = 'arc-toast-container';
+        container.setAttribute('aria-live', 'polite');
+        container.setAttribute('aria-atomic', 'true');
+        document.body.appendChild(container);
+      }
+
+      const toast = document.createElement('div');
+      toast.className = 'arc-toast';
+      toast.dataset.variant = variant;
+      toast.setAttribute('role', 'status');
+
+      let iconHtml = '';
+      if (variant === 'success') {
+        iconHtml = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+      } else if (variant === 'error') {
+        iconHtml = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+      } else {
+        iconHtml = `<span class="arc-spinner" style="width:13px;height:13px;border-width:2px;"></span>`;
+      }
+
+      toast.innerHTML = `
+        <div class="arc-toast-icon">${iconHtml}</div>
+        <div class="arc-toast-body">
+          <div class="arc-toast-title">${title}</div>
+          ${description ? `<div class="arc-toast-desc">${description}</div>` : ''}
+        </div>
+        <button type="button" class="arc-toast-close" aria-label="Dismiss toast">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      `;
+
+      const dismiss = () => {
+        if (toast.dataset.exiting) return;
+        toast.dataset.exiting = 'true';
+        setTimeout(() => toast.remove(), 220);
+      };
+
+      toast.querySelector('.arc-toast-close')?.addEventListener('click', dismiss);
+      container.appendChild(toast);
+
+      if (duration > 0) {
+        setTimeout(dismiss, duration);
+      }
+      return dismiss;
+    }
+    window.showArcToast = showArcToast;
+
     function showUsageRefreshReport(report) {
       const panel = document.getElementById('refreshReport');
       if (!panel || !report) return;
@@ -11959,7 +12109,16 @@
         cached: 'refreshReportCached',
         cachedPreserved: 'refreshReportCachedPreserved',
       };
-      document.getElementById('refreshReportTitle').textContent = t(titleKeys[report.status] || 'refreshReportComplete');
+      const titleText = t(titleKeys[report.status] || 'refreshReportComplete');
+      document.getElementById('refreshReportTitle').textContent = titleText;
+      showArcToast({
+        title: titleText,
+        description: report.baseline
+          ? (report.toolsChanged ? `${report.toolsChanged} tools updated` : (t('refreshReportNoChanges') || 'No new activity'))
+          : (t('refreshUpdated') || 'Refreshed telemetry'),
+        variant: report.status === 'failed' ? 'error' : 'success',
+        duration: 3500
+      });
       const completed = new Date(report.completedAt);
       const time = Number.isNaN(completed.getTime())
         ? ''
@@ -23871,6 +24030,12 @@
     });
 
     document.getElementById('refreshBtn').addEventListener('click', () => {
+      showArcToast({
+        title: (typeof t === 'function' && t('refreshing')) || 'Refreshing...',
+        description: 'Syncing telemetry, tokens, and active sessions',
+        variant: 'info',
+        duration: 2500
+      });
       // TASK 2: on the Quota tab the global refresh button refreshes quota data instead
       // of the Overview/Sessions dashboard fetch below (unchanged on every other tab).
       if (isQuotaActive()) {
