@@ -15,6 +15,7 @@ Tokdash is **localhost-only by default**.
 - `TOKDASH_KEEPALIVE` (default: `5` seconds) — uvicorn keep-alive timeout
 - `TOKDASH_ALLOW_ORIGINS` (comma-separated, default: empty)
 - `TOKDASH_ALLOW_ORIGIN_REGEX` (default CORS policy allows localhost/127.0.0.1 and same-tailnet Tailscale Serve reads; setting either CORS option replaces that default policy)
+- `TOKDASH_UPDATE_ORIGIN` (unset) — exact HTTPS origin allowed to pair a remote browser for click-to-update; unset means remote updates are entirely off (`tokdash update-enroll` mints the codes)
 - `TOKDASH_NO_RETENTION_NOTICE` (set to `1` to silence the history-retention reminder printed on `tokdash serve`)
 - `TOKDASH_SETUP_NO_OPEN` (set to `1` to skip the optional browser open at the end of `tokdash setup`)
 
