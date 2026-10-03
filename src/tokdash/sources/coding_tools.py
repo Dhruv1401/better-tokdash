@@ -8373,6 +8373,14 @@ class FreebuffParser(BaseParser):
     def _file_signatures(self) -> tuple:
         def scan() -> tuple:
             out: List[Tuple[str, int, int]] = []
+            state_mtime = 0
+            try:
+                state_path = clientpaths.freebuff_desktop_state_path()
+                if state_path.is_file():
+                    state_mtime = int(state_path.stat().st_mtime_ns)
+            except OSError:
+                pass
+
             for db in self._db_paths():
                 # ONE entry per project DB, WAL sidecars folded in
                 # (_sqlite_db_signature). A per-sidecar entry would make
@@ -8380,6 +8388,11 @@ class FreebuffParser(BaseParser):
                 # three times per sync.
                 sig = _sqlite_db_signature(db)
                 if sig is not None:
+                    if state_mtime:
+                        # Fold state.json mtime in so modifying agentHarness
+                        # in state.json immediately invalidates cached project
+                        # stores that rely on the default harness.
+                        sig = (sig[0], max(sig[1], state_mtime), sig[2])
                     out.append(sig)
             return tuple(out)
 
@@ -8485,10 +8498,16 @@ class FreebuffParser(BaseParser):
         model = model or "unknown"
         # A model with no "/" gets no provider. The handle form (m-<hex>) is
         # opaque, and inventing a provider for it would fabricate a pair that
-        # never existed (Muse rule).
+        # never existed (Muse rule). The provider-qualified candidate comes
+        # first, then the bare model name (Hermes/Muse rule).
         candidates = [c for c in dict.fromkeys(
-            [model, f"{provider}/{model}" if provider else model]
+            [f"{provider}/{model}" if provider else model, model]
         ) if c]
+        cost = 0.0
+        for cand in candidates:
+            cost = self.pricing_db.get_cost(cand, fresh_input, billed_output, cached, 0)
+            if cost > 0:
+                break
         return {
             "source": self.source_name,
             "model": model,
@@ -8498,7 +8517,7 @@ class FreebuffParser(BaseParser):
             "cacheRead": cached,
             "cacheWrite": 0,
             "reasoning": reasoning,
-            "cost": self.pricing_db.get_cost(model, fresh_input, billed_output, cached, 0),
+            "cost": cost,
             "timestamp": ts_ms,
             "entry_id": entry_id,
             "_billing": usage_billing_pricing(
@@ -8610,7 +8629,7 @@ class FreebuffParser(BaseParser):
             return out
         for row in conn.execute(
             "SELECT r.id AS id, r.thread_id AS thread_id, r.manager_json AS manager_json, "
-            "       r.updated_at AS updated_at, t.model AS thread_model "
+            "       r.updated_at AS updated_at, r.created_at AS created_at, t.model AS thread_model "
             "FROM auto_run_decision_receipts r JOIN threads t ON t.id = r.thread_id"
         ):
             manager_raw = row["manager_json"]
@@ -8637,9 +8656,9 @@ class FreebuffParser(BaseParser):
             entry = self._build_entry(
                 model_value=model_value,
                 usage=usage,
-                # updated_at is the decision's finish: it is written alongside
-                # manager_json on the same row.
-                ts_ms=self._i(row["updated_at"]),
+                # updated_at is the decision's finish; fall back to created_at
+                # if updated_at is not populated.
+                ts_ms=self._i(row["updated_at"] or row["created_at"]),
                 entry_id=f"freebuff:{row['thread_id']}:receipt:{row['id']}",
             )
             if entry is not None:

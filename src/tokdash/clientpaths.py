@@ -1148,7 +1148,11 @@ def freebuff_desktop_state_path() -> Path:
     else ``~/.config/freebuff-desktop/state.json``.
     """
     explicit = os.environ.get("FREEBUFF_DESKTOP_STATE_PATH", "").strip()
-    return Path(explicit).expanduser() if explicit else Path.home() / ".config" / "freebuff-desktop" / "state.json"
+    return (
+        Path(explicit).expanduser().resolve()
+        if explicit
+        else (Path.home() / ".config" / "freebuff-desktop" / "state.json").resolve()
+    )
 
 
 def freebuff_desktop_home() -> Path:

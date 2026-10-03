@@ -597,10 +597,9 @@ def test_billing_record_is_priceable(monkeypatch, tmp_path):
     e = _fresh(monkeypatch, tmp_path)._parse_all()[0]
     billing = e["_billing"]
     assert billing["kind"] == "pricing"
-    # Both the bare and the qualified id are candidates, so a repricing pass
-    # resolves whichever key the DB carries.
-    assert "glm-5.3-flash" in billing["models"]
-    assert "z-ai/glm-5.3-flash" in billing["models"]
+    # Both the bare and the qualified id are candidates, with the qualified
+    # candidate first (Hermes/Muse rule).
+    assert billing["models"] == ["z-ai/glm-5.3-flash", "glm-5.3-flash"]
     # Billing uses the FULL output (reasoning stays billed at the output rate)
     # and the disjoint fresh-input/cache split.
     assert billing["input"] == 600
@@ -779,6 +778,7 @@ def test_manager_billing_record_is_priceable(monkeypatch, tmp_path):
     e = _fresh(monkeypatch, tmp_path)._parse_all()[0]
     b = e["_billing"]
     assert b["kind"] == "pricing"
+    assert b["models"] == ["z-ai/glm-5.3-flash", "glm-5.3-flash"]
     # Billing keeps the FULL completion (reasoning billed at the output rate).
     assert b["input"] == 600
     assert b["output"] == 100
@@ -982,4 +982,67 @@ def test_parse_file_strict_raises_on_corrupt_db(monkeypatch, tmp_path):
     sig = (str(bad), 100, 100)
     with pytest.raises((ct.ZCodeSnapshotError, sqlite3.Error, OSError)):
         parser._parse_file_strict(sig)
+
+
+def test_provider_qualified_candidate_precedes_bare_model(monkeypatch, tmp_path):
+    """Provider-qualified candidate comes first and prices at the provider-specific
+    rate rather than the bare model fallback (Hermes/Muse rule)."""
+    custom_pricing_file = tmp_path / "pricing.json"
+    custom_pricing_file.write_text(
+        json.dumps({
+            "version": "test",
+            "aliases": {},
+            "models": {
+                "z-ai/glm-5.3-flash": {"input": 10.0, "output": 20.0},
+                "glm-5.3-flash": {"input": 1.0, "output": 2.0},
+            },
+        }),
+        encoding="utf-8",
+    )
+    pricing = PricingDatabase(db_path=custom_pricing_file, override_path=tmp_path / "absent.json")
+
+    _make_db(
+        _projects(tmp_path) / "p1",
+        model="z-ai/glm-5.3-flash",
+        messages=[("assistant", _metrics(input_tokens=1_000_000, output_tokens=0), TS_MS)],
+    )
+
+    parser = FreebuffParser(pricing)
+    monkeypatch.setattr(parser, "_db_paths", lambda: [_projects(tmp_path) / "p1" / "desktop-v2.db"])
+    entries = parser._parse_all()
+    assert len(entries) == 1
+    # Qualified candidate comes first
+    assert entries[0]["_billing"]["models"] == ["z-ai/glm-5.3-flash", "glm-5.3-flash"]
+    # Prices at the qualified rate ($10/M) rather than bare ($1/M)
+    assert entries[0]["cost"] == pytest.approx(10.0)
+
+
+def test_modifying_state_json_updates_file_signatures(monkeypatch, tmp_path):
+    """Modifying state.json updates the file signatures mtime so project DBs
+    are re-synced immediately when default harness changes."""
+    import os
+    import time
+
+    state_file = tmp_path / ".config" / "freebuff-desktop" / "state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"agentHarness": "codebuff"}), encoding="utf-8")
+
+    db = _projects(tmp_path) / "p1" / "desktop-v2.db"
+    _make_db(db.parent, messages=[("assistant", _metrics(input_tokens=10), TS_MS)])
+
+    parser = _fresh(monkeypatch, tmp_path)
+    sigs1 = parser._file_signatures()
+    assert len(sigs1) == 1
+
+    # Update state.json mtime into the future
+    future_time = time.time() + 100
+    os.utime(state_file, (future_time, future_time))
+
+    # Clear signature cache to simulate a later collect pass
+    ct._sig_cache.clear()
+    sigs2 = parser._file_signatures()
+    assert len(sigs2) == 1
+    # Signature mtime advanced to match state.json
+    assert sigs2[0][1] > sigs1[0][1]
+
 
