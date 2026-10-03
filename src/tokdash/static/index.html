@@ -339,8 +339,83 @@
     .btn-primary:active { transform: translateY(0px); }
 
     #refreshBtn {
-      min-width: 128px;
+      min-width: 124px;
     }
+    .arc-action-btn {
+      position: relative;
+      display: inline-flex;
+      min-height: 38px;
+      min-width: 124px;
+      align-items: center;
+      justify-content: center;
+      padding: 0 16px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%);
+      color: #ffffff;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      box-shadow: 0 4px 14px rgba(79, 70, 229, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+      transition: background 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+                  border-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+                  transform 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+                  box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+                  opacity 0.2s ease;
+      overflow: hidden;
+      user-select: none;
+    }
+    .arc-action-btn:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(79, 70, 229, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.32);
+    }
+    .arc-action-btn:active:not(:disabled) {
+      transform: scale(0.97);
+    }
+    .arc-action-btn:disabled:not([data-state="pending"]) {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+    .arc-action-btn[data-state="pending"] {
+      cursor: progress;
+      background: linear-gradient(135deg, #4338ca 0%, #2563eb 100%);
+      box-shadow: 0 4px 14px rgba(67, 56, 202, 0.4);
+    }
+    .arc-action-btn[data-state="success"] {
+      background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+    }
+    .arc-action-btn[data-state="error"] {
+      background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
+      box-shadow: 0 4px 14px rgba(239, 68, 68, 0.35);
+    }
+    .arc-action-content {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      white-space: nowrap;
+    }
+    .arc-action-phase {
+      display: inline-grid;
+      place-items: center;
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }
+    .arc-spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      border-radius: 9999px;
+      animation: arc-spin 0.65s linear infinite;
+    }
+    @keyframes arc-spin { to { transform: rotate(360deg); } }
     .refresh-control {
       position: relative;
       display: inline-flex;
@@ -2980,12 +3055,16 @@
             <!-- Top action row: Refresh + 1-Click Light/Dark Theme Switch -->
             <div class="flex items-center gap-2">
               <div class="refresh-control">
-                <button id="refreshBtn" class="btn btn-primary" aria-label="Refresh dashboard" aria-controls="refreshReport" aria-expanded="false">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="M20 12a8 8 0 1 1-2.343-5.657" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    <path d="M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                  <span data-i18n="refresh">Refresh</span>
+                <button id="refreshBtn" class="arc-action-btn" aria-label="Refresh dashboard" aria-controls="refreshReport" aria-expanded="false" data-state="idle">
+                  <span class="arc-action-content">
+                    <span class="arc-action-phase" aria-hidden="true">
+                      <svg class="arc-action-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20 12a8 8 0 1 1-2.343-5.657"/>
+                        <path d="M20 4v6h-6"/>
+                      </svg>
+                    </span>
+                    <span class="arc-action-label" data-i18n="refresh">Refresh</span>
+                  </span>
                 </button>
                 <section id="refreshReport" class="refresh-report" role="status" aria-live="polite" aria-atomic="true" data-status="complete" hidden>
                   <div class="refresh-report-head">
@@ -10553,6 +10632,7 @@
       const refreshBtn = document.getElementById('refreshBtn');
       if (!refreshBtn) return;
       let labelKey = 'refresh';
+      let state = 'idle';
       let spinning = false;
       let disabled = false;
       let label = null;
@@ -10560,26 +10640,52 @@
         labelKey = updateIsManualRefresh ? 'refreshing' : 'loading';
         spinning = true;
         disabled = true;
+        state = 'pending';
       } else if (refreshUiState === 'refreshing') {
         // Driven by refreshQuotaViaGlobalButton (Quota tab), not the dashboard fetch above.
         labelKey = 'refreshing';
         spinning = true;
         disabled = true;
+        state = 'pending';
       } else if (refreshUiState === 'cooldown') {
         label = t('refreshCooldown').replace('{n}', String(refreshCooldownRemaining));
         disabled = true;
-      } else if (refreshUiState === 'updated') labelKey = 'refreshUpdated';
-      else if (refreshUiState === 'cached') labelKey = 'refreshCached';
-      else if (refreshUiState === 'busy') labelKey = 'refreshBusy';
-      else if (refreshUiState === 'failed') labelKey = 'refreshFailed';
+        state = 'pending';
+      } else if (refreshUiState === 'updated') {
+        labelKey = 'refreshUpdated';
+        state = 'success';
+      } else if (refreshUiState === 'cached') {
+        labelKey = 'refreshCached';
+        state = 'idle';
+      } else if (refreshUiState === 'busy') {
+        labelKey = 'refreshBusy';
+        state = 'pending';
+      } else if (refreshUiState === 'failed') {
+        labelKey = 'refreshFailed';
+        state = 'error';
+      }
       if (label === null) label = t(labelKey);
-      const iconClass = spinning ? ' class="refresh-icon-spin"' : '';
+      refreshBtn.setAttribute('data-state', state);
+
+      let phaseIcon = '';
+      if (spinning) {
+        phaseIcon = '<span class="arc-spinner" aria-hidden="true"></span>';
+      } else if (state === 'success') {
+        phaseIcon = `<svg class="arc-status-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>`;
+      } else if (state === 'error') {
+        phaseIcon = `<svg class="arc-status-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+      } else {
+        phaseIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 12a8 8 0 1 1-2.343-5.657"/>
+          <path d="M20 4v6h-6"/>
+        </svg>`;
+      }
+
       refreshBtn.innerHTML = `
-        <svg${iconClass} width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M20 12a8 8 0 1 1-2.343-5.657" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <path d="M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span>${label}</span>
+        <span class="arc-action-content">
+          <span class="arc-action-phase" aria-hidden="true">${phaseIcon}</span>
+          <span class="arc-action-label">${label}</span>
+        </span>
       `;
       refreshBtn.setAttribute('aria-label', label);
       refreshBtn.disabled = disabled;
