@@ -1140,6 +1140,60 @@ def devin_db_paths() -> List[Path]:
     return out
 
 
+# --- Freebuff -----------------------------------------------------------------
+
+
+def freebuff_desktop_state_path() -> Path:
+    """Freebuff Desktop's state file: ``$FREEBUFF_DESKTOP_STATE_PATH`` if set,
+    else ``~/.config/freebuff-desktop/state.json``.
+    """
+    explicit = os.environ.get("FREEBUFF_DESKTOP_STATE_PATH", "").strip()
+    return (
+        Path(explicit).expanduser()
+        if explicit
+        else Path.home() / ".config" / "freebuff-desktop" / "state.json"
+    )
+
+
+def freebuff_desktop_home() -> Path:
+    """Freebuff Desktop's root config/data dir: directory containing ``state.json``.
+
+    The desktop app resolves its state path via ``desktopStatePath()``
+    (honouring ``FREEBUFF_DESKTOP_STATE_PATH``, defaulting to
+    ``~/.config/freebuff-desktop/state.json``) and derives the per-project
+    database root as ``join(dirname(statePath), "projects")``. Relocating the
+    state file therefore relocates the project stores as well. The
+    ``FREEBUFF_CONFIG_DIR`` override belongs to the CLI (``.config/manicode``)
+    and is deliberately not honoured here.
+    """
+    return freebuff_desktop_state_path().parent
+
+
+def freebuff_desktop_db_paths() -> List[Path]:
+    """Existing per-project ``desktop-v2.db`` stores, sorted, deduplicated.
+
+    The desktop app keeps one SQLite database per opened project under
+    ``<home>/projects/<basename>-<uuid>/desktop-v2.db``; the directory name
+    carries the project basename plus a UUID (the authoritative project path
+    lives in the sibling ``project.json``). Every project is a disjoint store
+    with its own thread ids, so all of them are real usage and a union is
+    correct. Tokdash reads the store tree for the active environment (or
+    ``FREEBUFF_DESKTOP_STATE_PATH`` relocation).
+    """
+    projects = freebuff_desktop_home() / "projects"
+    out: List[Path] = []
+    for db in sorted(projects.glob("*/desktop-v2.db")):
+        if not db.is_file():
+            continue
+        try:
+            key = db.resolve()
+        except OSError:
+            key = db
+        if key not in out:
+            out.append(key)
+    return out
+
+
 # --- Tokdash data dir / usage DB -------------------------------------------------
 #
 # Mirrors onboard/paths.py::data_dir() (kept as a separate, untouched copy there —
