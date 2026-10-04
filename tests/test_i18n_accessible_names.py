@@ -119,7 +119,7 @@ def english_dictionary(tmp_path_factory: pytest.TempPathFactory) -> dict[str, st
         encoding="utf-8",
     )
     output = subprocess.run(
-        [node, str(harness)], capture_output=True, text=True, check=True
+        [node, str(harness)], capture_output=True, text=True, check=True, encoding="utf-8"
     ).stdout
     return json.loads(output)
 
@@ -780,7 +780,7 @@ def test_chart_tooltips_reuse_their_heading_terminology() -> None:
     try:
         rows = json.loads(
             subprocess.run(
-                [node, str(harness)], capture_output=True, text=True, check=True
+                [node, str(harness)], capture_output=True, text=True, check=True, encoding="utf-8"
             ).stdout
         )
     finally:
