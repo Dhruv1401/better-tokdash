@@ -97,6 +97,21 @@ def test_recent_sources_have_readme_pills() -> None:
         assert pill.stat().st_size < 20_000
 
 
+def test_readme_pills_keep_alpha_transparent_corners() -> None:
+    """A pill is a rounded shape, so its corner pixels must stay transparent.
+
+    Flattening an export onto white (an RGB PNG instead of RGBA) turns the pill
+    into a slab on GitHub's dark theme, which is the only place the shape shows.
+    PNG colour type 6 is truecolour with alpha.
+    """
+    offenders = []
+    for pill in sorted(DOCS_PILL_DIR.glob("*.png")):
+        header = pill.read_bytes()[:26]
+        if header[:8] != b"\x89PNG\r\n\x1a\n" or header[25] != 6:
+            offenders.append(pill.name)
+    assert not offenders, f"pills without an alpha channel: {offenders}"
+
+
 def test_tool_brand_registry_uses_local_lazy_assets_with_a_fallback() -> None:
     source = INDEX_HTML.read_text(encoding="utf-8")
     registry = re.search(
