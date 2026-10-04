@@ -8188,6 +8188,597 @@ class DevinParser(BaseParser):
         return list(out)
 
 
+class FreebuffParser(BaseParser):
+    """
+    Parser for Freebuff Desktop's per-project SQLite stores.
+
+    =======================================================================
+    FREEBUFF DESKTOP — ONE desktop-v2.db PER PROJECT, ONE ENTRY PER TURN
+    =======================================================================
+    Storage: ``~/.config/freebuff-desktop/projects/<basename>-<uuid>/
+    desktop-v2.db`` (see clientpaths.freebuff_desktop_db_paths). The desktop
+    app is an Electron build whose renderer owns the UI while a separate
+    ``orchestrator.js`` process (a Bun bundle) writes every thread and message
+    into one SQLite store per opened project. The directory name carries the
+    project basename plus a UUID; the authoritative project path is in the
+    sibling ``project.json``.
+
+    This is NOT the Freebuff CLI: the CLI (``.config/manicode``, npm
+    ``freebuff``) writes per-chat ``chat-messages.json`` / ``run-state.json``
+    trees under ``getConfigDir()/projects/<basename>/chats/<chatId>/``, and
+    those files carry no token counters at all (the ChatMessage type has a
+    ``credits`` field and no usage object). Only the desktop store persists
+    per-call usage, so only the desktop store is read.
+
+    Schema (verified against the shipped orchestrator bundle and four live
+    stores):
+      threads(id, project_id, project_path, title, model, harness_id,
+              agent_mode, created_at, ...)   — one row per conversation.
+      messages(seq INTEGER PRIMARY KEY AUTOINCREMENT, thread_id, role,
+               parts_json, metrics_json, ts, ...)  — one row per message.
+
+    Rows: TWO tables carry billable usage, and both are read.
+
+    1. ``messages.metrics_json`` → ``usage``, on ``role = 'assistant'`` rows.
+       A live capture holds exactly one assistant row per user turn (verified:
+       29 user / 28 assistant, no two consecutive assistants), so one entry
+       per assistant row is one entry per model turn.
+
+    2. ``auto_run_decision_receipts.manager_json`` → ``usage``. The autonomous
+       (mission / auto-run) loop is driven by a mission manager that makes its
+       own model call per decision. That call is billed but is NOT an assistant
+       message: the manager's model is frequently a different one from the
+       thread's, its duration is tens of seconds against the coding turns'
+       minutes, and its usage matches no message row in any live store
+       (verified: 42/42 unmatched). Skipping it undercounts every auto-run
+       thread — 6.76M tokens, 2.35% of the capture.
+
+       The SAME table also carries ``outcome_json.usage``, and that one is a
+       duplicate: it restates the turn's final assistant message, byte for byte
+       (verified: 37/37 matched an existing message row). Reading it would
+       double-count every completed auto-run turn, so it is deliberately NOT
+       read. Only the manager usage is taken.
+
+    A receipt's own ``manager_json.model`` wins over ``threads.model``; 8 of 45
+    live receipts disagree, and those would otherwise price at the wrong model.
+    ``usage: {}`` (a cancelled or failed decision) is skipped, not zero-billed.
+
+    metrics_json shape (all four fields observed on every usage row):
+      {"usage": {"inputTokens", "cachedInputTokens", "outputTokens",
+                 "reasoningOutputTokens", "totalTokens"},
+       "context": {...}, "compactions": [...], "costUsd": 0}
+
+    Bucket conventions — BOTH verified across every row in four live stores
+    (53/53 and 8/8):
+      * ``inputTokens + outputTokens == totalTokens`` exactly. ``cachedInputTokens``
+        is therefore a SUBSET of ``inputTokens`` (a cache-inclusive prompt, the
+        ZCode/Qwen/WorkBuddy convention), so the cached share is split into its
+        own bucket and billed at the cache rate.
+      * ``reasoningOutputTokens <= outputTokens`` on every row that carries it.
+        Reasoning is a SUBSET of output, and compute.py adds reasoning on top of
+        output for display, so it is split out of output here (WorkBuddy rule).
+      * ``cacheWrite`` is not persisted (zero by construction). Freebuff is a
+        cloud service: the prompt cache is provider-side and read-only from the
+        client's point of view, and no write counter exists in the store.
+      * ``costUsd`` is present and always 0 on every observed row. Freebuff is
+        NOT billed per token: a session buys an HOUR of a model with Freebucks
+        (a daily allowance plus paid top-ups), and messages inside that hour are
+        unlimited, so there is no per-token USD to record. ``costUsd`` is never
+        read; cost is pricing-DB only, and it is an API-equivalent estimate
+        rather than a bill. The authoritative Freebuff spend is the Freebucks
+        burned on session admissions — a session-level ledger that is
+        server-side only (nothing in ``desktop-v2.db`` carries a Freebucks or
+        spend column, verified), so it is out of scope for this parser.
+
+    Model attribution: ``threads.model`` is the thread's model and applies to
+    every assistant row in it. It is stored in one of two forms:
+      * a plain id (``z-ai/glm-5.3-flash``, ``deepseek-v4.1-flash``, ...),
+        which the pricing DB resolves directly;
+      * an opaque per-account handle of the form ``m-<hex>`` (e.g.
+        ``m-22ff70c712``). The catalog mode mints these per account and they
+        rotate; the mapping from handle to model is server-side and is never
+        written to disk (the CLI comments this explicitly: "a catalog carries
+        handles, which are minted per account and rotate, so none of it is ever
+        written to disk"). A handle therefore cannot be resolved to a priced
+        model offline and is carried verbatim, pricing at 0.00 exactly like a
+        router alias absent from the DB (WorkBuddy ``default-model``, MiniMax
+        ``MiniMax-M2.7-highspeed`` precedent). The row still counts its tokens.
+        This is the one documented accuracy gap for this source.
+
+    The model id is split ONCE on "/" into (provider, model) so
+    aggregate_entries composes ``provider/model`` without doubling the prefix
+    (Muse/Qwen precedent); a handle carries no "/" and keeps provider "".
+
+    Timestamps: ``messages.ts`` is epoch MILLISECONDS (verified against
+    live rows: 1790924652181 → 2026-10-02). One entry per assistant row
+    buckets that turn on the day it completed.
+
+    Dedup: message entries key on ``freebuff:<thread_id>:<seq>`` (``seq`` is
+    the message table's AUTOINCREMENT primary key, stable for the row's life),
+    and manager entries on ``freebuff:<thread_id>:receipt:<receipt_id>``. The
+    two prefixes cannot collide — ``receipt:`` is not a valid ``seq`` — so a
+    receipt whose id happens to be ``"1"`` never masquerades as message 1.
+
+    The keys are source-global only because the thread id is unique across
+    stores, and that is a property of the app, not of this parser: thread ids
+    are ``crypto.randomUUID()`` (verified in the shipped bundle) and no live
+    thread id appears in more than one project store (verified across four
+    stores). A hypothetical build that copied a thread row between stores
+    would collide on ``(source, entry_key)``, and the store's upsert would keep
+    one — the same exposure every other thread-scoped source has.
+
+    Storage mode: the store is WAL-mode and the desktop app keeps it open
+    while running, so it is read through the shared copy-and-snapshot helper
+    (zcode_snapshot) rather than opened in place — the live rows sit in the
+    -wal, and a bare read-only open would both miss them and create sidecar
+    state in the user's tree. Mode is file_replace: a thread's assistant rows
+    are rewritten in place as turns complete, so each sync replaces the
+    source's rows with the current values.
+
+    Agent harness filtering: Freebuff Desktop supports multiple agent harnesses
+    (``codebuff``, ``claude-code``, ``codex``). External harnesses (``claude-code``,
+    ``codex``) spawn their respective CLIs and write directly to ``~/.claude`` and
+    ``~/.codex``, which Tokdash already discovers and tracks under their own sources.
+    To prevent double-counting, Freebuff Desktop tracks ONLY turns and receipts whose
+    effective harness is ``codebuff``.
+    For assistant messages, the effective harness matches ``orchestrator.js``:
+      * Sponsored turns (``threads.sponsored``) or BYOK turns (``threads.byok_connection``)
+        always route to ``codebuff``;
+      * Otherwise, ``threads.harness_id ?? state.json.agentHarness ?? "codebuff"``.
+    For auto-run decisions, ``manager_json.harnessId`` (defaulting to ``"codebuff"``)
+    is checked; non-``codebuff`` decisions are skipped.
+
+    Legacy project stores: Older builds stored databases at
+    ``<project root>/.freebuff/desktop-v2.db``; modern builds copy them into
+    central app storage (``~/.config/freebuff-desktop/projects/<basename>-<uuid>/desktop-v2.db``)
+    via ``migrateLegacyDatabase`` on first reopen. Tokdash scans the app storage root;
+    unopened legacy project stores are not read until reopened.
+
+    Message rewinds & thread deletion: Freebuff allows rewinding turns
+    (``rewindAtUserMessage`` runs ``DELETE FROM messages WHERE seq >= $seq``) and
+    deleting threads (``ON DELETE CASCADE``). Because Freebuff syncs under ``file_replace``
+    mode, rewound turns and deleted threads are removed from the Tokdash store on the
+    next sync.
+    =======================================================================
+    """
+
+    source_name = "freebuff"
+    sync_capability = SourceSyncCapability(
+        mode="file_replace",
+        reason=(
+            "One WAL-mode desktop-v2.db per project; a thread's assistant rows are "
+            "mutable snapshots the orchestrator rewrites in place, so each sync "
+            "replaces the source's rows with the current values."
+        ),
+    )
+    # 1: one entry per assistant row with usage, model from threads.model
+    #    (split once on "/"), cached split out of the cache-inclusive input,
+    #    reasoning split out of output, milliseconds timestamps, pricing-DB
+    #    cost only (costUsd ignored).
+    # 2: adds one entry per auto_run_decision_receipts row that carries a
+    #    manager_json.usage — the mission manager's own model call, which is
+    #    billed but is not an assistant message. outcome_json.usage is a
+    #    verified duplicate of the turn's last message row and stays unread.
+    # 3: filter turns and receipts whose effective harness is not "codebuff"
+    #    (claude-code and codex write to their own native logs, which Tokdash
+    #    already parses; counting them here would double-count).
+    # 4: parse with the default harness captured in the stored sync context.
+    persistent_parser_version = 4
+
+    def __init__(self, pricing_db: PricingDatabase):
+        super().__init__(pricing_db)
+        self._last_parse_failed = False
+
+    def _db_paths(self) -> List[Path]:
+        return clientpaths.freebuff_desktop_db_paths()
+
+    def _file_signatures(self) -> tuple:
+        def scan() -> tuple:
+            out: List[Tuple[str, int, int]] = []
+            for db in self._db_paths():
+                # ONE entry per project DB, WAL sidecars folded in
+                # (_sqlite_db_signature). A per-sidecar entry would make
+                # file_replace sync snapshot and reparse each DB two or
+                # three times per sync.
+                sig = _sqlite_db_signature(db)
+                if sig is not None:
+                    out.append(sig)
+            return tuple(out)
+
+        return _timed_sigs(
+            "freebuff:" + ",".join(str(p) for p in self._db_paths()), scan
+        )
+
+    def prepare_file_context(
+        self, signatures: tuple, previous_context: Optional[dict] = None
+    ) -> dict:
+        """Resolve cross-file dependencies (state.json default harness) per store.
+
+        Returning the effective default harness per path invalidates only when
+        that value actually changes, catching deletions as well without being
+        triggered by unrelated state.json writes (e.g. UI state / window resize).
+        """
+        default_harness = self._read_default_harness()
+        return {
+            sig[0]: {"default_harness": default_harness}
+            for sig in signatures
+        }
+
+    def runtime_config_signature(self) -> Optional[Dict[str, Any]]:
+        """Effective default harness from state.json, for live cache busting."""
+        return {"default_harness": self._read_default_harness()}
+
+    @staticmethod
+    def _read_default_harness() -> str:
+        """The fallback agent harness from Freebuff's ``state.json``.
+
+        ``orchestrator.js`` reads ``state.json.agentHarness``; when absent or
+        unrecognised, it falls back to ``"codebuff"``. Only external harnesses
+        whose turns land in other logs (``"claude-code"``, ``"codex"``) are
+        returned as non-codebuff; anything else is treated as ``"codebuff"``.
+        """
+        try:
+            state_path = clientpaths.freebuff_desktop_state_path()
+            if state_path.is_file():
+                data = json.loads(state_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    harness = data.get("agentHarness")
+                    if isinstance(harness, str):
+                        h = harness.strip()
+                        if h in ("claude-code", "codex"):
+                            return h
+                        return "codebuff"
+        except Exception:
+            pass
+        return "codebuff"
+
+    @staticmethod
+    def _split_model(model: str) -> Tuple[str, str]:
+        """(provider, model) for a Freebuff model value.
+
+        A qualified id splits once so aggregate_entries' f"{provider}/{model}"
+        display does not double the prefix; a second "/" stays in the model. An
+        opaque ``m-<hex>`` handle carries no "/" and yields provider "".
+        """
+        text = str(model or "").strip()
+        if "/" in text:
+            provider, _, rest = text.partition("/")
+            if provider.strip() and rest.strip():
+                return provider.strip(), rest.strip()
+        return "", text
+
+    @staticmethod
+    def _has_table(conn: sqlite3.Connection, name: str) -> bool:
+        """Whether the store carries *name*.
+
+        The desktop app migrates its schema additively, so a store written by
+        an older build legitimately lacks a newer table. Absence yields False.
+        An unreadable or corrupt store raises sqlite3.Error rather than returning
+        False, so callers do not mistake a damaged store for an empty one.
+        """
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (name,),
+        ).fetchone()
+        return row is not None
+
+    @staticmethod
+    def _split_buckets(usage: Dict[str, Any]) -> Optional[Tuple[int, int, int, int]]:
+        """(fresh_input, cache_read, fresh_output, reasoning) from a usage dict.
+
+        ``cachedInputTokens`` is a SUBSET of ``inputTokens`` and
+        ``reasoningOutputTokens`` a SUBSET of ``outputTokens`` (both verified
+        across every row in four live stores), so each is split into its own
+        bucket. Both splits are clamped, so a future cache-exclusive or
+        reasoning-disjoint build can never produce a negative bucket.
+
+        Returns None when the usage carries no tokens at all: a cancelled or
+        failed call persists ``{}``, and a zero-token "call" is not usage.
+        """
+        input_incl_cache = max(0, FreebuffParser._i(usage.get("inputTokens")))
+        cached = max(0, FreebuffParser._i(usage.get("cachedInputTokens")))
+        output_incl_reasoning = max(0, FreebuffParser._i(usage.get("outputTokens")))
+        reasoning = max(0, FreebuffParser._i(usage.get("reasoningOutputTokens")))
+        if not (input_incl_cache or cached or output_incl_reasoning or reasoning):
+            return None
+        cached = min(cached, input_incl_cache)
+        reasoning = min(reasoning, output_incl_reasoning)
+        return (
+            input_incl_cache - cached,
+            cached,
+            output_incl_reasoning - reasoning,
+            reasoning,
+        )
+
+    def _build_entry(
+        self,
+        *,
+        model_value: Any,
+        usage: Dict[str, Any],
+        ts_ms: int,
+        entry_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """One normalized usage entry, or None when the usage is empty."""
+        buckets = self._split_buckets(usage)
+        if buckets is None or ts_ms <= 0:
+            return None
+        fresh_input, cached, output, reasoning = buckets
+        # Billing uses the FULL completion: reasoning is billed at the output
+        # rate, so the reduced display `output` must not shrink the bill.
+        billed_output = output + reasoning
+
+        provider, model = self._split_model(model_value)
+        model = model or "unknown"
+        # A model with no "/" gets no provider. The handle form (m-<hex>) is
+        # opaque, and inventing a provider for it would fabricate a pair that
+        # never existed (Muse rule). The provider-qualified candidate comes
+        # first, then the bare model name (Hermes/Muse rule).
+        candidates = [c for c in dict.fromkeys(
+            [f"{provider}/{model}" if provider else model, model]
+        ) if c]
+        cost = 0.0
+        for cand in candidates:
+            cost = self.pricing_db.get_cost(cand, fresh_input, billed_output, cached, 0)
+            if cost > 0:
+                break
+        return {
+            "source": self.source_name,
+            "model": model,
+            "provider": provider,
+            "input": fresh_input,
+            "output": output,
+            "cacheRead": cached,
+            "cacheWrite": 0,
+            "reasoning": reasoning,
+            "cost": cost,
+            "timestamp": ts_ms,
+            "entry_id": entry_id,
+            "_billing": usage_billing_pricing(
+                candidates,
+                input_tokens=fresh_input,
+                output_tokens=billed_output,
+                cache_read=cached,
+                cache_write=0,
+            ),
+        }
+
+    def _parse_db(
+        self, conn: sqlite3.Connection, *, default_harness: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        conn.row_factory = sqlite3.Row
+        out: List[Dict[str, Any]] = []
+
+        # --- 1. Assistant message rows: the conversation itself. -------------
+        # Guarded like the receipts table below, and for the same reason: a
+        # store old enough to lack this table must degrade to "this source
+        # contributes nothing", not raise into _parse_all's per-database
+        # handler (which would discard the whole store).
+        if not self._has_table(conn, "messages") or not self._has_table(conn, "threads"):
+            return out
+
+        if default_harness is None:
+            default_harness = self._read_default_harness()
+
+        # Dynamic column check for threads: harness_id, sponsored, byok_connection
+        thread_cols = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(threads)").fetchall()
+        }
+        harness_col = "t.harness_id AS harness_id" if "harness_id" in thread_cols else "NULL AS harness_id"
+        sponsored_col = "t.sponsored AS sponsored" if "sponsored" in thread_cols else "NULL AS sponsored"
+        byok_col = "t.byok_connection AS byok_connection" if "byok_connection" in thread_cols else "NULL AS byok_connection"
+
+        # One pass over assistant rows, joined to their thread's model. The
+        # thread's model applies to every row in it, so a per-thread lookup is
+        # enough; done as a JOIN rather than two queries so a store with a
+        # large message table is read once.
+        for row in conn.execute(
+            f"SELECT m.seq AS seq, m.thread_id AS thread_id, m.metrics_json AS metrics_json, "
+            f"       m.ts AS ts, t.model AS model, "
+            f"       {harness_col}, {sponsored_col}, {byok_col} "
+            f"FROM messages m JOIN threads t ON t.id = m.thread_id "
+            f"WHERE m.role = 'assistant' "
+            f"ORDER BY m.seq"
+        ):
+            # Effective harness check: external harnesses (claude-code, codex)
+            # log to their own CLI homes (~/.claude, ~/.codex) which Tokdash
+            # already parses. Counting them here would double-count.
+            # Sponsored or BYOK turns always route to codebuff (orchestrator.js L199580);
+            # otherwise effective harness is thread.harness_id ?? state.json.agentHarness ?? "codebuff".
+            # Any unrecognised harness is treated as codebuff; only claude-code and codex are skipped.
+            sponsored = bool(row["sponsored"])
+            byok = bool(row["byok_connection"] and str(row["byok_connection"]).strip())
+            if sponsored or byok:
+                effective_harness = "codebuff"
+            else:
+                thread_harness = row["harness_id"]
+                if thread_harness is not None and str(thread_harness).strip():
+                    th = str(thread_harness).strip()
+                    effective_harness = th if th in ("claude-code", "codex") else "codebuff"
+                else:
+                    effective_harness = default_harness
+            if effective_harness != "codebuff":
+                continue
+
+            metrics_raw = row["metrics_json"]
+            if not metrics_raw:
+                continue
+            try:
+                metrics = json.loads(metrics_raw)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(metrics, dict):
+                continue
+            usage = metrics.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            entry = self._build_entry(
+                model_value=row["model"],
+                usage=usage,
+                ts_ms=self._i(row["ts"]),
+                entry_id=f"freebuff:{row['thread_id']}:{row['seq']}",
+            )
+            if entry is not None:
+                out.append(entry)
+
+        # --- 2. Auto-run manager decisions: a SEPARATE model call. -----------
+        # The autonomous (mission/auto-run) loop is driven by a mission manager
+        # that runs its own model call per decision. That call is billed but is
+        # NOT an assistant message: the manager's model is frequently a
+        # different one from the thread's, its duration is tens of seconds
+        # against the coding turns' minutes, and its usage matches no message
+        # row in any live store (verified: 42/42 unmatched).
+        #
+        # The same table also carries outcome_json.usage, and that one IS a
+        # duplicate — it restates the final assistant message of the turn
+        # (verified: 37/37 matched an existing message row, byte-identical
+        # token tuples). Reading it would double-count every completed
+        # auto-run turn, so it is deliberately NOT read. Only the manager
+        # usage is taken.
+        #
+        # The table is a LATER addition to the schema and the app migrates
+        # additively, so a store written by an older build legitimately lacks
+        # it. Absence must cost only the manager entries, never the message
+        # entries above: an unguarded query would raise here, and _parse_all's
+        # per-database handler would then discard the whole store. Checked
+        # rather than caught, so a genuinely malformed table still surfaces as
+        # a real error instead of silently reading as "no manager usage".
+        if not self._has_table(conn, "auto_run_decision_receipts"):
+            return out
+        for row in conn.execute(
+            "SELECT r.id AS id, r.thread_id AS thread_id, r.manager_json AS manager_json, "
+            "       r.updated_at AS updated_at, r.created_at AS created_at, t.model AS thread_model "
+            "FROM auto_run_decision_receipts r JOIN threads t ON t.id = r.thread_id"
+        ):
+            manager_raw = row["manager_json"]
+            if not manager_raw:
+                continue
+            try:
+                manager = json.loads(manager_raw)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(manager, dict):
+                continue
+            # When manager_json carries harnessId, only external harnesses
+            # (claude-code, codex) are skipped; anything else is treated as codebuff.
+            harness_raw = manager.get("harnessId")
+            if harness_raw is not None and str(harness_raw).strip():
+                rh = str(harness_raw).strip()
+                receipt_harness = rh if rh in ("claude-code", "codex") else "codebuff"
+            else:
+                receipt_harness = "codebuff"
+            if receipt_harness != "codebuff":
+                continue
+            usage = manager.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            # A receipt's own model wins over the thread's: the manager can run
+            # a different model, and the 8 of 45 live receipts where the two
+            # disagree would otherwise be priced at the wrong model.
+            model_value = manager.get("model") or row["thread_model"]
+            # When manager_json.finishedAt is set, prefer it over row updated_at/created_at
+            # so the manager call is dated to its own finish rather than the end of the turn.
+            finished_at = self._i(manager.get("finishedAt"))
+            ts_ms = finished_at if finished_at > 0 else self._i(row["updated_at"] or row["created_at"])
+            entry = self._build_entry(
+                model_value=model_value,
+                usage=usage,
+                ts_ms=ts_ms,
+                entry_id=f"freebuff:{row['thread_id']}:receipt:{row['id']}",
+            )
+            if entry is not None:
+                out.append(entry)
+
+        return out
+
+    def _parse_file_strict(self, file_sig: Tuple[str, int, int]) -> List[Dict[str, Any]]:
+        """Strict single-file entry point for the stored sync.
+
+        Raises UsageFileVanished (never returns []) when the enumerated file
+        disappeared between discovery and open — under file_replace, [] means
+        "this file now has zero entries" and the commit would delete every
+        stored row for the path. sync_files catches the typed signal, verifies
+        the path, and skips the file with its rows kept.
+
+        Unreadable stores (locked or corrupt) raise UsageFileUnreadable rather
+        than returning [] or letting raw sqlite3.Error / ZCodeSnapshotError
+        escape, so sync_files isolates the failure, keeps that file's stored
+        usage, and allows other projects to continue syncing.
+        """
+        db = Path(file_sig[0])
+        path_str = str(db)
+        if not db.is_file():
+            raise UsageFileVanished(path_str)
+        try:
+            with zcode_snapshot(db) as snap:
+                context = (getattr(self, "_file_context", None) or {}).get(path_str, {})
+                return self._parse_db(
+                    snap.conn, default_harness=context.get("default_harness")
+                )
+        except UsageFileVanished:
+            raise
+        except (sqlite3.Error, ZCodeSnapshotError) as exc:
+            if not db.exists():
+                raise UsageFileVanished(path_str) from exc
+            raise UsageFileUnreadable(path_str, str(exc)) from exc
+
+    def _parse_all(self) -> List[Dict[str, Any]]:
+        self._last_parse_failed = False
+        out: List[Dict[str, Any]] = []
+        # Driven off _file_signatures() so file_replace sync's injected
+        # single-file scope reparses one project DB, not all of them.
+        for file_sig in self._file_signatures():
+            try:
+                # Shared WAL-snapshot helper (first user: ZCodeParser); the
+                # desktop app holds the store open, so the live rows sit in the
+                # -wal and a read-only open in place would miss them.
+                out.extend(self._parse_file_strict(file_sig))
+            except UsageFileVanished:
+                continue
+            except (UsageFileUnreadable, ZCodeSnapshotError, sqlite3.Error, OSError):
+                # A locked or corrupt per-project DB must not blank the others;
+                # the signatures move with the app's next write, so the next
+                # collect retries.
+                self._last_parse_failed = True
+                logger.warning(
+                    "freebuff db %s unreadable; skipped", file_sig[0], exc_info=True
+                )
+                continue
+        return out
+
+    def collect(
+        self,
+        since_date: Optional[datetime] = None,
+        until_date: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """Cached collect: parse once per file-signature, filter by date in memory.
+
+        Partial or failed reads are returned but not cached: the signatures
+        that guard this cache may not have moved, so a cached zero would outlive
+        the hiccup. Same rule the ZCode and Devin collectors follow.
+        """
+        sig = (
+            self._file_signatures(),
+            self._pricing_signature(),
+            self.runtime_config_signature(),
+        )
+        cached = self._entry_cache.get(self.source_name)
+        if cached is not None and cached[0] == sig:
+            all_entries = cached[1]
+        else:
+            all_entries = self._parse_all()
+            if not getattr(self, "_last_parse_failed", False):
+                self._entry_cache[self.source_name] = (sig, all_entries)
+
+        if since_date is None and until_date is None:
+            return list(all_entries)
+
+        s = self._to_utc(since_date)
+        u = self._to_utc(until_date)
+        s_ms = int(s.timestamp() * 1000) if s else 0
+        u_ms = int(u.timestamp() * 1000) if u else 9999999999999
+        return [e for e in all_entries if s_ms <= (e.get("timestamp") or 0) < u_ms]
+
+
 class CodingToolsUsageTracker:
     """Registry-driven tracker for coding clients."""
 
@@ -8229,6 +8820,7 @@ class CodingToolsUsageTracker:
             # so no provenance is invented for otherwise valid counters.
             "muse": MuseParser(self.pricing_db),
             "minimax": MiniMaxCodeParser(self.pricing_db),
+            "freebuff": FreebuffParser(self.pricing_db),
         }
         # Two parsers must never scan the same directory: the usage store
         # dedups on (source, entry_key) and never across sources, so an

@@ -1,6 +1,39 @@
 {
-  "current": "2.6.8",
+  "current": "2.6.9",
   "releases": [
+    {
+      "version": "2.6.9",
+      "date": "2026-10-03",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "A setup-managed Linux install can update itself from the dashboard. When the answering process proves it is the service tokdash setup installed, the update popover offers the version bump and a helper launched outside the server does the upgrade, so it survives the restart it causes; the usage database is backed up first and every failure path tries to bring the service back. Every other install keeps the copyable tokdash update command. Reaching that button from a remote browser is opt-in: pin the exact HTTPS origin in TOKDASH_UPDATE_ORIGIN and enter a one-time code minted on the host with tokdash update-enroll.",
+            "DeepSeek Harness logs in format generations 3 and 4 are read. Upstream renamed its session files, so upgrading dsh emptied the DSH source. Both generations are matched on their suffix now, and a seeded log with no inherited marker bills nothing rather than guessing.",
+            "A CDN that fails to load says so. Tailwind, Chart.js, Three.js, Flatpickr and Google Fonts are each probed for the capability they were meant to provide, and a missing one raises a dismissible notice in the dashboard's own language. When Flatpickr is what failed, the date-range picker is taken out of play rather than left as a button that opens nothing."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "The README leads with a two-command quick start and the four views the package actually ships: WebUI, TUI, Companion and Statusline. Reference tables moved into docs/ so each has exactly one home, every screenshot was regenerated from the seeded fixture rather than a real account, and the six language editions mirror the new structure heading for heading."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "A DeepSeek Harness log that cannot be read no longer loses its stored rows, and no longer fails silently: the rows survive and the problem is reported once, in one wording on both Overview and the Sessions tab. A damaged interior frame costs only the rows inside it, so the batches around it still count.",
+            "Overview and the Sessions tab now resolve one DeepSeek Harness session to one winner, so two copies of the same corpus that recorded different usage no longer bill differently depending on which surface you happen to be reading.",
+            "A copied Reasonix day file bills once instead of twice with the usage database off, and deleting the copy no longer discards usage the original file recorded.",
+            "Antigravity's gemini-3.8-flash-n prices as gemini-3.8-flash instead of $0.00.",
+            "Date ranges resolve each boundary in its own date's UTC offset. In a zone that observes DST a range on the far side of a clock change was an hour off, so a late-evening event fell outside the window while the heatmap still counted it. A clock-change day is now exactly 23 or 25 hours long, and Overview, Sessions and the heatmap agree.",
+            "A failed usage-store read is logged instead of swallowed, so a corrupt or locked cache that quietly turns every request into a full reparse is finally visible. It stays out of the API response on purpose: the fallback answer is complete, and flagging it would pin the dashboard to stale numbers for as long as the database stayed broken.",
+            "An Overview range with nothing in it says No data instead of counting out a row of zeros. The count-ups also stopped resuming from the wrong number, counting down from a previous range's total, or flashing a fractional value wider than the card holding it.",
+            "The Pi fork-replay test passes in every timezone. It stamped its fixture at 21:33 UTC but queried a fixed local day, so east of UTC+2:27 it looked for usage on the wrong date and the fork-replay guard sat disabled across most of the world."
+          ]
+        }
+      ]
+    },
     {
       "version": "2.6.8",
       "date": "2026-09-30",

@@ -59,6 +59,7 @@ TOOLS = [
     ("crush", "Crush", "crush.png"),
     ("muse", "Muse Code", "muse.svg"),
     ("minimax", "MiniMax Code", "minimax.png"),
+    ("freebuff", "Freebuff", "freebuff.svg"),
 ]
 
 # Rendered at ~2.4x the README display height (40px) for crispness.
