@@ -1,11 +1,11 @@
 """Contract for the exact-value hover readouts on the Overview KPI row.
 
-Every card in the row carries the figure behind its rounded value in the same
-hover readout -- "186M" reads out as "185,952,048 tokens", "97.6%" as "97.59%" --
-so the precise number is available without widening six narrow cards. These tests
-pin the parts that break silently: that all six cards stay wired, that the
-readout survives the cursor crossing onto it, and that it borrows its colour from
-the card value it belongs to.
+Every card in the row with unrounded detail carries the figure behind its rounded
+value in the same hover readout -- "186M" reads out as "185,952,048 tokens",
+"97.6%" as "97.59%" -- so the precise number is available without widening narrow
+cards. These tests pin the parts that break silently: that all cards stay wired,
+that the readout survives the cursor crossing onto it, and that it borrows its colour
+from the card value it belongs to in both dark and light modes.
 """
 
 from __future__ import annotations
@@ -21,18 +21,20 @@ import tokdash  # type: ignore[import-untyped]
 
 INDEX_HTML = Path(tokdash.__file__).parent / "static" / "index.html"
 
-# The six cards in the Overview KPI row, as (value id, readout id).
+# The cards in the Overview KPI row with exact readouts, as (value id, readout id).
 KPI_READOUTS = (
     ("totalTokens", "totalTokensExact"),
-    ("totalCost", "totalCostExact"),
     ("totalMessages", "totalMessagesExact"),
     ("overviewActiveTime", "overviewActiveTimeExact"),
     ("avgCacheHitRate", "avgCacheHitRateExact"),
     ("topModel", "topModelExact"),
 )
 
-# The Tailwind colour each card's value is painted in, which its readout mirrors.
-KPI_TONES = ("#818cf8", "#34d399", "#c084fc", "#38bdf8", "#22d3ee", "#fcd34d")
+# The Tailwind colour each card's value is painted in, which its readout mirrors in dark mode.
+KPI_TONES = ("#818cf8", "#c084fc", "#38bdf8", "#22d3ee", "#fcd34d")
+
+# The matching high-contrast tones applied in light mode under html:not(.dark).
+KPI_LIGHT_TONES = ("#4338ca", "#7e22ce", "#0369a1", "#0e7490", "#b45309")
 
 
 def _extract_js_function(source: str, signature: str) -> str:
@@ -98,6 +100,8 @@ def test_readout_mirrors_its_card_colour_and_lets_the_card_show_through() -> Non
     assert "backdrop-filter:blur(" in rule
     for tone in KPI_TONES:
         assert f"--kpi-tone: {tone};" in source, f"a KPI card is missing tone {tone}"
+    for tone in KPI_LIGHT_TONES:
+        assert f"--kpi-tone: {tone}" in source, f"a KPI card is missing light mode tone {tone}"
 
 
 def test_readout_is_larger_than_the_number_it_reports() -> None:
@@ -112,14 +116,8 @@ def test_exact_value_formatters_report_the_unrounded_figure(tmp_path: Path) -> N
     source = INDEX_HTML.read_text(encoding="utf-8")
     harness = tmp_path / "kpi-readout.js"
     harness.write_text(
-        "function langLocale() { return 'en-US'; }\n"
-        + _extract_js_function(source, "function formatExactCurrency(num) {")
-        + "\n"
-        + _extract_js_function(source, "function formatExactDuration(ms) {")
+        _extract_js_function(source, "function formatExactDuration(ms) {")
         + "\nprocess.stdout.write(JSON.stringify({"
-        " cost: formatExactCurrency(7.8421),"
-        " bigCost: formatExactCurrency(1234.5),"
-        " nullCost: formatExactCurrency(null),"
         " hms: formatExactDuration(6954017),"
         " ms: formatExactDuration(45000),"
         " seconds: formatExactDuration(9000),"
@@ -133,9 +131,6 @@ def test_exact_value_formatters_report_the_unrounded_figure(tmp_path: Path) -> N
     ).stdout
 
     assert json.loads(output) == {
-        "cost": "$7.8421",  # the fraction the cents-rounding card drops
-        "bigCost": "$1,234.5000",  # grouped, like every other figure on the row
-        "nullCost": "$0.0000",
         "hms": "1h 55m 54s",  # the seconds the card rounds away
         "ms": "45s",
         "seconds": "9s",
