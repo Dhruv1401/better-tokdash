@@ -838,7 +838,7 @@
        mirrors the number it belongs to instead of wearing a foreign one, and the
        translucent tint over a backdrop blur keeps the card readable through it
        instead of hiding behind an opaque slab. */
-    .overview-token-exact-tooltip { --kpi-tooltip-tone: var(--kpi-tone, var(--color-primary)); position: absolute; z-index: 70; left: 0; bottom: calc(100% + 3px); max-width: min(320px, calc(100vw - 48px)); padding: 7px 12px; border: 1px solid color-mix(in srgb, var(--kpi-tooltip-tone) 34%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--kpi-tooltip-tone) 14%, color-mix(in srgb, var(--color-surface-glass) 58%, transparent)); color: var(--kpi-tooltip-tone); font-size: 13px; font-weight: 800; line-height: 1.15; letter-spacing: .01em; white-space: nowrap; opacity: 0; visibility: hidden; pointer-events: auto; transform: translateY(4px); transition: opacity var(--t-fast) ease, transform var(--t-fast) ease, visibility var(--t-fast) ease; box-shadow: 0 6px 16px rgba(15, 23, 42, .3); backdrop-filter: blur(14px) saturate(150%); -webkit-backdrop-filter: blur(14px) saturate(150%); }
+    .overview-token-exact-tooltip { --kpi-tooltip-tone: var(--kpi-tone, var(--color-primary)); position: absolute; z-index: 70; left: 0; bottom: calc(100% + 3px); max-width: min(320px, calc(100vw - 48px)); padding: 7px 12px; border: 1px solid color-mix(in srgb, var(--kpi-tooltip-tone) 34%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--kpi-tooltip-tone) 14%, color-mix(in srgb, var(--color-surface-glass) 58%, transparent)); color: var(--kpi-tooltip-tone); font-size: 13px; font-weight: 800; line-height: 1.15; letter-spacing: .01em; white-space: nowrap; opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(4px); transition: opacity var(--t-fast) ease, transform var(--t-fast) ease, visibility var(--t-fast) ease; box-shadow: 0 6px 16px rgba(15, 23, 42, .3); backdrop-filter: blur(14px) saturate(150%); -webkit-backdrop-filter: blur(14px) saturate(150%); }
     /* A model name has no natural break, so that one readout wraps instead of
        running off the side of its card. */
     .overview-token-exact-tooltip[data-wrap="true"] { white-space: normal; overflow-wrap: anywhere; text-align: left; max-width: min(260px, calc(100vw - 48px)); }
@@ -853,7 +853,7 @@
        same wrap, so arriving on it keeps the readout up instead of pulling it
        away the moment the cursor reaches it. */
     .overview-token-value-wrap:hover .overview-token-exact-tooltip,
-    .overview-token-value-wrap:focus-within .overview-token-exact-tooltip { opacity: 1; visibility: visible; transform: translateY(0); }
+    .overview-token-value-wrap:has(:focus-visible) .overview-token-exact-tooltip { opacity: 1; visibility: visible; transform: translateY(0); }
 
     @media (max-width: 640px) {
       .date-range-control { width: 100%; min-width: 0; }
@@ -3090,8 +3090,8 @@
             </div>
           </div>
           <div id="totalTokensWrap" class="overview-token-value-wrap" data-readable="true" style="--kpi-tone: #818cf8;">
-            <div id="totalTokens" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-indigo-400" tabindex="0" aria-describedby="totalTokensExact">-</div>
-            <div id="totalTokensExact" class="overview-token-exact-tooltip" role="tooltip">-</div>
+            <div id="totalTokens" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-indigo-400">-</div>
+            <div id="totalTokensExact" class="overview-token-exact-tooltip" role="tooltip" hidden>-</div>
           </div>
           <div id="tokensDelta" class="text-xs font-semibold mt-1 kpi-delta"></div>
           <svg id="sparklineTokens" class="kpi-sparkline text-indigo-400/60" viewBox="0 0 100 35" preserveAspectRatio="none" fill="none"><defs><linearGradient id="kpiG1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="currentColor" stop-opacity="0.25"/><stop offset="100%" stop-color="currentColor" stop-opacity="0.0"/></linearGradient></defs><path id="sparklineTokensPath" d="M0 24 Q25 18 45 14 T75 10 T100 6" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/><path id="sparklineTokensArea" d="M0 24 Q25 18 45 14 T75 10 T100 6 L100 35 L0 35 Z" fill="url(#kpiG1)"/></svg>
@@ -3109,8 +3109,8 @@
             <div class="text-[11px] font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="totalMessages">Total Messages</div>
           </div>
           <div id="totalMessagesWrap" class="overview-token-value-wrap" style="--kpi-tone: #c084fc;">
-            <div id="totalMessages" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-purple-400" tabindex="0" aria-describedby="totalMessagesExact">-</div>
-            <div id="totalMessagesExact" class="overview-token-exact-tooltip" role="tooltip">-</div>
+            <div id="totalMessages" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-purple-400">-</div>
+            <div id="totalMessagesExact" class="overview-token-exact-tooltip" role="tooltip" hidden>-</div>
           </div>
           <div id="messagesDelta" class="text-xs font-semibold mt-1 kpi-delta"></div>
           <svg id="sparklineMessages" class="kpi-sparkline text-purple-400/60" viewBox="0 0 100 35" preserveAspectRatio="none" fill="none"><defs><linearGradient id="kpiG3" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="currentColor" stop-opacity="0.25"/><stop offset="100%" stop-color="currentColor" stop-opacity="0.0"/></linearGradient></defs><path id="sparklineMessagesPath" d="M0 22 Q30 16 50 18 T80 12 T100 8" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/><path id="sparklineMessagesArea" d="M0 22 Q30 16 50 18 T80 12 T100 8 L100 35 L0 35 Z" fill="url(#kpiG3)"/></svg>
@@ -3124,8 +3124,8 @@
             <span class="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400 font-mono font-bold">-61%</span>
           </div>
           <div id="overviewActiveTimeWrap" class="overview-token-value-wrap" style="--kpi-tone: #38bdf8;">
-            <div id="overviewActiveTime" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-sky-400" tabindex="0" aria-describedby="overviewActiveTimeExact">-</div>
-            <div id="overviewActiveTimeExact" class="overview-token-exact-tooltip" role="tooltip">-</div>
+            <div id="overviewActiveTime" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-sky-400">-</div>
+            <div id="overviewActiveTimeExact" class="overview-token-exact-tooltip" role="tooltip" hidden>-</div>
           </div>
           <div id="overviewActiveDelta" class="text-xs font-semibold mt-1 kpi-delta"></div>
           <div id="overviewActiveMeta" class="text-xs font-semibold mt-1 kpi-delta"></div>
@@ -3140,8 +3140,8 @@
             <span class="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 font-mono font-bold">92%</span>
           </div>
           <div id="avgCacheHitRateWrap" class="overview-token-value-wrap" style="--kpi-tone: #22d3ee;">
-            <div id="avgCacheHitRate" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-cyan-400" tabindex="0" aria-describedby="avgCacheHitRateExact">-</div>
-            <div id="avgCacheHitRateExact" class="overview-token-exact-tooltip" role="tooltip">-</div>
+            <div id="avgCacheHitRate" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-cyan-400">-</div>
+            <div id="avgCacheHitRateExact" class="overview-token-exact-tooltip" role="tooltip" hidden>-</div>
           </div>
           <svg id="sparklineCacheRate" class="kpi-sparkline text-cyan-400/60" viewBox="0 0 100 35" preserveAspectRatio="none" fill="none"><defs><linearGradient id="kpiG5" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="currentColor" stop-opacity="0.25"/><stop offset="100%" stop-color="currentColor" stop-opacity="0.0"/></linearGradient></defs><path id="sparklineCacheRatePath" d="M0 20 Q30 18 55 12 T85 10 T100 6" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/><path id="sparklineCacheRateArea" d="M0 20 Q30 18 55 12 T85 10 T100 6 L100 35 L0 35 Z" fill="url(#kpiG5)"/></svg>
         </div>
@@ -3150,8 +3150,8 @@
             <div class="text-[11px] font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="topModel">Top Model</div>
           </div>
           <div id="topModelWrap" class="overview-token-value-wrap" style="--kpi-tone: #fcd34d;">
-            <div id="topModel" class="text-lg sm:text-xl font-extrabold mt-1.5 mono break-all text-amber-300" tabindex="0" aria-describedby="topModelExact"></div>
-            <div id="topModelExact" class="overview-token-exact-tooltip" data-wrap="true" role="tooltip">-</div>
+            <div id="topModel" class="text-lg sm:text-xl font-extrabold mt-1.5 mono break-all text-amber-300"></div>
+            <div id="topModelExact" class="overview-token-exact-tooltip" data-wrap="true" role="tooltip" hidden>-</div>
           </div>
           <div id="topModelMeta" class="text-sm mt-1" style="color: var(--color-muted);">-</div>
           <svg id="sparklineTopModel" class="kpi-sparkline text-amber-400/60" viewBox="0 0 100 35" preserveAspectRatio="none" fill="none"><defs><linearGradient id="kpiG6" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="currentColor" stop-opacity="0.25"/><stop offset="100%" stop-color="currentColor" stop-opacity="0.0"/></linearGradient></defs><path id="sparklineTopModelPath" d="M0 22 Q20 20 40 14 T70 10 T100 6" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/><path id="sparklineTopModelArea" d="M0 22 Q20 20 40 14 T70 10 T100 6 L100 35 L0 35 Z" fill="url(#kpiG6)"/></svg>
@@ -10224,8 +10224,16 @@
       }
       tooltip.hidden = false;
       valueElement.tabIndex = 0;
+      valueElement.setAttribute('tabindex', '0');
       valueElement.setAttribute('aria-describedby', tooltipId);
       valueElement.setAttribute('aria-label', text);
+    }
+
+    // The Cost card rounds to cents; the readout carries the fraction that was
+    // actually summed, which is the figure anyone reconciling a bill wants.
+    function formatExactCurrency(num) {
+      const n = Number(num ?? 0);
+      return '$' + n.toFixed(4);
     }
 
     // The agent-time card stops at hours and minutes; the readout keeps the

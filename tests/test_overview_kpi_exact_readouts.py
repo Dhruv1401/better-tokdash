@@ -78,10 +78,10 @@ def test_readout_stays_up_when_the_cursor_crosses_onto_it() -> None:
     # and the readout on screen; keying off the value element is what used to pull
     # the readout away the instant the pointer arrived on it.
     assert ".overview-token-value-wrap:hover.overview-token-exact-tooltip" in compact
-    assert ".overview-token-value-wrap:focus-within.overview-token-exact-tooltip" in compact
-    # pointer-events: none would leave the readout transparent to the cursor, so the
-    # hover could never reach it however the selector above were written.
-    assert "pointer-events:auto" in _tooltip_rule(source)
+    assert ".overview-token-value-wrap:has(:focus-visible).overview-token-exact-tooltip" in compact
+    # pointer-events: none keeps the readout transparent to the cursor so it cannot
+    # block underlying elements (such as the agent-time card's ⓘ hint).
+    assert "pointer-events:none" in _tooltip_rule(source)
     # The gap between the number and its readout is dead space a cursor has to cross;
     # without the bridge covering it the hover ends mid-crossing and the readout goes.
     assert ".overview-token-exact-tooltip::before" in compact
@@ -111,13 +111,39 @@ def test_readout_is_larger_than_the_number_it_reports() -> None:
     assert "font-size:13px" in rule
 
 
+def test_values_ship_without_tabindex_and_readouts_start_hidden() -> None:
+    source = INDEX_HTML.read_text(encoding="utf-8")
+    for value_id, tooltip_id in KPI_READOUTS:
+        # None of the KPI card values should have tabindex or aria-describedby in static HTML
+        # so Tab does not step through placeholders before data arrives.
+        assert f'id="{value_id}"' in source
+        assert f'id="{value_id}" tabindex=' not in source
+        assert f'id="{value_id}" aria-describedby=' not in source
+        assert f'tabindex="0" aria-describedby="{tooltip_id}"' not in source
+        # Readouts start hidden so hovering before renderOverviewTab does not show empty bubble
+        assert f'id="{tooltip_id}"' in source
+        assert (
+            f'id="{tooltip_id}" class="overview-token-exact-tooltip" role="tooltip" hidden' in source
+            or f'id="{tooltip_id}" class="overview-token-exact-tooltip" data-wrap="true" role="tooltip" hidden' in source
+        )
+
+    # Total Cost card also ships without tabindex or aria-describedby
+    assert 'id="totalCost" tabindex=' not in source
+    assert 'id="totalCost" aria-describedby=' not in source
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
 def test_exact_value_formatters_report_the_unrounded_figure(tmp_path: Path) -> None:
     source = INDEX_HTML.read_text(encoding="utf-8")
     harness = tmp_path / "kpi-readout.js"
     harness.write_text(
-        _extract_js_function(source, "function formatExactDuration(ms) {")
+        _extract_js_function(source, "function formatExactCurrency(num) {")
+        + "\n"
+        + _extract_js_function(source, "function formatExactDuration(ms) {")
         + "\nprocess.stdout.write(JSON.stringify({"
+        " cost: formatExactCurrency(7.8421),"
+        " bigCost: formatExactCurrency(1234.5),"
+        " nullCost: formatExactCurrency(null),"
         " hms: formatExactDuration(6954017),"
         " ms: formatExactDuration(45000),"
         " seconds: formatExactDuration(9000),"
@@ -131,6 +157,9 @@ def test_exact_value_formatters_report_the_unrounded_figure(tmp_path: Path) -> N
     ).stdout
 
     assert json.loads(output) == {
+        "cost": "$7.8421",
+        "bigCost": "$1234.5000",
+        "nullCost": "$0.0000",
         "hms": "1h 55m 54s",  # the seconds the card rounds away
         "ms": "45s",
         "seconds": "9s",
