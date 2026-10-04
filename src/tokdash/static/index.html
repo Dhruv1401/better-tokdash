@@ -2524,7 +2524,6 @@
     html:not(.dark) .hover\:bg-slate-800:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
     /* Overview KPI readout tones in light mode: mirror the darkened value classes */
     html:not(.dark) #totalTokensWrap { --kpi-tone: #4338ca !important; }
-    html:not(.dark) #totalCostWrap { --kpi-tone: #047857 !important; }
     html:not(.dark) #totalMessagesWrap { --kpi-tone: #7e22ce !important; }
     html:not(.dark) #overviewActiveTimeWrap { --kpi-tone: #0369a1 !important; }
     html:not(.dark) #avgCacheHitRateWrap { --kpi-tone: #0e7490 !important; }
@@ -12798,7 +12797,6 @@
       if (rangeIsEmpty) {
         setOverviewCounterText(totalCostEl, t('noData'), 0);
         setOverviewCounterText(totalMessagesEl, t('noData'), 0);
-        setKpiExactReadout('totalCostWrap', 'totalCost', 'totalCostExact', '');
         setKpiExactReadout('totalMessagesWrap', 'totalMessages', 'totalMessagesExact', '');
       } else {
         // The final text is written first and the count-up is layered on top,
