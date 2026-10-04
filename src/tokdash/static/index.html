@@ -452,9 +452,205 @@
       to { transform: rotate(360deg); }
     }
 
+    /* ---------------------------------------------------------------------
+       Action button (refresh)
+       The label is a stack of absolutely-positioned layers inside a wrapper
+       whose width springs to the live label, so "Refresh" -> "Refreshing…" ->
+       "Updated" morphs instead of jumping the toolbar. Letters rise out of a
+       soft blur on the way in, mirroring the rest of the shell's motion
+       vocabulary (var(--t-med), cubic-bezier(.16,1,.3,1)).
+       --------------------------------------------------------------------- */
+    .action-btn {
+      position: relative;
+      overflow: hidden;
+      transition: transform var(--t-fast) cubic-bezier(.16, 1, .3, 1),
+                  box-shadow var(--t-med) ease, background var(--t-med) ease,
+                  border-color var(--t-med) ease, color var(--t-med) ease;
+      will-change: transform;
+    }
+    .action-btn:active { transform: scale(.97); }
+    .action-btn[data-busy="true"] { cursor: progress; }
+    .action-btn-label {
+      position: relative;
+      display: inline-grid;
+      place-items: center;
+      min-width: 0;
+      transition: width var(--t-med) cubic-bezier(.16, 1, .3, 1);
+    }
+    .action-btn-label-layer {
+      grid-area: 1 / 1;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      white-space: nowrap;
+    }
+    .action-btn-label-layer[data-active="false"] { opacity: 0; pointer-events: none; }
+    .action-btn-label-layer[data-leaving="true"] {
+      animation: action-btn-label-out var(--t-fast) cubic-bezier(.16, 1, .3, 1) forwards;
+    }
+    .action-btn-label-layer[data-entering="true"] {
+      animation: action-btn-label-in var(--t-med) cubic-bezier(.16, 1, .3, 1) both;
+    }
+    @keyframes action-btn-label-out {
+      from { opacity: 1; filter: blur(0); transform: translateY(0); }
+      to { opacity: 0; filter: blur(3px); transform: translateY(-5px); }
+    }
+    @keyframes action-btn-label-in {
+      from { opacity: 0; filter: blur(4px); transform: translateY(6px); }
+      to { opacity: 1; filter: blur(0); transform: translateY(0); }
+    }
+    @keyframes action-btn-char-in {
+      from { opacity: 0; filter: blur(5px); transform: translateY(7px); }
+      to { opacity: 1; filter: blur(0); transform: translateY(0); }
+    }
+    /* Success/acknowledged flashes ride the same token set as the refresh
+       report's status marks, so the button and the panel agree on colour. */
+    .action-btn[data-tone="ok"] {
+      background: linear-gradient(135deg, color-mix(in srgb, #16A34A 88%, var(--color-primary)) 0%, color-mix(in srgb, #22C55E 82%, var(--color-primary)) 100%) !important;
+      border-color: transparent !important;
+      color: #fff !important;
+    }
+    .action-btn[data-tone="warn"] {
+      background: linear-gradient(135deg, #B45309 0%, #D97706 100%) !important;
+      border-color: transparent !important;
+      color: #fff !important;
+    }
+    .action-btn[data-tone="info"] {
+      background: linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 72%, #0F172A) 0%, var(--color-secondary) 100%) !important;
+      border-color: transparent !important;
+      color: #fff !important;
+    }
+    .action-btn[data-tone="muted"] {
+      background: color-mix(in srgb, var(--color-text) 9%, transparent) !important;
+      border-color: color-mix(in srgb, var(--color-border) 88%, transparent) !important;
+      color: color-mix(in srgb, var(--color-text) 78%, transparent) !important;
+    }
+    .action-btn:disabled { opacity: 1; }
+    .action-btn[aria-disabled="true"] { cursor: progress; }
+
+    /* ---------------------------------------------------------------------
+       Toasts
+       Transient confirmations for a completed background action. Bottom-right
+       on desktop, full-width above the fold on phones; the stack is a live
+       region so a refresh that lands while the user is elsewhere still speaks.
+       --------------------------------------------------------------------- */
+    .toast-region {
+      position: fixed;
+      z-index: 140;
+      right: 18px;
+      bottom: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      width: min(360px, calc(100vw - 36px));
+      pointer-events: none;
+    }
+    .toast {
+      position: relative;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+      padding: 12px 12px 12px 13px;
+      border: 1px solid color-mix(in srgb, var(--color-primary) 16%, var(--color-border));
+      border-radius: 14px;
+      color: var(--color-text);
+      background: color-mix(in srgb, var(--color-surface-glass) 97%, var(--color-bg));
+      box-shadow: var(--shadow-md), 0 16px 38px color-mix(in srgb, var(--color-text) 15%, transparent);
+      backdrop-filter: blur(16px);
+      pointer-events: auto;
+      animation: toast-in var(--t-med) cubic-bezier(.16, 1, .3, 1);
+    }
+    .toast[data-leaving="true"] { animation: toast-out var(--t-fast) cubic-bezier(.4, 0, 1, 1) forwards; }
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateY(10px) scale(.97); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes toast-out {
+      from { opacity: 1; transform: translateY(0) scale(1); }
+      to { opacity: 0; transform: translateY(6px) scale(.985); }
+    }
+    .toast-mark {
+      display: grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      border-radius: 9px;
+      color: var(--color-primary);
+      background: color-mix(in srgb, var(--color-primary) 11%, transparent);
+    }
+    .toast[data-tone="warn"] .toast-mark {
+      color: #B45309;
+      background: color-mix(in srgb, #D97706 13%, transparent);
+    }
+    .toast[data-tone="error"] .toast-mark {
+      color: #B91C1C;
+      background: color-mix(in srgb, #EF4444 13%, transparent);
+    }
+    html:not(.dark) .toast[data-tone="info"] .toast-mark {
+      color: color-mix(in srgb, var(--color-primary) 45%, #0b1220);
+      background: color-mix(in srgb, var(--color-primary) 16%, transparent);
+    }
+    .toast-body { min-width: 0; }
+    .toast-title { margin: 0; font-size: 13px; font-weight: 800; letter-spacing: -0.01em; }
+    .toast-meta {
+      margin: 3px 0 0;
+      color: var(--color-muted);
+      font-size: 11px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .toast-close {
+      display: grid;
+      width: 24px;
+      height: 24px;
+      place-items: center;
+      border: 0;
+      border-radius: 8px;
+      color: color-mix(in srgb, var(--color-text) 72%, transparent);
+      background: color-mix(in srgb, var(--color-text) 8%, transparent);
+      cursor: pointer;
+    }
+    .toast-close:hover { color: var(--color-text); background: color-mix(in srgb, var(--color-text) 15%, transparent); }
+    .toast-close:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+    .toast-progress {
+      position: absolute;
+      left: 0;
+      bottom: 0;
+      height: 2px;
+      width: 100%;
+      background: linear-gradient(90deg, var(--color-primary), var(--color-secondary));
+      transform-origin: left center;
+    }
+    .toast[data-tone="warn"] .toast-progress { background: linear-gradient(90deg, #B45309, #D97706); }
+    .toast[data-tone="error"] .toast-progress { background: linear-gradient(90deg, #B91C1C, #EF4444); }
+    .toast-actions { display: flex; gap: 7px; margin-top: 8px; }
+    .toast-action {
+      padding: 5px 10px;
+      border: 1px solid color-mix(in srgb, var(--color-primary) 24%, var(--color-border));
+      border-radius: 9px;
+      color: var(--color-text);
+      background: color-mix(in srgb, var(--color-primary) 7%, transparent);
+      font-size: 11px;
+      font-weight: 750;
+      cursor: pointer;
+    }
+    .toast-action:hover { background: color-mix(in srgb, var(--color-primary) 13%, transparent); }
+    .toast-action:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
+    @media (max-width: 640px) {
+      .toast-region { right: 12px; left: 12px; bottom: 12px; width: auto; }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       .refresh-report { animation: none; }
       .refresh-icon-spin { animation-duration: 1.8s; }
+      .action-btn:active { transform: none; }
+      .action-btn-label-layer[data-entering="true"],
+      .action-btn-label-layer[data-leaving="true"] { animation: none; }
+      .action-btn-label-layer span { animation: none !important; }
+      .toast, .toast[data-leaving="true"] { animation: none; }
     }
 
     @media (max-width: 640px) {
@@ -2278,6 +2474,54 @@
       filter: drop-shadow(0 4px 10px rgba(99, 102, 241, 0.25));
     }
 
+    /* ---------------------------------------------------------------------
+       KPI skeletons
+       A cold range takes seconds, and the cards used to sit on "-" with a
+       stale sparkline under a label already relabelled to the new range — the
+       old range's shape under the new range's name. The skeleton is drawn over
+       the card's own content so the card keeps its exact geometry: same label
+       row, same value line, same sparkline strip. Nothing reflows when the
+       numbers land, and the value slot is what gets a shimmer rather than the
+       whole card, so the row still reads as the KPI grid it is.
+       --------------------------------------------------------------------- */
+    #overviewKpiGrid .surface > * {
+      transition: opacity var(--t-med) ease;
+    }
+    #overviewKpiGrid.is-loading .surface > * {
+      opacity: 0;
+      pointer-events: none;
+    }
+    #overviewKpiGrid.is-loading .surface::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      background-color: transparent;
+      background-image:
+        linear-gradient(90deg, color-mix(in srgb, var(--color-border) 58%, transparent) 0 0),
+        linear-gradient(90deg, color-mix(in srgb, var(--color-border) 48%, transparent) 0 0),
+        linear-gradient(90deg, color-mix(in srgb, var(--color-primary) 9%, var(--color-border)) 0 0),
+        linear-gradient(90deg, color-mix(in srgb, var(--color-border) 52%, transparent) 0 0);
+      background-repeat: no-repeat;
+      background-size: 42% 10px, 26% 10px, 58% 26px, 100% 40px;
+      background-position:
+        20px 22px,
+        20px 46px,
+        20px 70px,
+        50% calc(100% - 22px);
+      background-color: transparent;
+      animation: tokdash-skeleton-breathe 1.6s ease-in-out infinite;
+      pointer-events: none;
+    }
+    @keyframes tokdash-skeleton-breathe {
+      0%, 100% { opacity: .55; }
+      50% { opacity: 1; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #overviewKpiGrid.is-loading .surface::after { animation: none; opacity: .8; }
+    }
+
     /* Transparent by design: the old dark/light pill container read as a foreign
        "tab" floating on the card, and its own surface fought both theme modes.
        The row lives directly on the surface now; the buttons are the control. */
@@ -3047,12 +3291,12 @@
             <!-- Top action row: Refresh + 1-Click Light/Dark Theme Switch -->
             <div class="flex items-center gap-2">
               <div class="refresh-control">
-                <button id="refreshBtn" class="btn btn-primary" aria-label="Refresh dashboard" aria-controls="refreshReport" aria-expanded="false">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <button id="refreshBtn" class="btn btn-primary action-btn" aria-label="Refresh dashboard" aria-controls="refreshReport" aria-expanded="false" data-busy="false">
+                  <svg id="refreshBtnIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path d="M20 12a8 8 0 1 1-2.343-5.657" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                     <path d="M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
-                  <span data-i18n="refresh">Refresh</span>
+                  <span class="action-btn-label"><span class="action-btn-label-layer" data-active="true"><span data-i18n="refresh">Refresh</span></span></span>
                 </button>
                 <section id="refreshReport" class="refresh-report" role="status" aria-live="polite" aria-atomic="true" data-status="complete" hidden>
                   <div class="refresh-report-head">
@@ -6790,6 +7034,8 @@
         refreshReportToolsChanged: '{n} tools changed',
         refreshReportNoChanges: 'No usage changes found',
         refreshReportRetained: 'Kept the previous result for {names}; this refresh could not read complete data.',
+        refreshReportRetainedLabel: 'Kept previous data for',
+        toastDismiss: 'Dismiss',
         refreshReportUnavailable: 'No earlier result was available for {names}; displayed totals may be incomplete.',
         refreshReportRange: '{range} · {time}',
         refreshReportDiffLabel: 'Changes after refresh',
@@ -7369,6 +7615,8 @@
         refreshReportToolsChanged: '{n} 个工具发生变化',
         refreshReportNoChanges: '未发现用量变化',
         refreshReportRetained: '{names} 本次未能完整读取，已保留该范围的上一次结果。',
+        refreshReportRetainedLabel: '已保留上一次数据：',
+        toastDismiss: '关闭',
         refreshReportUnavailable: '{names} 没有可用的旧结果，当前合计可能不完整。',
         refreshReportRange: '{range} · {time}',
         refreshReportDiffLabel: '刷新后的变化',
@@ -7949,6 +8197,8 @@
         refreshReportToolsChanged: '{n} 件のツールに変更あり',
         refreshReportNoChanges: '利用量の変化はありません',
         refreshReportRetained: '{names} は今回のスキャンで完全に読み込めなかったため、前回の結果を保持しています。',
+        refreshReportRetainedLabel: '前回のデータを保持:',
+        toastDismiss: '閉じる',
         refreshReportUnavailable: '{names} に以前の結果がなかったため、表示中の合計が不完全になる可能性があります。',
         refreshReportRange: '{range} · {time}',
         refreshReportDiffLabel: 'スキャン後の変化',
@@ -8529,6 +8779,8 @@
         refreshReportToolsChanged: '{n}개 도구 변경됨',
         refreshReportNoChanges: '사용량 변경 없음',
         refreshReportRetained: '{names}은(는) 이번 스캔에서 완전한 데이터를 읽지 못해 이전 결과를 유지했습니다.',
+        refreshReportRetainedLabel: '이전 데이터 유지:',
+        toastDismiss: '닫기',
         refreshReportUnavailable: '{names}의 이전 결과가 없어 표시된 합계가 불완전할 수 있습니다.',
         refreshReportRange: '{range} · {time}',
         refreshReportDiffLabel: '스캔 후 변화',
@@ -9109,6 +9361,8 @@
         refreshReportToolsChanged: '{n} herramientas cambiaron',
         refreshReportNoChanges: 'No se encontraron cambios de uso',
         refreshReportRetained: '{names}: este escaneo no pudo leer datos completos; se mantuvo el resultado anterior.',
+        refreshReportRetainedLabel: 'Se conservaron los datos anteriores de',
+        toastDismiss: 'Cerrar',
         refreshReportUnavailable: 'No había un resultado anterior para {names}; los totales mostrados pueden ser incompletos.',
         refreshReportRange: '{range} · {time}',
         refreshReportDiffLabel: 'Cambios tras el escaneo',
@@ -9689,6 +9943,8 @@
         refreshReportToolsChanged: '{n} ferramentas mudaram',
         refreshReportNoChanges: 'Nenhuma mudança de uso encontrada',
         refreshReportRetained: '{names}: esta varredura não conseguiu ler dados completos; o resultado anterior foi mantido.',
+        refreshReportRetainedLabel: 'Dados anteriores mantidos para',
+        toastDismiss: 'Fechar',
         refreshReportUnavailable: 'Não havia resultado anterior para {names}; os totais exibidos podem estar incompletos.',
         refreshReportRange: '{range} · {time}',
         refreshReportDiffLabel: 'Mudanças após a varredura',
@@ -10715,9 +10971,16 @@
       }
     }
 
-    function renderRefreshButton() {
-      const refreshBtn = document.getElementById('refreshBtn');
-      if (!refreshBtn) return;
+    // Tone per refresh state, so the control and the toast it opens agree on
+    // colour instead of each inventing one.
+    const REFRESH_STATE_TONES = {
+      updated: 'ok',
+      cached: 'info',
+      busy: 'warn',
+      failed: 'warn',
+    };
+
+    function refreshButtonLabel() {
       let labelKey = 'refresh';
       let spinning = false;
       let disabled = false;
@@ -10739,16 +11002,29 @@
       else if (refreshUiState === 'busy') labelKey = 'refreshBusy';
       else if (refreshUiState === 'failed') labelKey = 'refreshFailed';
       if (label === null) label = t(labelKey);
-      const iconClass = spinning ? ' class="refresh-icon-spin"' : '';
-      refreshBtn.innerHTML = `
-        <svg${iconClass} width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M20 12a8 8 0 1 1-2.343-5.657" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <path d="M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span>${label}</span>
-      `;
+      return { label, spinning, disabled };
+    }
+
+    function renderRefreshButton() {
+      const refreshBtn = document.getElementById('refreshBtn');
+      if (!refreshBtn) return;
+      const { label, spinning, disabled } = refreshButtonLabel();
+      const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
+      if (animations && typeof animations.setActionButtonLabel === 'function') {
+        animations.setActionButtonLabel(refreshBtn, label, {
+          tone: REFRESH_STATE_TONES[refreshUiState] || (disabled ? 'muted' : ''),
+        });
+        animations.setActionButtonBusy(refreshBtn, spinning);
+        animations.setActionButtonDisabled(refreshBtn, disabled);
+      } else {
+        // The module loads asynchronously and may not be in place on the very
+        // first paint; fall back to a plain label rather than an empty button.
+        const layer = refreshBtn.querySelector('.action-btn-label-layer');
+        if (layer) layer.textContent = label;
+      }
+      const icon = document.getElementById('refreshBtnIcon');
+      if (icon) icon.classList.toggle('refresh-icon-spin', spinning);
       refreshBtn.setAttribute('aria-label', label);
-      refreshBtn.disabled = disabled;
     }
 
     function startRefreshCooldown(seconds) {
@@ -10902,6 +11178,11 @@
       return {
         status,
         baseline,
+        // Whether the user asked for this refresh or the five-minute tick did.
+        // Only a user-initiated one gets a toast: a background tick that opened
+        // a transient message every few minutes would be noise, and the report
+        // panel is already there for anyone watching.
+        forced: !!details.forced,
         ageSeconds,
         windowKey: details.windowKey || '',
         rangeLabel: details.rangeLabel || '',
@@ -10914,6 +11195,55 @@
         unavailable,
         error: details.error || '',
       };
+    }
+
+    // The report panel is the durable receipt (it stays until dismissed, and
+    // carries the per-metric deltas). The toast is the transient half: it tells
+    // the user the refresh they started has finished even if they have since
+    // clicked to another tab, and it carries the one line worth acting on —
+    // which servers or sources could not be read completely.
+    function showRefreshToast(report) {
+      const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
+      if (!report || !animations || typeof animations.showToast !== 'function') return;
+      const titleKeys = {
+        complete: 'refreshReportComplete',
+        preserved: 'refreshReportPreserved',
+        partial: 'refreshReportPartial',
+        failed: 'refreshReportFailed',
+        cached: 'refreshReportCached',
+        cachedPreserved: 'refreshReportCachedPreserved',
+      };
+      const toneByStatus = {
+        complete: 'info',
+        preserved: 'warn',
+        partial: 'warn',
+        failed: 'error',
+        cached: 'warn',
+        cachedPreserved: 'warn',
+      };
+      const range = report.rangeLabel || refreshReportRangeLabel();
+      const ageNote = Number.isFinite(report.ageSeconds) && report.ageSeconds >= 1
+        ? t('refreshReportCachedAge').replace('{age}', formatDuration(report.ageSeconds * 1000))
+        : '';
+      const summary = report.baseline
+        ? (report.toolsChanged
+          ? t('refreshReportToolsChanged').replace('{n}', formatNumber(report.toolsChanged))
+          : t('refreshReportNoChanges'))
+        : t('refreshReportNoBaseline').replace('{n}', formatNumber(report.toolsChanged));
+      const issues = [
+        ...(report.retained || []).map(refreshIssueLabel),
+        ...(report.unavailable || []).map(refreshIssueLabel),
+      ];
+      const metaParts = [range, summary, ageNote, issues.length ? `${t('refreshReportRetainedLabel')} ${issues.join(', ')}` : ''];
+      animations.showToast({
+        title: t(titleKeys[report.status] || 'refreshReportComplete'),
+        meta: metaParts.filter(Boolean).join(' · '),
+        tone: toneByStatus[report.status] || 'info',
+        closeLabel: t('toastDismiss'),
+        actions: report.status === 'failed'
+          ? [{ label: t('retry'), onClick: () => document.getElementById('refreshBtn')?.click() }]
+          : [],
+      });
     }
 
     function refreshReportRangeLabel() {
@@ -10943,6 +11273,10 @@
       const panel = document.getElementById('refreshReport');
       if (!panel || !report) return;
       lastRefreshReport = report;
+      // The panel below is the durable receipt; this is the transient one. Both
+      // read the same report, so they cannot disagree about what happened.
+      // Only a refresh the user actually asked for interrupts them.
+      if (report.forced) showRefreshToast(report);
       panel.dataset.status = report.status;
       const titleKeys = {
         complete: 'refreshReportComplete',
@@ -12946,6 +13280,17 @@
       region.classList.toggle('is-stale', !!(pending || stale));
       if (pending) region.setAttribute('aria-busy', 'true');
       else region.removeAttribute('aria-busy');
+      // The KPI row gets a real skeleton while a new range loads, instead of
+      // sitting on the previous range's numbers under the new range's label.
+      // Deliberately separate from .is-stale: stale is a correction (the data
+      // is real, just from elsewhere) and keeps its numbers; loading is a
+      // placeholder and must not show any.
+      const kpiGrid = document.getElementById('overviewKpiGrid');
+      if (kpiGrid) {
+        kpiGrid.classList.toggle('is-loading', !!pending);
+        if (pending) kpiGrid.setAttribute('aria-busy', 'true');
+        else kpiGrid.removeAttribute('aria-busy');
+      }
     }
 
     function renderOverviewTab(data) {
@@ -13171,6 +13516,21 @@
         if (lastUsageResponse) setOverviewState({ pending: true });
       }
 
+      // A same-range refresh keeps the figures on screen: they are the right
+      // range's, so replacing them with a shimmer on every click would trade a
+      // stable card for a flicker. But if the re-read hangs, those figures are
+      // the *previous* read's and nothing on the cards says so — the button is
+      // the only tell, and it is small. Admit the load after a blink: fast
+      // refreshes never flicker, slow ones cannot pass off old numbers as new.
+      let refreshSkeletonTimer = null;
+      if (forceRefresh && lastUsageResponse && windowKey === overviewBreakdownWindowKey) {
+        refreshSkeletonTimer = setTimeout(() => {
+          refreshSkeletonTimer = null;
+          // Only while this request is still the one the user is waiting on.
+          if (inFlightDashboardKey === windowKey) setOverviewState({ pending: true });
+        }, 600);
+      }
+
       if (updateInFlight) {
         // The date picker has already moved its label, so dropping this would
         // leave the previous range's numbers under the new heading until the
@@ -13356,6 +13716,10 @@
         // failure is never silent; the real error stays in the console.error
         // above. Nothing further to show the user.
       } finally {
+        if (refreshSkeletonTimer) {
+          clearTimeout(refreshSkeletonTimer);
+          refreshSkeletonTimer = null;
+        }
         if (forceRefresh) {
           const remainingMs = 400 - (Date.now() - refreshStartedAt);
           if (remainingMs > 0) await sleep(remainingMs);
@@ -22646,6 +23010,15 @@
     });
 
     document.getElementById('refreshBtn').addEventListener('click', () => {
+      // aria-disabled is not a native guard, so the swallow is explicit: while a
+      // refresh is in flight or a cooldown is counting down, a second press does
+      // nothing (the old native disabled attribute did this for free).
+      const refreshControl = document.getElementById('refreshBtn');
+      const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
+      if (animations && typeof animations.actionButtonIsBlocked === 'function'
+        && animations.actionButtonIsBlocked(refreshControl)) {
+        return;
+      }
       // TASK 2: on the Quota tab the global refresh button refreshes quota data instead
       // of the Overview/Sessions dashboard fetch below (unchanged on every other tab).
       if (isQuotaActive()) {
@@ -23707,6 +24080,16 @@
       const moduleUrl = (window.tokdashPath ? window.tokdashPath('/static/js/animations/index.js') : '/static/js/animations/index.js');
       const Animations = await import(moduleUrl);
       window.TokDashAnimations = Animations;
+      // Seed the refresh control's label stack from the markup that is already
+      // on screen, so the first state change morphs from the real text instead
+      // of from a measured zero width.
+      try {
+        if (typeof Animations.mountActionButton === 'function') {
+          const refreshBtn = document.getElementById('refreshBtn');
+          const seed = refreshBtn?.querySelector('.action-btn-label-layer')?.textContent || '';
+          Animations.mountActionButton(refreshBtn, seed);
+        }
+      } catch (_) { /* the fallback label path in renderRefreshButton still works */ }
 
       // Start hero loader with --rate 0.8 on initial boot, dismiss after exactly 254ms
       Animations.showLoader({ initialRate: 0.8 });
