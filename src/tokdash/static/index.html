@@ -10436,11 +10436,10 @@
     // exact to say drops its focus target and its aria wiring rather than keeping
     // a readout that contradicts the number printed beside it. The text is written
     // as text, never as markup — a model name is whatever the backend returned.
-    function setKpiExactReadout(wrapId, valueId, tooltipId, text, note = '') {
-      const wrapper = document.getElementById(wrapId);
+    function setKpiExactReadout(valueId, tooltipId, text, note = '') {
       const valueElement = document.getElementById(valueId);
       const tooltip = document.getElementById(tooltipId);
-      if (!wrapper || !valueElement || !tooltip) return;
+      if (!valueElement || !tooltip) return;
       tooltip.textContent = '';
       if (!text) {
         tooltip.hidden = true;
@@ -10470,14 +10469,7 @@
     // The agent-time card stops at hours and minutes; the readout keeps the
     // seconds those two units round away.
     function formatExactDuration(ms) {
-      const totalSeconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
-      const pad = (value) => String(value).padStart(2, '0');
-      const hours = Math.floor(totalSeconds / 3600);
-      const minutes = Math.floor((totalSeconds % 3600) / 60);
-      const seconds = totalSeconds % 60;
-      if (hours) return `${hours}h ${pad(minutes)}m ${pad(seconds)}s`;
-      if (minutes) return `${minutes}m ${pad(seconds)}s`;
-      return `${seconds}s`;
+      return formatDuration(ms, true);
     }
 
     // staticText is what the range wants shown instead of the number itself -
@@ -10487,11 +10479,10 @@
     function renderOverviewTokenTotal(value = overviewTotalTokensRaw, staticText = null) {
       const valueElement = document.getElementById('totalTokens');
       const wrapper = document.getElementById('totalTokensWrap');
-      const tooltip = document.getElementById('totalTokensExact');
-      if (!valueElement || !wrapper || !tooltip) return;
+      if (!valueElement || !wrapper) return;
       // A zero or a null total has no exact count worth a readout, and nothing
       // to drill into, so the card drops its focus target and its aria wiring.
-      const clearExact = () => setKpiExactReadout('totalTokensWrap', 'totalTokens', 'totalTokensExact', '');
+      const clearExact = () => setKpiExactReadout('totalTokens', 'totalTokensExact', '');
       if (value === null) {
         // Cleared, not left alone: a stale total left here is what the Tokens
         // count-up would otherwise animate from after a null payload. The counter
@@ -10524,7 +10515,7 @@
       wrapper.dataset.readable = String(overviewReadableTokens);
       // With readable tokens off, the card already prints the full count, so a
       // readout that repeated it would be noise rather than added detail.
-      setKpiExactReadout('totalTokensWrap', 'totalTokens', 'totalTokensExact', overviewReadableTokens ? exact : '');
+      setKpiExactReadout('totalTokens', 'totalTokensExact', overviewReadableTokens ? exact : '');
       fitKpiValue(valueElement);
     }
 
@@ -13048,7 +13039,7 @@
         // The Messages card is already exact, so its readout earns its keep the
         // same way the Tokens one does: it carries the unit the narrow card has no
         // room to print.
-        setKpiExactReadout('totalMessagesWrap', 'totalMessages', 'totalMessagesExact', msgVal > 0 ? `${formatNumber(msgVal)} ${t('messagesUnit')}` : '');
+        setKpiExactReadout('totalMessages', 'totalMessagesExact', msgVal > 0 ? `${formatNumber(msgVal)} ${t('messagesUnit')}` : '');
         // Unpriced models keep the $0 "FREE" state, and a zero target still
         // animates so a later range counts from 0 rather than a stale value.
         // The frames are whole numbers: a mid-animation "74,745,113.682" is wider
@@ -13069,7 +13060,6 @@
         // card had to drop, which is the digit that moves when the rate is close
         // to a boundary and a user is deciding whether it moved.
         setKpiExactReadout(
-          'avgCacheHitRateWrap',
           'avgCacheHitRate',
           'avgCacheHitRateExact',
           hasHitRate ? `${(Number(data.cache_hit_rate) * 100).toFixed(2)}%` : '',
@@ -13113,11 +13103,11 @@
         // The card wraps the name across whatever lines it needs, so the readout
         // gives it back unbroken on one hover instead of leaving it to be read
         // off a wrapped line.
-        setKpiExactReadout('topModelWrap', 'topModel', 'topModelExact', String(top.name || ''));
+        setKpiExactReadout('topModel', 'topModelExact', String(top.name || ''));
       } else {
         topModelEl.textContent = '—';
         document.getElementById('topModelMeta').textContent = '—';
-        setKpiExactReadout('topModelWrap', 'topModel', 'topModelExact', '');
+        setKpiExactReadout('topModel', 'topModelExact', '');
       }
 
       updateToolChart(data.by_tool || {});
@@ -13531,13 +13521,15 @@
       return formatMonthDayTime(value);
     }
 
-    function formatDuration(ms) {
-      const seconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
-      if (!seconds) return "—";
-      const hours = Math.floor(seconds / 3600);
-      const minutes = Math.floor((seconds % 3600) / 60);
-      if (hours) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-      if (minutes) return `${minutes}m`;
+    function formatDuration(ms, exact = false) {
+      const totalSeconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
+      if (!totalSeconds) return exact ? "0s" : "—";
+      const pad = (value) => String(value).padStart(2, "0");
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      if (hours) return exact ? `${hours}h ${pad(minutes)}m ${pad(seconds)}s` : `${hours}h ${pad(minutes)}m`;
+      if (minutes) return exact ? `${minutes}m ${pad(seconds)}s` : `${minutes}m`;
       return `${seconds}s`;
     }
 
@@ -13662,7 +13654,7 @@
           valueElement.textContent = '—';
         }
         valueElement.title = '';
-        setKpiExactReadout('overviewActiveTimeWrap', 'overviewActiveTime', 'overviewActiveTimeExact', '');
+        setKpiExactReadout('overviewActiveTime', 'overviewActiveTimeExact', '');
         renderDelta('overviewActiveDelta', null);
         metaElement.textContent = overviewActiveTimeState.status === 'error' ? t('loadFailed') : '';
         return;
@@ -13672,7 +13664,6 @@
       // one card is one too many, so the readout takes it over — and gains the
       // seconds the card rounds away along the way.
       setKpiExactReadout(
-        'overviewActiveTimeWrap',
         'overviewActiveTime',
         'overviewActiveTimeExact',
         Math.round((data.active_ms_sum || 0) / 1000) > 0 ? formatExactDuration(data.active_ms_sum) : '',
