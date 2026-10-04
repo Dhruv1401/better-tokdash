@@ -3177,10 +3177,7 @@
           <div class="flex items-center justify-between">
             <div class="text-[11px] font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="totalCost">Total Cost</div>
           </div>
-          <div id="totalCostWrap" class="overview-token-value-wrap" style="--kpi-tone: #34d399;">
-            <div id="totalCost" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-emerald-400" tabindex="0" aria-describedby="totalCostExact">$-</div>
-            <div id="totalCostExact" class="overview-token-exact-tooltip" role="tooltip">-</div>
-          </div>
+          <div id="totalCost" class="text-3xl sm:text-4xl font-extrabold mt-1.5 font-mono text-emerald-400">$-</div>
           <div id="costDelta" class="text-xs font-semibold mt-1 kpi-delta"></div>
           <svg id="sparklineCost" class="kpi-sparkline text-emerald-400/60" viewBox="0 0 100 35" preserveAspectRatio="none" fill="none"><defs><linearGradient id="kpiG2" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="currentColor" stop-opacity="0.25"/><stop offset="100%" stop-color="currentColor" stop-opacity="0.0"/></linearGradient></defs><path id="sparklineCostPath" d="M0 28 L100 28" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/><path id="sparklineCostArea" d="M0 28 L100 28 L100 35 L0 35 Z" fill="url(#kpiG2)"/></svg>
         </div>
@@ -10469,16 +10466,6 @@
       valueElement.setAttribute('aria-label', text);
     }
 
-    // The Cost card rounds to cents; the readout carries the fraction that was
-    // actually summed, which is the figure anyone reconciling a bill wants.
-    function formatExactCurrency(num) {
-      const n = Number(num ?? 0);
-      return '$' + n.toLocaleString(langLocale(), {
-        minimumFractionDigits: 4,
-        maximumFractionDigits: 4,
-      });
-    }
-
     // The agent-time card stops at hours and minutes; the readout keeps the
     // seconds those two units round away.
     function formatExactDuration(ms) {
@@ -13050,6 +13037,7 @@
       if (rangeIsEmpty) {
         setOverviewCounterText(totalCostEl, t('noData'), 0);
         setOverviewCounterText(totalMessagesEl, t('noData'), 0);
+        setKpiExactReadout('totalMessages', 'totalMessagesExact', '');
       } else {
         // The final text is written first and the count-up is layered on top,
         // which is the order main had and the order that matters twice over:
@@ -13060,10 +13048,6 @@
         // the old range's value while Tokens shows the new one.
         totalCostEl.textContent = formatCurrency(costVal);
         totalMessagesEl.textContent = formatNumber(msgVal);
-        // An unpriced range is $0, and "$0.0000" is not a figure anyone hovers a
-        // card to learn — so the Cost readout stands down with the zero, the same
-        // rule the Tokens card follows.
-        setKpiExactReadout('totalCostWrap', 'totalCost', 'totalCostExact', costVal > 0 ? formatExactCurrency(costVal) : '');
         // The Messages card is already exact, so its readout earns its keep the
         // same way the Tokens one does: it carries the unit the narrow card has no
         // room to print.
