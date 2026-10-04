@@ -838,7 +838,7 @@
        mirrors the number it belongs to instead of wearing a foreign one, and the
        translucent tint over a backdrop blur keeps the card readable through it
        instead of hiding behind an opaque slab. */
-    .overview-token-exact-tooltip { --kpi-tooltip-tone: var(--kpi-tone, var(--color-primary)); position: absolute; z-index: 70; left: 0; bottom: calc(100% + 3px); max-width: min(320px, calc(100vw - 48px)); padding: 7px 12px; border: 1px solid color-mix(in srgb, var(--kpi-tooltip-tone) 34%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--kpi-tooltip-tone) 14%, color-mix(in srgb, var(--color-surface-glass) 58%, transparent)); color: var(--kpi-tooltip-tone); font-size: 13px; font-weight: 800; line-height: 1.15; letter-spacing: .01em; white-space: nowrap; opacity: 0; visibility: hidden; pointer-events: auto; transform: translateY(4px); transition: opacity var(--t-fast) ease, transform var(--t-fast) ease, visibility var(--t-fast) ease; box-shadow: 0 6px 16px rgba(15, 23, 42, .3); backdrop-filter: blur(14px) saturate(150%); -webkit-backdrop-filter: blur(14px) saturate(150%); }
+    .overview-token-exact-tooltip { --kpi-tooltip-tone: var(--kpi-tone, var(--color-primary)); position: absolute; z-index: 70; left: 0; bottom: calc(100% + 3px); max-width: min(320px, calc(100vw - 48px)); padding: 7px 12px; border: 1px solid color-mix(in srgb, var(--kpi-tooltip-tone) 34%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--kpi-tooltip-tone) 14%, color-mix(in srgb, var(--color-surface-glass) 58%, transparent)); color: var(--kpi-tooltip-tone); font-size: 13px; font-weight: 800; line-height: 1.15; letter-spacing: .01em; white-space: nowrap; opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(4px); transition: opacity var(--t-fast) ease, transform var(--t-fast) ease, visibility var(--t-fast) ease; box-shadow: 0 6px 16px rgba(15, 23, 42, .3); backdrop-filter: blur(14px) saturate(150%); -webkit-backdrop-filter: blur(14px) saturate(150%); }
     /* A model name has no natural break, so that one readout wraps instead of
        running off the side of its card. */
     .overview-token-exact-tooltip[data-wrap="true"] { white-space: normal; overflow-wrap: anywhere; text-align: left; max-width: min(260px, calc(100vw - 48px)); }
@@ -853,7 +853,7 @@
        same wrap, so arriving on it keeps the readout up instead of pulling it
        away the moment the cursor reaches it. */
     .overview-token-value-wrap:hover .overview-token-exact-tooltip,
-    .overview-token-value-wrap:focus-within .overview-token-exact-tooltip { opacity: 1; visibility: visible; transform: translateY(0); }
+    .overview-token-value-wrap:has(:focus-visible) .overview-token-exact-tooltip { opacity: 1; visibility: visible; transform: translateY(0); }
 
     @media (max-width: 640px) {
       .date-range-control { width: 100%; min-width: 0; }
