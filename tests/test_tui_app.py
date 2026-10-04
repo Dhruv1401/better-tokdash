@@ -1723,7 +1723,9 @@ def test_period_shift_year_steps_one_whole_year(monkeypatch):
             app, pilot,
             lambda: calls.usage_full[-1] == ("today", "2025-01-01", "2025-12-31"),
         )
-        assert (2025, False) in calls.stats  # heatmap CY followed the window
+        # The year stats job runs after usage, active time, and trailing stats;
+        # observing the usage call alone does not mean it has started yet.
+        assert await wait_for(app, pilot, lambda: (2025, False) in calls.stats)
         assert await wait_for(app, pilot, lambda: app._ov_state == "ok")
         assert "· -1y" in static_text(app, "status")
 
