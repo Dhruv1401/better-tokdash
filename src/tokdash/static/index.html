@@ -2598,6 +2598,12 @@
     html:not(.dark) .text-teal-400 { color: #0f766e; }
     html:not(.dark) .text-amber-300, html:not(.dark) .text-amber-400 { color: #b45309; }
     html:not(.dark) .text-emerald-400 { color: #047857; }
+    /* Overview KPI readout tones in light mode: mirror the darkened value classes */
+    html:not(.dark) #totalTokensWrap { --kpi-tone: #4338ca !important; }
+    html:not(.dark) #totalMessagesWrap { --kpi-tone: #7e22ce !important; }
+    html:not(.dark) #overviewActiveTimeWrap { --kpi-tone: #0369a1 !important; }
+    html:not(.dark) #avgCacheHitRateWrap { --kpi-tone: #0e7490 !important; }
+    html:not(.dark) #topModelWrap { --kpi-tone: #b45309 !important; }
     html:not(.dark) .text-cyan-400 { color: #0e7490; }
     html:not(.dark) .text-sky-400 { color: #0369a1; }
     html:not(.dark) .text-pink-400 { color: #be185d; }
