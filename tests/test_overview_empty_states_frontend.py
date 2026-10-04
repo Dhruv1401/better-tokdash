@@ -119,7 +119,6 @@ let lastByTool = {};
 let overviewBreakdownWindowKey = null;
 const statsCache = { default: null };
 function formatNumber(value) { return Number(value || 0).toLocaleString('en-US'); }
-function formatCurrency(num) { const n = Number(num ?? 0); return '$' + n.toFixed(2); }
 function formatTokenCount(value, includeUnit = false) {
   const n = Number(value || 0);
   const unit = includeUnit ? ' tokens' : '';
@@ -488,8 +487,10 @@ FUNCTIONS_UNDER_TEST = (
     "function animateOverviewCounter(el, value, duration, format) {",
     # The six KPI cards now share one readout helper, so the row's renderers reach
     # it (and the unrounded-value formatter behind two of them) directly.
-    "function setKpiExactReadout(wrapId, valueId, tooltipId, text, note = '') {",
-    "function formatExactCurrency(num) {",
+    "function setKpiExactReadout(valueId, tooltipId, text, note = '') {",
+    "function formatCurrency(num, exact = false) {",
+    "function formatDuration(ms, exact = false) {",
+    "function formatExactDuration(ms) {",
     "function renderOverviewTokenTotal(value = overviewTotalTokensRaw, staticText = null) {",
     "function renderOverviewTab(data) {",
     # A partial read is built here, not asserted from a hand-written flag: these

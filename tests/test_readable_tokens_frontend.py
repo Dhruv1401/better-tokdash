@@ -182,7 +182,7 @@ def test_readable_token_switch_markup_and_tooltip_contract() -> None:
     assert panel_start < source.index('id="readableTokensToggle"') < panel_end
     assert "#totalTokens:hover+.overview-token-exact-tooltip" not in compact
     assert ".overview-token-value-wrap:hover.overview-token-exact-tooltip" in compact
-    assert ".overview-token-value-wrap:focus-within.overview-token-exact-tooltip" in compact
+    assert ".overview-token-value-wrap:has(:focus-visible).overview-token-exact-tooltip" in compact
     assert source.count("readableTokens: '") == 6
 
 
@@ -207,11 +207,11 @@ def test_readable_token_render_and_toggle_do_not_refetch() -> None:
     # cards in the row use one, so the Tokens card goes through that helper rather
     # than hand-rolling its own copy of the same wiring.
     assert (
-        "setKpiExactReadout('totalTokensWrap', 'totalTokens', 'totalTokensExact'"
+        "setKpiExactReadout('totalTokens', 'totalTokensExact'"
         in renderer
     )
     readout = _extract_js_function(
-        source, "function setKpiExactReadout(wrapId, valueId, tooltipId, text, note = '') {"
+        source, "function setKpiExactReadout(valueId, tooltipId, text, note = '') {"
     )
     assert "aria-describedby" in readout
     assert "aria-label" in readout

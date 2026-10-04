@@ -376,12 +376,12 @@ def test_the_total_tokens_value_carries_no_unit():
     # The readout and the aria-label both come from the shared helper now that all
     # six cards in the row use one, so this card no longer sets them inline.
     assert (
-        "setKpiExactReadout('totalTokensWrap', 'totalTokens', 'totalTokensExact'"
+        "setKpiExactReadout('totalTokens', 'totalTokensExact'"
         in renderer
     )
     readout = _extract_js_function(
         source,
-        "function setKpiExactReadout(wrapId, valueId, tooltipId, text, note = '') {",
+        "function setKpiExactReadout(valueId, tooltipId, text, note = '') {",
     )
     assert "valueElement.setAttribute('aria-label', text)" in readout
 
@@ -553,7 +553,7 @@ function fitKpiValue() {}
         # KPI cards use, with its own unrounded-duration formatter behind it.
         + _extract_js_function(
             source,
-            "function setKpiExactReadout(wrapId, valueId, tooltipId, text, note = '') {",
+            "function setKpiExactReadout(valueId, tooltipId, text, note = '') {",
         )
         + "\n"
         + _extract_js_function(source, "function formatExactDuration(ms) {")
