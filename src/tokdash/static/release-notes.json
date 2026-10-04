@@ -1,6 +1,32 @@
 {
-  "current": "2.6.9",
+  "current": "2.6.10",
   "releases": [
+    {
+      "version": "2.6.10",
+      "date": "2026-10-04",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Freebuff Desktop is now a usage source. Tokdash reads the desktop app's per-project SQLite store, counting every assistant turn plus the autonomous mission loop's own model calls, and splits cached input and reasoning out of the token buckets the way the app records them. Turns routed to the claude-code or codex harness are skipped, since that usage already arrives as Claude Code and Codex. Freebuff sells an hour of a model rather than billing per token, so the cost shown is an API-equivalent estimate, not a bill.",
+            "The dashboard loads Tailwind CSS, Chart.js, Three.js and Flatpickr from the package instead of a CDN, so it renders the same with no network at all. Google Fonts stays remote. Load order and behaviour are unchanged, and the library files are cached by your browser for a year exactly as they were from the CDNs."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "The Overview's Avg Cache Hit Rate card no longer repeats its own label underneath the number."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Static assets load behind a reverse proxy that forwards the /tokdash prefix instead of stripping it. Every stylesheet, script and icon used to 404 there, which left the dashboard half-styled; a proxy may now do either. Tailscale Serve is unaffected.",
+            "The EST. agent time and Avg Cache Hit Rate cards no longer carry two invented figures. Their corner badges were hardcoded -61% and 92%, with nothing on the page able to update them, so every user, every date range and every language saw the same numbers sitting next to the real ones. Both badges are gone, and a test now forbids any hardcoded number in the Overview KPI cards."
+          ]
+        }
+      ]
+    },
     {
       "version": "2.6.9",
       "date": "2026-10-03",

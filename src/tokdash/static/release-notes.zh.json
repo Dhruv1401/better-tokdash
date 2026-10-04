@@ -3,6 +3,19 @@
   "source": "release-notes.json",
   "comment": "简体中文更新日志。项与 release-notes.json 按下标一一对齐；未翻译的版本回落英文。",
   "releases": {
+    "2.6.10": {
+      "added": [
+        "新增 Freebuff Desktop 数据源。Tokdash 会读取该桌面应用按项目存放的 SQLite 数据库，既统计每一轮助手消息的用量，也统计自动任务循环自身发出的模型调用，并按应用自身的记录方式把缓存输入与推理 token 拆分出来。走 claude-code 或 codex harness 的轮次会被跳过，因为那部分用量已经以 Claude Code 和 Codex 的形式出现。Freebuff 按“一小时的模型时长”计费而不是按 token，因此这里显示的费用只是与 API 等价的估算，并非账单。",
+        "仪表盘的 Tailwind CSS、Chart.js、Three.js 和 Flatpickr 改为从安装包里加载，不再依赖 CDN，完全断网时渲染效果也一模一样。Google Fonts 仍从远程加载。加载顺序与行为都没有变化，这些库文件也同以往从 CDN 加载时一样，会被浏览器缓存一年。"
+      ],
+      "changed": [
+        "Overview 的 Avg Cache Hit Rate 卡片不再在数字下方重复自己的标题。"
+      ],
+      "fixed": [
+        "在保留 /tokdash 前缀转发的反向代理后面，静态资源现在可以正常加载。此前在这类代理下，所有样式表、脚本和图标都会返回 404，页面样式只剩一半；现在代理无论保留还是剥掉前缀都能正常工作。Tailscale Serve 不受影响。",
+        "EST. agent time 与 Avg Cache Hit Rate 两张卡片不再显示凭空编造的数字。它们的角标原本硬编码为 -61% 和 92%，页面上没有任何东西能更新它们，于是所有用户、任何时间范围、任何语言看到的都是同一组数字，就摆在真实数值旁边。两个角标都已删除，并且新增了一条测试，禁止 Overview 的 KPI 卡片里出现任何硬编码数字。"
+      ]
+    },
     "2.6.9": {
       "added": [
         "由 setup 托管的 Linux 安装可以在仪表盘里直接更新。当响应的进程证明自己正是 tokdash setup 装上的那个服务时，更新弹层就会给出升级入口，升级由一个在服务之外启动的辅助进程执行，因此能在它自己引发的重启中存活；升级前先备份使用量数据库，每条失败路径都会尝试把服务重新拉起。其余安装仍然保留可复制的 tokdash update 命令。从远程浏览器访问该入口需要显式开启：在 TOKDASH_UPDATE_ORIGIN 中固定确切的 HTTPS 来源，并输入一次在主机上用 tokdash update-enroll 生成的一次性配对码。",
