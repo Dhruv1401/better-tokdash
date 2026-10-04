@@ -488,7 +488,7 @@ FUNCTIONS_UNDER_TEST = (
     # The six KPI cards now share one readout helper, so the row's renderers reach
     # it (and the unrounded-value formatter behind two of them) directly.
     "function setKpiExactReadout(valueId, tooltipId, text, note = '') {",
-    "function formatCurrency(num, exact = false) {",
+    "function formatCurrency(num) {",
     "function formatDuration(ms, exact = false) {",
     "function formatExactDuration(ms) {",
     "function renderOverviewTokenTotal(value = overviewTotalTokensRaw, staticText = null) {",

@@ -157,21 +157,22 @@ def test_values_start_unfocusable_and_readouts_start_hidden() -> None:
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
-def test_exact_value_formatters_report_the_unrounded_figure(tmp_path: Path) -> None:
+def test_exact_duration_formatter_reports_the_seconds_the_card_drops(tmp_path: Path) -> None:
+    """The agent-time readout is the only exact formatter left.
+
+    The Cost card has no readout (the API rounds its figure to cents), so
+    ``formatExactCurrency`` and the ``exact`` parameter on ``formatCurrency``
+    went with it. Duration keeps its readout, so its formatter still reports the
+    seconds the card's h/m form rounds away.
+    """
     source = INDEX_HTML.read_text(encoding="utf-8")
     harness = tmp_path / "kpi-readout.js"
     harness.write_text(
         "function langLocale() { return 'en-US'; }\n"
-        + _extract_js_function(source, "function formatCurrency(num, exact = false) {")
-        + "\n"
         + _extract_js_function(source, "function formatDuration(ms, exact = false) {")
         + "\n"
         + _extract_js_function(source, "function formatExactDuration(ms) {")
         + "\nprocess.stdout.write(JSON.stringify({"
-        " cost: formatCurrency(7.8421, true),"
-        " bigCost: formatCurrency(1234.5, true),"
-        " nullCost: formatCurrency(null, true),"
-        " cardCost: formatCurrency(7.8421),"
         " hms: formatExactDuration(6954017),"
         " ms: formatExactDuration(45000),"
         " seconds: formatExactDuration(9000),"
@@ -189,10 +190,6 @@ def test_exact_value_formatters_report_the_unrounded_figure(tmp_path: Path) -> N
     ).stdout
 
     assert json.loads(output) == {
-        "cost": "$7.8421",  # the fraction the cents-rounding card drops
-        "bigCost": "$1234.5000",  # no grouping, matching the card's own format
-        "nullCost": "$0.0000",
-        "cardCost": "$7.84",  # the card itself stays at cents
         "hms": "1h 55m 54s",  # the seconds the card rounds away
         "ms": "45s",
         "seconds": "9s",

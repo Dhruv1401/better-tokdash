@@ -392,7 +392,7 @@ def _run(tmp_path: Path, scenario: str) -> dict:
             # The six KPI cards share one exact-value readout helper, which
             # renderOverviewTab reaches directly for four of them.
             "function setKpiExactReadout(valueId, tooltipId, text, note = '') {",
-            "function formatCurrency(num, exact = false) {",
+            "function formatCurrency(num) {",
             "function renderOverviewTab(data) {",
             "async function updateDashboard(customDays = null, dateFrom = null, dateTo = null, options = {}) {",
         )
