@@ -137,7 +137,11 @@ def test_exact_value_formatters_report_the_unrounded_figure(tmp_path: Path) -> N
     source = INDEX_HTML.read_text(encoding="utf-8")
     harness = tmp_path / "kpi-readout.js"
     harness.write_text(
-        _extract_js_function(source, "function formatExactCurrency(num) {")
+        _extract_js_function(source, "function formatCurrency(num, exact = false) {")
+        + "\n"
+        + _extract_js_function(source, "function formatDuration(ms, exact = false) {")
+        + "\n"
+        + _extract_js_function(source, "function formatExactCurrency(num) {")
         + "\n"
         + _extract_js_function(source, "function formatExactDuration(ms) {")
         + "\nprocess.stdout.write(JSON.stringify({"
@@ -149,6 +153,8 @@ def test_exact_value_formatters_report_the_unrounded_figure(tmp_path: Path) -> N
         " seconds: formatExactDuration(9000),"
         " zero: formatExactDuration(0),"
         " negative: formatExactDuration(-5),"
+        " costDirect: formatCurrency(7.8421, true),"
+        " durDirect: formatDuration(6954017, true),"
         "}));\n",
         encoding="utf-8",
     )
@@ -165,4 +171,6 @@ def test_exact_value_formatters_report_the_unrounded_figure(tmp_path: Path) -> N
         "seconds": "9s",
         "zero": "0s",
         "negative": "0s",
+        "costDirect": "$7.8421",
+        "durDirect": "1h 55m 54s",
     }

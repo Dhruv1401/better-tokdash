@@ -4913,7 +4913,7 @@
 
     <!-- Stats Tab -->
     <div id="stats-content" class="tab-content">
-      <section id="statsSummaryCards" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-6 mb-6">
+      <section id="statsSummaryCards" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
         <div class="surface p-4">
           <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="topModelCost">Top Model (Cost)</div>
           <div id="statFavoriteModel" class="tokdash-loading-placeholder mt-2 font-extrabold mono"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
@@ -4948,7 +4948,7 @@
         </div>
       </section>
 
-      <section id="statsInsightCards" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-x-4 gap-y-6 mb-6">
+      <section id="statsInsightCards" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
         <div class="surface p-4">
           <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="peakDay">Peak Day</div>
           <div id="statPeakDay" class="mt-2 font-extrabold mono">—</div>
@@ -5815,7 +5815,7 @@
                         <button id="updateRetryBtn" class="btn btn-ghost update-retry-btn" hidden data-i18n="updateRetry">Try again</button>
                       </div>
                       <div class="up-term">
-                        <span class="up-term-label" id="updateTermLabel" data-i18n="updateTermRun">Run in a terminal:</span>
+                        <span class="up-term-label" id="updateTermLabel" data-i18n="updateTermRun">Run this in a terminal:</span>
                         <div class="update-cmd-row">
                           <code>tokdash update</code>
                           <button id="updateCopyBtn" class="btn btn-ghost update-copy-btn" data-i18n="updateCopy">Copy</button>
@@ -6969,7 +6969,6 @@
         brandTag: 'Agent Observability',
         allTools: 'All Tools',
         tokenComposition: 'Token Composition',
-        cacheSaved: 'Cache Saved:',
         sessionsPage: 'Sessions',
         stats: 'Stats',
         quota: 'Quota',
@@ -7549,7 +7548,6 @@
         brandTag: '智能体可观测性',
         allTools: '全部工具',
         tokenComposition: 'Token 构成',
-        cacheSaved: '缓存节省：',
         sessionsPage: '会话',
         stats: '统计',
         quota: '额度',
@@ -8130,7 +8128,6 @@
         brandTag: 'エージェント可観測性',
         allTools: '全ツール',
         tokenComposition: 'トークン構成',
-        cacheSaved: 'キャッシュ節約:',
         sessionsPage: 'セッション',
         stats: '統計',
         quota: 'クォータ',
@@ -8711,7 +8708,6 @@
         brandTag: '에이전트 관측',
         allTools: '모든 도구',
         tokenComposition: '토큰 구성',
-        cacheSaved: '캐시 절약:',
         sessionsPage: '세션',
         stats: '통계',
         quota: '쿼터',
@@ -9292,7 +9288,6 @@
         brandTag: 'Observabilidad de agentes',
         allTools: 'Todas las herramientas',
         tokenComposition: 'Composición de tokens',
-        cacheSaved: 'Ahorro de caché:',
         sessionsPage: 'Sesiones',
         stats: 'Estadísticas',
         quota: 'Cuota',
@@ -9873,7 +9868,6 @@
         brandTag: 'Observabilidade de agentes',
         allTools: 'Todas as ferramentas',
         tokenComposition: 'Composição de tokens',
-        cacheSaved: 'Economia de cache:',
         sessionsPage: 'Sessões',
         stats: 'Estatísticas',
         quota: 'Cota',
@@ -10444,11 +10438,10 @@
     // exact to say drops its focus target and its aria wiring rather than keeping
     // a readout that contradicts the number printed beside it. The text is written
     // as text, never as markup — a model name is whatever the backend returned.
-    function setKpiExactReadout(wrapId, valueId, tooltipId, text, note = '') {
-      const wrapper = document.getElementById(wrapId);
+    function setKpiExactReadout(valueId, tooltipId, text, note = '') {
       const valueElement = document.getElementById(valueId);
       const tooltip = document.getElementById(tooltipId);
-      if (!wrapper || !valueElement || !tooltip) return;
+      if (!valueElement || !tooltip) return;
       tooltip.textContent = '';
       if (!text) {
         tooltip.hidden = true;
@@ -10479,21 +10472,13 @@
     // The Cost card rounds to cents; the readout carries the fraction that was
     // actually summed, which is the figure anyone reconciling a bill wants.
     function formatExactCurrency(num) {
-      const n = Number(num ?? 0);
-      return '$' + n.toFixed(4);
+      return formatCurrency(num, true);
     }
 
     // The agent-time card stops at hours and minutes; the readout keeps the
     // seconds those two units round away.
     function formatExactDuration(ms) {
-      const totalSeconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
-      const pad = (value) => String(value).padStart(2, '0');
-      const hours = Math.floor(totalSeconds / 3600);
-      const minutes = Math.floor((totalSeconds % 3600) / 60);
-      const seconds = totalSeconds % 60;
-      if (hours) return `${hours}h ${pad(minutes)}m ${pad(seconds)}s`;
-      if (minutes) return `${minutes}m ${pad(seconds)}s`;
-      return `${seconds}s`;
+      return formatDuration(ms, true);
     }
 
     // staticText is what the range wants shown instead of the number itself -
@@ -10503,11 +10488,10 @@
     function renderOverviewTokenTotal(value = overviewTotalTokensRaw, staticText = null) {
       const valueElement = document.getElementById('totalTokens');
       const wrapper = document.getElementById('totalTokensWrap');
-      const tooltip = document.getElementById('totalTokensExact');
-      if (!valueElement || !wrapper || !tooltip) return;
+      if (!valueElement || !wrapper) return;
       // A zero or a null total has no exact count worth a readout, and nothing
       // to drill into, so the card drops its focus target and its aria wiring.
-      const clearExact = () => setKpiExactReadout('totalTokensWrap', 'totalTokens', 'totalTokensExact', '');
+      const clearExact = () => setKpiExactReadout('totalTokens', 'totalTokensExact', '');
       if (value === null) {
         // Cleared, not left alone: a stale total left here is what the Tokens
         // count-up would otherwise animate from after a null payload. The counter
@@ -10540,7 +10524,7 @@
       wrapper.dataset.readable = String(overviewReadableTokens);
       // With readable tokens off, the card already prints the full count, so a
       // readout that repeated it would be noise rather than added detail.
-      setKpiExactReadout('totalTokensWrap', 'totalTokens', 'totalTokensExact', overviewReadableTokens ? exact : '');
+      setKpiExactReadout('totalTokens', 'totalTokensExact', overviewReadableTokens ? exact : '');
       fitKpiValue(valueElement);
     }
 
@@ -10587,9 +10571,9 @@
     // Top 100 World Currencies with symbols & rates
     // Format currency (USD — the dashboard's native unit; the multi-currency
     // selector was removed with the unsourced FX-rate table it depended on).
-    function formatCurrency(num) {
+    function formatCurrency(num, exact = false) {
       const n = Number(num ?? 0);
-      return '$' + n.toFixed(2);
+      return '$' + n.toFixed(exact ? 4 : 2);
     }
 
 
@@ -12295,10 +12279,6 @@
         toolChart = null;
       }
       if (lastUsageResponse && isOverviewActive()) renderOverviewTab(lastUsageResponse);
-      // The agent-time card is fetched on its own and so is not rewritten by the
-      // call above. Its readout carries a translated note, which would otherwise
-      // stay in the previous language until the next refresh.
-      renderOverviewActiveTime();
       if (isSessionsActive()) renderSessionsTab();
       if (isServersActive()) renderServersTab();
 
@@ -13054,7 +13034,7 @@
       if (rangeIsEmpty) {
         setOverviewCounterText(totalCostEl, t('noData'), 0);
         setOverviewCounterText(totalMessagesEl, t('noData'), 0);
-        setKpiExactReadout('totalMessagesWrap', 'totalMessages', 'totalMessagesExact', '');
+        setKpiExactReadout('totalMessages', 'totalMessagesExact', '');
       } else {
         // The final text is written first and the count-up is layered on top,
         // which is the order main had and the order that matters twice over:
@@ -13068,7 +13048,7 @@
         // The Messages card is already exact, so its readout earns its keep the
         // same way the Tokens one does: it carries the unit the narrow card has no
         // room to print.
-        setKpiExactReadout('totalMessagesWrap', 'totalMessages', 'totalMessagesExact', msgVal > 0 ? `${formatNumber(msgVal)} ${t('messagesUnit')}` : '');
+        setKpiExactReadout('totalMessages', 'totalMessagesExact', msgVal > 0 ? `${formatNumber(msgVal)} ${t('messagesUnit')}` : '');
         // Unpriced models keep the $0 "FREE" state, and a zero target still
         // animates so a later range counts from 0 rather than a stale value.
         // The frames are whole numbers: a mid-animation "74,745,113.682" is wider
@@ -13089,7 +13069,6 @@
         // card had to drop, which is the digit that moves when the rate is close
         // to a boundary and a user is deciding whether it moved.
         setKpiExactReadout(
-          'avgCacheHitRateWrap',
           'avgCacheHitRate',
           'avgCacheHitRateExact',
           hasHitRate ? `${(Number(data.cache_hit_rate) * 100).toFixed(2)}%` : '',
@@ -13133,11 +13112,11 @@
         // The card wraps the name across whatever lines it needs, so the readout
         // gives it back unbroken on one hover instead of leaving it to be read
         // off a wrapped line.
-        setKpiExactReadout('topModelWrap', 'topModel', 'topModelExact', String(top.name || ''));
+        setKpiExactReadout('topModel', 'topModelExact', String(top.name || ''));
       } else {
         topModelEl.textContent = '—';
         document.getElementById('topModelMeta').textContent = '—';
-        setKpiExactReadout('topModelWrap', 'topModel', 'topModelExact', '');
+        setKpiExactReadout('topModel', 'topModelExact', '');
       }
 
       updateToolChart(data.by_tool || {});
@@ -13551,13 +13530,15 @@
       return formatMonthDayTime(value);
     }
 
-    function formatDuration(ms) {
-      const seconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
-      if (!seconds) return "—";
-      const hours = Math.floor(seconds / 3600);
-      const minutes = Math.floor((seconds % 3600) / 60);
-      if (hours) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-      if (minutes) return `${minutes}m`;
+    function formatDuration(ms, exact = false) {
+      const totalSeconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
+      if (!totalSeconds) return exact ? "0s" : "—";
+      const pad = (value) => String(value).padStart(2, "0");
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      if (hours) return exact ? `${hours}h ${pad(minutes)}m ${pad(seconds)}s` : `${hours}h ${pad(minutes)}m`;
+      if (minutes) return exact ? `${minutes}m ${pad(seconds)}s` : `${minutes}m`;
       return `${seconds}s`;
     }
 
@@ -13682,7 +13663,7 @@
           valueElement.textContent = '—';
         }
         valueElement.title = '';
-        setKpiExactReadout('overviewActiveTimeWrap', 'overviewActiveTime', 'overviewActiveTimeExact', '');
+        setKpiExactReadout('overviewActiveTime', 'overviewActiveTimeExact', '');
         renderDelta('overviewActiveDelta', null);
         metaElement.textContent = overviewActiveTimeState.status === 'error' ? t('loadFailed') : '';
         return;
@@ -13692,10 +13673,9 @@
       // one card is one too many, so the readout takes it over — and gains the
       // seconds the card rounds away along the way.
       setKpiExactReadout(
-        'overviewActiveTimeWrap',
         'overviewActiveTime',
         'overviewActiveTimeExact',
-        data.active_ms_sum > 0 ? formatExactDuration(data.active_ms_sum) : '',
+        Math.round((data.active_ms_sum || 0) / 1000) > 0 ? formatExactDuration(data.active_ms_sum) : '',
         data.active_gap_cap_ms ? `${t('idleCap')}: ${formatDuration(data.active_gap_cap_ms)}` : '',
       );
       renderDelta('overviewActiveDelta', data.comparison?.active_ms_sum_pct ?? null);
