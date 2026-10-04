@@ -12285,10 +12285,6 @@
         toolChart = null;
       }
       if (lastUsageResponse && isOverviewActive()) renderOverviewTab(lastUsageResponse);
-      // The agent-time card is fetched on its own and so is not rewritten by the
-      // call above. Its readout carries a translated note, which would otherwise
-      // stay in the previous language until the next refresh.
-      renderOverviewActiveTime();
       if (isSessionsActive()) renderSessionsTab();
       if (isServersActive()) renderServersTab();
 
