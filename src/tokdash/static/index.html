@@ -651,6 +651,8 @@
       .action-btn-label-layer[data-leaving="true"] { animation: none; }
       .action-btn-label-layer span { animation: none !important; }
       .toast, .toast[data-leaving="true"] { animation: none; }
+      .theme-switcher-indicator, .theme-swatch, .theme-swatch-preview, .theme-swatch-check { transition: none; }
+      .theme-swatch:hover, .theme-swatch:active { transform: none; }
     }
 
     @media (max-width: 640px) {
@@ -950,6 +952,59 @@
     .settings-label { color: var(--color-muted); font-size: 11px; font-weight: 700; }
     .settings-control-button { min-width: 72px; min-height: 32px; padding: 5px 9px; gap: 6px; border-radius: 8px; font-size: 11px; }
     .settings-select { min-width: 142px; min-height: 34px; padding-block: 5px; }
+    /* Theme switcher: a preview grid instead of a native dropdown. The <select>
+       stays in the DOM as the value carrier — applyStyleTheme and the persisted
+       change listener still own the theme — so this grid is presentation only and
+       either control works without the other. */
+    .settings-row-theme { grid-template-columns: minmax(0, 1fr); gap: 9px; align-items: start; min-height: 0; }
+    /* Two classes, not one: .settings-select sets a min-width that a bare width
+       cannot shrink, which left the native select sitting in the row at full size. */
+    .settings-select.theme-switcher-native { position: absolute; width: 1px; height: 1px; min-width: 1px; min-height: 1px; max-width: 1px; max-height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .theme-switcher { position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(82px, 1fr)); gap: 7px; }
+    .theme-switcher-indicator {
+      position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none;
+      border-radius: 11px;
+      background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 55%, transparent), 0 8px 18px -10px color-mix(in srgb, var(--color-primary) 75%, transparent);
+      /* The transform itself is written inline by the module. Driving it from a
+         custom property here left Chromium reporting the previous matrix after the
+         property changed, because a transition cannot take a var()-derived value as
+         its start — the ring simply never moved. */
+      transition: transform var(--t-med) cubic-bezier(.16,1,.3,1), width var(--t-med) cubic-bezier(.16,1,.3,1), height var(--t-med) cubic-bezier(.16,1,.3,1);
+    }
+    /* Before the panel has ever been laid out the tiles measure zero, so the ring
+       would sit at the origin; it fades in on the first real measurement instead. */
+    .theme-switcher[data-ready="false"] .theme-switcher-indicator { opacity: 0; }
+    .theme-swatch {
+      position: relative; z-index: 1; display: grid; gap: 6px; padding: 5px;
+      border: none; border-radius: 11px; background: transparent;
+      color: var(--color-muted); font: inherit; text-align: left; cursor: pointer;
+      transition: transform var(--t-fast) cubic-bezier(.16,1,.3,1), color var(--t-fast) linear;
+    }
+    .theme-swatch:hover { transform: translateY(-2px); color: var(--color-text); }
+    .theme-swatch:active { transform: translateY(-2px) scale(.97); }
+    .theme-swatch:focus-visible { outline: 2px solid color-mix(in srgb, var(--color-primary) 75%, transparent); outline-offset: 2px; }
+    .theme-swatch[aria-checked="true"] { color: var(--color-text); }
+    .theme-swatch-preview {
+      position: relative; display: block; height: 36px; overflow: hidden;
+      border-radius: 8px; background: var(--sw-bg);
+      border: 1px solid color-mix(in srgb, var(--sw-ink) 15%, transparent);
+      transition: box-shadow var(--t-fast) cubic-bezier(.16,1,.3,1);
+    }
+    /* Two strokes stand in for a card and its accent, so the swatch reads as a
+       miniature of the theme rather than a flat colour chip. */
+    .theme-swatch-preview::before { content: ''; position: absolute; top: 8px; left: 8px; right: 8px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--sw-ink) 55%, var(--sw-bg)); }
+    .theme-swatch-preview::after { content: ''; position: absolute; left: 8px; bottom: 7px; width: 46%; height: 8px; border-radius: 3px; background: var(--sw-accent); }
+    .theme-swatch[aria-checked="true"] .theme-swatch-preview { box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 60%, transparent), 0 5px 14px -7px color-mix(in srgb, var(--color-primary) 80%, transparent); }
+    .theme-swatch-name { padding-inline: 3px; font-size: 10px; font-weight: 750; letter-spacing: .01em; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .theme-swatch-check {
+      position: absolute; top: 8px; right: 8px; display: grid; place-items: center;
+      width: 15px; height: 15px; border-radius: 50%; color: white;
+      background: var(--color-primary);
+      opacity: 0; transform: scale(.55);
+      transition: opacity var(--t-fast) linear, transform var(--t-med) cubic-bezier(.34,1.56,.64,1);
+    }
+    .theme-swatch[aria-checked="true"] .theme-swatch-check { opacity: 1; transform: scale(1); }
     .settings-install { display: flex; width: 100%; min-height: 36px; margin-top: 2px; padding: 7px 10px; gap: 7px; font-size: 11px; }
     .servers-settings { padding-bottom: 16px; }
     .servers-settings-head { display: flex; align-items: center; justify-content: space-between; min-height: 44px; gap: 12px; }
@@ -6073,9 +6128,14 @@
                         <span id="themeModeLabel">Light</span>
                       </button>
                     </div>
-                    <label class="settings-row" for="styleThemeSelect">
-                      <span class="settings-label" data-i18n="styleTheme">Style</span>
-                      <select id="styleThemeSelect" class="ui-input style-select settings-select" aria-label="Style theme">
+                    <div class="settings-row settings-row-theme">
+                      <span class="settings-label" id="styleThemeLabel" data-i18n="styleTheme">Style</span>
+                      <!-- The native select remains the value carrier: it is what
+                           applyStyleTheme syncs and what the persisted change listener
+                           reads. It is hidden from view and from the accessibility tree
+                           in favour of the radiogroup below, which offers the same 17
+                           choices as labelled previews. -->
+                      <select id="styleThemeSelect" class="ui-input style-select settings-select theme-switcher-native" aria-hidden="true" tabindex="-1" aria-label="Style theme">
                         <option value="classic" data-i18n="styleClassic">Classic</option>
                         <option value="elevated" data-i18n="styleElevated">Elevated</option>
                         <option value="paper" data-i18n="stylePaper">Paper</option>
@@ -6094,7 +6154,10 @@
                         <option value="soft" data-i18n="styleSoft">Soft Minimalist</option>
                         <option value="flat" data-i18n="styleFlat">Flat White</option>
                       </select>
-                    </label>
+                      <!-- Built by the animation bundle; empty until it loads, which
+                           leaves the select above as a working control. -->
+                      <div id="styleThemeSwitcher" class="theme-switcher" role="radiogroup" aria-labelledby="styleThemeLabel" data-ready="false"></div>
+                    </div>
                     <div class="settings-row">
                       <span class="settings-label" data-i18n="readableTokens">Readable tokens</span>
                       <button id="readableTokensToggle" class="btn btn-ghost overview-readable-tokens-toggle" type="button" role="switch" aria-checked="true" aria-label="Readable tokens">
@@ -10934,6 +10997,15 @@
       return getAutoTheme();
     }
 
+    // The switcher grid is built by the animation bundle, which loads after this
+    // script and re-tints itself when the colour mode flips. Until it mounts these
+    // calls are no-ops, so the native select stays the only control that is needed.
+    function syncStyleThemeSwitcher() {
+      const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
+      if (!animations || typeof animations.syncThemeSwitcher !== 'function') return;
+      animations.syncThemeSwitcher(document.documentElement.dataset.uiTheme || 'paper');
+    }
+
     function applyStyleTheme(theme) {
       const normalized = VALID_STYLE_THEMES.includes(theme) ? theme : 'paper';
       document.documentElement.dataset.uiTheme = normalized;
@@ -10941,6 +11013,7 @@
       if (select) select.value = normalized;
       HEAT_COLORS = getHeatColors(normalized, isDark());
       syncProfileMilestonePalette();
+      syncStyleThemeSwitcher();
       const themeMeta = document.querySelector('meta[name="theme-color"]');
       if (themeMeta) themeMeta.content = getThemeMetaColor(normalized, isDark());
     }
@@ -10959,6 +11032,9 @@
       const uiTheme = document.documentElement.dataset.uiTheme || 'paper';
       HEAT_COLORS = getHeatColors(uiTheme, dark);
       syncProfileMilestonePalette();
+      // Each preview is painted from that theme's ramp for the mode in force, so a
+      // light/dark flip has to re-tint all 17 of them.
+      syncStyleThemeSwitcher();
       const themeMeta = document.querySelector('meta[name="theme-color"]');
       if (themeMeta) themeMeta.content = getThemeMetaColor(uiTheme, dark);
       const moon = document.getElementById('themeIconMoon');
@@ -24090,6 +24166,14 @@
           Animations.mountActionButton(refreshBtn, seed);
         }
       } catch (_) { /* the fallback label path in renderRefreshButton still works */ }
+
+      try {
+        if (typeof Animations.mountThemeSwitcher === 'function') {
+          // Mounted now, laid out later: the settings panel is hidden on first
+          // paint, and the switcher re-places its ring when it gains a real box.
+          Animations.mountThemeSwitcher(document.getElementById('styleThemeSwitcher'));
+        }
+      } catch (_) { /* the native select is still there and still works */ }
 
       // Start hero loader with --rate 0.8 on initial boot, dismiss after exactly 254ms
       Animations.showLoader({ initialRate: 0.8 });

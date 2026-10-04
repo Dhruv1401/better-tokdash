@@ -14,3 +14,4 @@ export * from './sse-pulse.js';
 export * from './theme.js';
 export * from './action-button.js';
 export * from './toast.js';
+export * from './theme-switcher.js';
