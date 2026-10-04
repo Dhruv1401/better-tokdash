@@ -3120,7 +3120,7 @@ html[data-ui-theme="amber"] textarea {
 
 html[data-ui-theme="terminal"] #overviewKpiGrid .surface,
 html[data-ui-theme="amber"] #overviewKpiGrid .surface {
-  padding: 14px;
+  --kpi-card-padding: 14px;
 }
 
 html[data-ui-theme="terminal"] #overviewKpiGrid .text-3xl,
