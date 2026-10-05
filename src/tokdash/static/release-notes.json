@@ -1,6 +1,35 @@
 {
-  "current": "2.6.10",
+  "current": "2.6.11",
   "releases": [
+    {
+      "version": "2.6.11",
+      "date": "2026-10-05",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Every Overview KPI card now reads out the exact figure behind its rounded value when you hover it: the full token count, the message count with its unit, agent time down to the seconds, the cache hit rate to two decimals, and the top model's name unbroken. The readout takes the card's own colour and stays open while you move onto it. The Cost card deliberately has none, because the cost already arrives rounded to cents and more digits would only be false precision.",
+            "The dashboard's non-visible text is translated: aria-labels, tooltips, the session search placeholder and the browser tab title, in all six languages. Screen-reader users no longer hear English inside a translated interface, including the Quota tab's provider menu, which used to be written in code and announced itself in English everywhere."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "The Overview and Stats tabs lost a doubled-up figure and evened out their spacing. Token Composition no longer prints a Cache Saved total that repeats the legend directly below it, the header now sits the same distance above the first row of cards as the rest of the page does, and the Stats grids separate rows from columns instead of mixing two spacings.",
+            "The Freebuff logo in the README's supported-client strip was exported without transparency, so it sat on a white slab against GitHub's dark theme. It is rebuilt with transparent corners, and a check now insists every client logo keeps an alpha channel."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "DeepSeek Harness usage that was being dropped is counted. A compaction event carries the summary call's own tokens but no turn or step, so its cost never reached the total; usage recorded inside a retried or aborted attempt is read now too, as is a finished message whose record left its usage out. Overview and the Sessions tab still agree, and stored rows reparse. Separately, a log that went corrupt, recovered, then went corrupt again logged nothing the second time for the rest of the process; a clean read now forgets the file.",
+            "The tab row beside the sidebar no longer reappears on wide screens. The rule that hid it had become an invalid selector, which the browser discarded without a word. Several accessible names that pointed at the wrong text are corrected too: the quota interval control announced 'saved interval' where its own label says 'Poll every', and one close button had its icon replaced by its label text.",
+            "The untranslated page and the translated one no longer say different things. Some built-in English fallbacks had drifted from the English dictionary, so every language briefly showed the stale wording -- the sidebar said \"What's New\" where the dictionary says \"What's new\" -- before the translation pass replaced it. Every fallback now matches its own key.",
+            "The checks behind the translations now pass on more than the machine they were written on. The dashboard's test suite decoded Node's output with the Windows locale encoding, which garbled Chinese, Japanese and emoji, and one terminal-dashboard check read a figure before its request had finished."
+          ]
+        }
+      ]
+    },
     {
       "version": "2.6.10",
       "date": "2026-10-04",
