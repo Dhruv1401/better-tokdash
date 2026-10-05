@@ -16498,6 +16498,7 @@
     function syncQuotaVisibilityControl(control, present, hostKey) {
       const panel = control.querySelector('.quota-visibility-panel');
       if (!panel) return;
+      panel.setAttribute('aria-label', t('quotaVisibilityMenu'));
       if (hostKey) control.dataset.hostKey = quotaVisibilityHostKey(hostKey);
       panel.replaceChildren();
       QUOTA_PROVIDERS.forEach((provider) => {

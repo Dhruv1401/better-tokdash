@@ -10,6 +10,8 @@ import pytest
 
 import tokdash
 
+from test_i18n_languages import _extract_i18n_literal
+
 
 INDEX_HTML = Path(tokdash.__file__).parent / "static" / "index.html"
 
@@ -744,6 +746,7 @@ def _quota_visibility_dom_functions(source: str) -> str:
             _extract_js_function(source, "function quotaSingleScopeHostKey() {"),
             _extract_js_function(source, "function buildQuotaVisibilityRow(provider, hostKey) {"),
             _extract_js_function(source, "function createQuotaVisibilityControl(present, hostKey) {"),
+            _extract_js_function(source, "function syncQuotaVisibilityControl(control, present, hostKey) {"),
             _extract_js_function(source, "function syncQuotaVisibilityControlInPlace(control, present) {"),
             _extract_js_function(source, "function refreshQuotaServerScope(server) {"),
             _extract_js_function(source, "function refreshQuotaSingleScope() {"),
@@ -758,6 +761,53 @@ def _run_quota_dom(tmp_path: Path, name: str, body: str) -> dict:
     harness.write_text(body, encoding="utf-8")
     result = subprocess.run(["node", str(harness)], check=True, capture_output=True, encoding="utf-8")
     return json.loads(result.stdout)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_quota_visibility_menu_name_follows_language_changes(tmp_path):
+    source = INDEX_HTML.read_text(encoding="utf-8")
+    scenario = r"""
+let currentLang = 'ja';
+const host = new El('span');
+document.getElementById = (id) => id === 'quotaVisibilityHost' ? host : null;
+const payload = { providers: { codex: { detected: true }, claude: { detected: true } } };
+loadQuotaVisibility('local').codex = false;
+syncQuotaSingleVisibility(payload);
+const control = host.querySelector('.quota-visibility-wrap');
+const panel = control.querySelector('.quota-visibility-panel');
+control.querySelector('.quota-visibility-btn').dispatch('click');
+const initial = panel.getAttribute('aria-label');
+const results = [];
+for (const lang of Object.keys(I18N)) {
+  currentLang = lang;
+  // applyI18n reuses this single-server control through the same sync path.
+  syncQuotaSingleVisibility(payload);
+  results.push({
+    lang,
+    name: panel.getAttribute('aria-label'),
+    expected: I18N[lang].quotaVisibilityMenu,
+    samePanel: host.querySelector('.quota-visibility-panel') === panel,
+    open: !panel.classList.contains('hidden'),
+    codexChecked: inputFor(control, 'codex').checked,
+  });
+}
+process.stdout.write(JSON.stringify({initial, expectedInitial: I18N.ja.quotaVisibilityMenu, results}));
+"""
+    body = "\n".join([
+        QUOTA_VISIBILITY_DOM_STUBS,
+        _extract_i18n_literal(source),
+        _extract_js_function(source, "function t(key, vars) {"),
+        _quota_visibility_dom_functions(source),
+        scenario,
+    ])
+    out = _run_quota_dom(tmp_path, "quota-visibility-i18n", body)
+    assert out["initial"] == out["expectedInitial"]
+    assert len(out["results"]) == 6
+    for row in out["results"]:
+        assert row["name"] == row["expected"], row["lang"]
+        assert row["samePanel"] is True
+        assert row["open"] is True
+        assert row["codexChecked"] is False
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
