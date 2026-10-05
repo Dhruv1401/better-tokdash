@@ -213,6 +213,11 @@ def clear_dsh_diagnostics(path: Any) -> None:
     """
     target = str(path)
     with _reported_lock:
+        if not _reported:
+            # The healthy case: this runs once per file per decode, so it must
+            # not walk the registry just to learn that nothing was ever
+            # reported.
+            return
         for key in [key for key in _reported if key[0] == target]:
             del _reported[key]
 
@@ -558,6 +563,9 @@ def fold_dsh_usage_samples(
         # not share dense seq positions across a format generation (upstream
         # renumbers those on conversion while preserving timestamps) -- land on
         # the same entry id and dedup under the earliest-(timestamp, path) rule.
+        # The `c:` prefix also keeps the two key spaces disjoint so one map can
+        # hold both: a loop-step key is always `int:int` (both are validated as
+        # non-negative ints above) and can never equal `c:<time_ms>`.
         entry_key = f"c:{timestamp_ms}" if is_compaction else f"{turn}:{step}"
         sample = {
             "turn": turn,

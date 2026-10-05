@@ -1179,6 +1179,69 @@ def test_message_usage_from_stream_when_data_usage_absent(_isolated_dsh_home):
     ]
 
 
+def test_compaction_before_the_fork_cut_is_not_billed(_isolated_dsh_home):
+    """A compaction inside a forked session's inherited prefix is a call the
+    parent already billed. The compaction branch rides the same seed filter as
+    every other shape, so the child must not bill it a second time."""
+    home = _isolated_dsh_home
+    _write_jsonl(
+        _session_path(home, suffix=".v4.jsonl"),
+        [
+            _header(version=4, isSeeded=True),
+            _compaction_summary(1, TS_BASE + 1000, {"inputTokens": 3, "outputTokens": 4429}),
+            _end_seed(2, inherited=True),
+            _assistant_message(3, 1, 0, {"inputTokens": 300, "outputTokens": 30}),
+        ],
+    )
+
+    entries = _collect(home)
+    assert [entry["input"] for entry in entries] == [300]
+
+
+def test_compaction_with_an_invalid_bucket_is_dropped(_isolated_dsh_home):
+    """A compaction is billable, but a malformed one is still unusable: a
+    negative bucket makes the whole sample unusable rather than billing a
+    negative count."""
+    home = _isolated_dsh_home
+    _write_jsonl(
+        _session_path(home, suffix=".v4.jsonl"),
+        [
+            _header(version=4, isSeeded=False),
+            _compaction_summary(1, TS_BASE + 1000, {"inputTokens": -1, "outputTokens": 4429}),
+        ],
+    )
+    assert _collect(home) == []
+
+
+def test_attempt_takes_the_last_usage_chunk_in_its_stream(_isolated_dsh_home):
+    """A provider may report usage more than once in one stream. Upstream's
+    `lastAssistantStreamChunk` takes the last one, so this fold must too."""
+    home = _isolated_dsh_home
+    first = {"inputTokens": 10, "outputTokens": 1}
+    last = {"inputTokens": 200, "outputTokens": 20}
+    attempt = _event(
+        1,
+        "assistant/attempt",
+        {
+            "turn": 0,
+            "step": 0,
+            "stream": [
+                {"type": "chunk", "time": TS_BASE, "chunk": {"type": "usage", "usage": first}},
+                {"type": "chunk", "time": TS_BASE + 5, "chunk": {"type": "usage", "usage": last}},
+            ],
+        },
+    )
+    _write_jsonl(
+        _session_path(home, suffix=".v4.jsonl"),
+        [_header(version=4, isSeeded=False), attempt],
+    )
+
+    entries = _collect(home)
+    assert [(e["entry_id"], e["input"], e["output"]) for e in entries] == [
+        ("dsh:session-abc:0:0", 200, 20)
+    ]
+
+
 def test_diagnostics_warn_again_after_the_file_recovers(_isolated_dsh_home, caplog):
     """report_dsh_diagnostic warns once per (path, kind, detail) and nothing in
     production ever cleared the registry, so a file that recovered and then
