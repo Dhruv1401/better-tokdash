@@ -107,8 +107,10 @@ def _compaction_summary(seq, time_ms, usage, model="deepseek-v4-flash", provider
 def _assistant_attempt(seq, turn, step, usage=None):
     """An assistant/attempt whose stream carries the attempt's usage chunk.
 
-    From dsh v2 on a call that never produced a final message leaves only this
-    event; it declares no top-level ``usage`` and embeds the stream instead.
+    Shape taken from dsh's own snapshot suite
+    (``snapshots/session/empty-response-retry-current/session.v3.jsonl``): a v2+
+    attempt declares no top-level ``usage`` and embeds the raw stream instead,
+    ending with a ``finish`` chunk.
     """
     stream = []
     if usage is not None:
@@ -123,6 +125,19 @@ def _assistant_attempt(seq, turn, step, usage=None):
                 "chunk": {"type": "usage", "usage": usage},
             }
         )
+    stream.append(
+        {
+            "type": "chunk",
+            "time": TS_BASE + 1000 * seq + 1,
+            "chunk": {
+                "type": "finish",
+                "reason": {
+                    "kind": "error",
+                    "failure": {"message": "empty response", "code": "EMPTY_RESPONSE"},
+                },
+            },
+        }
+    )
     return _event(seq, "assistant/attempt", {"turn": turn, "step": step, "stream": stream})
 
 
