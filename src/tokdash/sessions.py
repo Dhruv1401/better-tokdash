@@ -4261,7 +4261,7 @@ def _load_dsh_sessions(signature: tuple[tuple[str, int, int], ...], pricing_sig:
         if not raw:
             continue
         # Duplicate physical files for one header id merge; the stable
-        # per-(turn, step) event keys dedup the turns.
+        # per-sample event keys dedup the turns.
         grouped.setdefault(str(raw["session_id"]), []).append(
             ((path_str, mtime_ns, size), raw)
         )

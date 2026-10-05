@@ -5186,10 +5186,13 @@ class DSHParser(BaseParser):
     (or an uncompressed ``session.jsonl``), defaulting to ``~/.dsh``.
 
     Each file is an append-only logical JSONL event log whose first row is the
-    session header; provider usage arrives as an early ``assistant/chunk``
-    usage sample and/or the finalized ``assistant/message`` usage, folded
-    replace-not-add per ``(turn, step)``. Framing, fork boundaries and the
-    fold itself live in ``sources/dsh_log.py``, shared with the session parser.
+    session header; provider usage arrives in four event shapes -- an early
+    ``assistant/chunk`` usage sample, the finalized ``assistant/message`` usage,
+    the usage chunk embedded in an ``assistant/attempt``'s ``stream``, and a
+    ``compaction/summary``'s own usage. The first three fold replace-not-add per
+    ``(turn, step)``; a compaction is not a loop step, so it gets its own
+    time-keyed coordinate. Framing, fork boundaries and the fold itself live in
+    ``sources/dsh_log.py``, shared with the session parser.
     """
 
     source_name = "dsh"

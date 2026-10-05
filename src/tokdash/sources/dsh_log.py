@@ -3,9 +3,9 @@
 Both the usage parser (``coding_tools.DSHParser``) and the session parser
 (``sessions._parse_dsh_session_file``) go through this module so the framing
 rules live in exactly one place: multi-frame zstd, torn tails, header-version
-gating, fork seed boundaries, model attribution, and the (turn, step)
-replace-not-add usage fold. Nothing here prices tokens or knows about Tokdash
-entry shapes.
+gating, fork seed boundaries, model attribution, and the replace-not-add usage
+fold across every event shape that carries provider usage. Nothing here prices
+tokens or knows about Tokdash entry shapes.
 
 Format reference: docs/development/technical-notes/DSH_SUPPORT_DESIGN.md.
 """
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -127,8 +128,14 @@ class DSHDecodedSession:
 # is how this bug stayed silent. Both consumers report through one function so a
 # broken file is named once per problem rather than once per parse (log spam)
 # or never (the behavior this replaces).
+#
+# Guarded by a lock because more than one request thread can decode DSH logs at
+# once (the dashboard's compute slots run in Starlette's threadpool). Without it,
+# a clean decode clearing a path while another thread recorded a problem for a
+# different one could mutate the dict under a live iteration.
 _reported: "OrderedDict[tuple, None]" = OrderedDict()
 _REPORT_MAX = 512
+_reported_lock = threading.Lock()
 
 
 def report_dsh_diagnostic(path: Any, kind: str, detail: str = "") -> None:
@@ -139,12 +146,13 @@ def report_dsh_diagnostic(path: Any, kind: str, detail: str = "") -> None:
     instead of on prose.
     """
     key = (str(path), kind, detail)
-    if key in _reported:
-        _reported.move_to_end(key)
-        return
-    _reported[key] = None
-    while len(_reported) > _REPORT_MAX:
-        _reported.popitem(last=False)
+    with _reported_lock:
+        if key in _reported:
+            _reported.move_to_end(key)
+            return
+        _reported[key] = None
+        while len(_reported) > _REPORT_MAX:
+            _reported.popitem(last=False)
     logger.warning(
         "tokdash dsh: %s [%s]%s", path, kind, f" {detail}" if detail else ""
     )
@@ -190,7 +198,8 @@ def report_dsh_decode(path: Any, decoded: "DSHDecodedSession") -> None:
 
 def reset_dsh_diagnostics() -> None:
     """Forget what has been reported. For tests and explicit re-scans."""
-    _reported.clear()
+    with _reported_lock:
+        _reported.clear()
 
 
 def clear_dsh_diagnostics(path: Any) -> None:
@@ -203,8 +212,9 @@ def clear_dsh_diagnostics(path: Any) -> None:
     path that is still present.
     """
     target = str(path)
-    for key in [key for key in _reported if key[0] == target]:
-        del _reported[key]
+    with _reported_lock:
+        for key in [key for key in _reported if key[0] == target]:
+            del _reported[key]
 
 
 def dsh_file_signatures(root: Path) -> Tuple[Tuple[str, int, int], ...]:
@@ -435,7 +445,7 @@ def fold_dsh_usage_samples(
     seed_length, seed_unprovable = dsh_seed_boundary(header, events)
     # Insertion-ordered: a replaced key keeps the position of its first sighting,
     # so the emitted order stays the log's order rather than the fold's.
-    samples: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    samples: Dict[str, Dict[str, Any]] = {}
     latest_model = ""
     latest_provider = ""
 
@@ -556,11 +566,6 @@ def fold_dsh_usage_samples(
         samples[entry_key] = sample
 
     return list(samples.values())
-
-
-def dsh_entry_id(session_id: Any, turn: Any, step: Any) -> str:
-    """Stable usage-entry identity, unchanged when a chunk row is replaced."""
-    return f"dsh:{session_id}:{turn}:{step}"
 
 
 def dsh_sample_entry_id(session_id: Any, sample: Dict[str, Any]) -> str:

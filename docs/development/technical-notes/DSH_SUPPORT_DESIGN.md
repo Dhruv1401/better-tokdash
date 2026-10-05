@@ -405,7 +405,8 @@ Avoid maintaining a frontend-only source list that can drift from the backend re
 
 - Missing `DSH_HOME` directory: empty source, no error.
 - Missing header, invalid JSON header, or unsupported version: skip that file, **and report it**
-  (`report_dsh_diagnostic`, once per `(path, reason)`).
+  (`report_dsh_diagnostic`, once per `(path, reason)` per occurrence -- a clean decode of the same
+  path later lets it report again, see below).
 - File present but undecodable, or a header this build does not read: raise
   `UsageFileUnreadable` from the strict single-file entry point instead of returning an empty list.
   Under `file_replace` an empty list asserts "this file now has zero entries", and the sync would

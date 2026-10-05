@@ -18,7 +18,6 @@ from tokdash.pricing import PricingDatabase
 from tokdash.sources.coding_tools import BaseParser, DSHParser, _sig_cache
 from tokdash.sources.dsh_log import (
     decode_dsh_session_file,
-    dsh_entry_id,
     dsh_file_signatures,
     fold_dsh_usage_samples,
     reset_dsh_diagnostics,
@@ -113,7 +112,16 @@ def _assistant_attempt(seq, turn, step, usage=None):
     """
     stream = []
     if usage is not None:
-        stream.append({"type": "chunk", "chunk": {"type": "usage", "usage": usage}})
+        # A raw record in the embedded compact stream: ``{type, time, chunk}``,
+        # exactly what dsh's AssistantStreamAccumulator stores for a usage chunk
+        # (it never packs a usage chunk into a delta run).
+        stream.append(
+            {
+                "type": "chunk",
+                "time": TS_BASE + 1000 * seq,
+                "chunk": {"type": "usage", "usage": usage},
+            }
+        )
     return _event(seq, "assistant/attempt", {"turn": turn, "step": step, "stream": stream})
 
 
@@ -276,7 +284,7 @@ def test_chunk_replaced_by_final_message_same_step(_isolated_dsh_home):
     assert len(entries) == 1
     assert entries[0]["output"] == 12
     # The id is stable across the in-file replacement: not a physical line number.
-    assert entries[0]["entry_id"] == dsh_entry_id("session-abc", 0, 0)
+    assert entries[0]["entry_id"] == "dsh:session-abc:0:0"
 
 
 def test_early_chunk_without_final_message_is_counted(_isolated_dsh_home):
@@ -996,9 +1004,9 @@ def test_compaction_summary_usage_is_counted(_isolated_dsh_home):
     time-keyed entry id (#171)."""
     home = _isolated_dsh_home
     _write_jsonl(
-        _session_path(home),
+        _session_path(home, suffix=".v4.jsonl"),
         [
-            _header(),
+            _header(version=4, isSeeded=False),
             _assistant_message(1, 0, 0, {"inputTokens": 100, "outputTokens": 10}),
             _compaction_summary(
                 2,
@@ -1031,9 +1039,9 @@ def test_compaction_usage_absent_is_not_zero(_isolated_dsh_home):
     rather than becoming a zero row."""
     home = _isolated_dsh_home
     _write_jsonl(
-        _session_path(home),
+        _session_path(home, suffix=".v4.jsonl"),
         [
-            _header(),
+            _header(version=4, isSeeded=False),
             _event(
                 1,
                 "compaction/summary",
