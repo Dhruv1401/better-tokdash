@@ -65,8 +65,8 @@ from .sources import pi_forks
 from .sources import openclaw as openclaw_source
 from .sources.dsh_log import (
     decode_dsh_session_file,
-    dsh_entry_id,
     dsh_file_signatures,
+    dsh_sample_entry_id,
     fold_dsh_usage_samples,
 )
 from .store_logging import log_store_failure
@@ -4236,7 +4236,7 @@ def _parse_dsh_session_file(path_str: str, _mtime_ns: int, _size: int, _pricing_
             tokens_reasoning=0,
             bill=bill,
         )
-        turn["_event_key"] = dsh_entry_id(session_id, sample["turn"], sample["step"])
+        turn["_event_key"] = dsh_sample_entry_id(session_id, sample)
         turns.append(turn)
 
     if not turns:

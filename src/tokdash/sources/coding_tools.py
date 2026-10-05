@@ -41,7 +41,7 @@ try:
     )
     from . import dsh_log as dsh_log_module
     from . import pi_forks
-    from .dsh_log import decode_dsh_session_file, dsh_entry_id, dsh_file_signatures, fold_dsh_usage_samples
+    from .dsh_log import decode_dsh_session_file, dsh_file_signatures, dsh_sample_entry_id, fold_dsh_usage_samples
 except ImportError:  # pragma: no cover
     # Allow running as a script by file path.
     import clientpaths
@@ -56,7 +56,7 @@ except ImportError:  # pragma: no cover
     )
     import dsh_log as dsh_log_module
     import pi_forks
-    from dsh_log import decode_dsh_session_file, dsh_entry_id, dsh_file_signatures, fold_dsh_usage_samples
+    from dsh_log import decode_dsh_session_file, dsh_file_signatures, dsh_sample_entry_id, fold_dsh_usage_samples
 
 logger = logging.getLogger(__name__)
 
@@ -5197,7 +5197,7 @@ class DSHParser(BaseParser):
         mode="file_replace",
         append_jsonl=False,
         session_store=True,
-        # dsh_entry_id deliberately carries no file path so duplicate physical
+        # dsh_sample_entry_id deliberately carries no file path so duplicate physical
         # copies of one session never bill twice -- which means one entry_key
         # legitimately occurs in several files, exactly what this flag declares.
         # Without it the store upserts with INSERT OR REPLACE, so the last file
@@ -5209,7 +5209,7 @@ class DSHParser(BaseParser):
             "earlier same-step chunk; changed files are reparsed whole."
         ),
     )
-    # 1: folded (turn, step) usage samples keyed on dsh_entry_id. The shared
+    # 1: folded usage samples keyed on dsh_sample_entry_id. The shared
     #    decoder's own versions ride along in persistent_parser_signature().
     persistent_parser_version = 1
 
@@ -5264,7 +5264,7 @@ class DSHParser(BaseParser):
                     "reasoning": 0,
                     "cost": self.pricing_db.get_cost(model, input_t, output_t, cache_r, cache_w),
                     "timestamp": int(sample["timestamp_ms"]),
-                    "entry_id": dsh_entry_id(session_id, sample["turn"], sample["step"]),
+                    "entry_id": dsh_sample_entry_id(session_id, sample),
                     "_billing": usage_billing_pricing(
                         [model],
                         input_tokens=input_t,

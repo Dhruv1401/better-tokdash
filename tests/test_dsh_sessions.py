@@ -366,6 +366,38 @@ def test_overview_and_sessions_agree_on_repeated_turn_step(_isolated_dsh_home):
     assert overview == sessions_total == 411
 
 
+def test_overview_and_sessions_agree_on_compaction_usage(_isolated_dsh_home):
+    """A compaction/summary is its own billable call with no (turn, step), so it
+    never folded. Both surfaces must now count it once, under the same
+    time-keyed entry id (#171)."""
+    home = _isolated_dsh_home
+    _write_copied_session(
+        home,
+        "s9",
+        [
+            _header("s9", version=4, isSeeded=False),
+            _assistant_message(1, 0, 0, {"inputTokens": 100, "outputTokens": 10}, DAY1_MS),
+            {
+                "type": "compaction/summary",
+                "seq": 2,
+                "time": DAY1_MS + 5000,
+                "data": {
+                    "turn": None,
+                    "step": None,
+                    "usage": {"inputTokens": 3, "outputTokens": 4429},
+                    "model": "deepseek-v4-flash",
+                    "provider": "deepseek",
+                },
+            },
+        ],
+        "--work-a--",
+    )
+
+    overview = _overview_tokens_in()
+    sessions_total = _sessions_tokens_in()
+    assert overview == sessions_total == 103
+
+
 # --- issue #147 diagnostics: neither surface may be the silent one ---------------
 
 

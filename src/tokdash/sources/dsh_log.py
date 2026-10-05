@@ -32,7 +32,12 @@ DSH_DECODER_VERSION = 2
 #    (turn, step) instead of only the previous sample, so a non-adjacent repeat
 #    yields one sample instead of two, and the v4 seed boundary is derived from
 #    the session/end-seed marker. Stored rows must reparse.
-DSH_ACCOUNTING_VERSION = 2
+# 3: two more billable shapes are folded (#171): a compaction/summary's own
+#    usage, keyed on the event time rather than (turn, step) since a compaction
+#    is not a loop step, and the usage chunk dsh v2+ embeds in an
+#    assistant/attempt's stream, so a retried or aborted attempt that never
+#    produced a final message is still billed. Stored rows must reparse.
+DSH_ACCOUNTING_VERSION = 3
 
 # Format generations Tokdash reads. A version outside this set is unsupported,
 # not corrupt — the file is skipped, never treated as empty.
@@ -157,24 +162,49 @@ def report_dsh_decode(path: Any, decoded: "DSHDecodedSession") -> None:
     if decoded.skip_reason is not None or decoded.header is None:
         report_dsh_diagnostic(path, f"skip:{decoded.skip_reason or 'missing-header'}")
         return
+    recovered = True
     if decoded.failed_frames:
+        recovered = False
         report_dsh_diagnostic(
             path,
             "frames-lost",
             f"{decoded.failed_frames} zstd frame(s) did not decode; their rows are missing",
         )
     if dsh_seed_boundary(decoded.header, decoded.events)[1]:
+        recovered = False
         report_dsh_diagnostic(
             path,
             "seed-unprovable",
             "seeded session with no inherited session/end-seed marker; billing nothing "
             "rather than double-billing the parent's inherited prefix",
         )
+    if recovered:
+        # A clean decode forgets this path, so a file that breaks again after it
+        # recovered warns again instead of staying silent for the rest of the
+        # process's life (#171). Keying the registry on the file signature
+        # instead (mtime_ns, size) would be wrong: a live session with a damaged
+        # interior frame changes its signature on every append, so it would warn
+        # on every refresh.
+        clear_dsh_diagnostics(path)
 
 
 def reset_dsh_diagnostics() -> None:
     """Forget what has been reported. For tests and explicit re-scans."""
     _reported.clear()
+
+
+def clear_dsh_diagnostics(path: Any) -> None:
+    """Forget everything reported for one path, so it can warn again.
+
+    Called once a decode of that path is clean -- no skip, no lost frames and no
+    unprovable seed. Without it a file that goes corrupt, recovers, then goes
+    corrupt again logs nothing the second time for as long as the process lives
+    (#171); the 512-entry cap only evicts the oldest entries, it never clears a
+    path that is still present.
+    """
+    target = str(path)
+    for key in [key for key in _reported if key[0] == target]:
+        del _reported[key]
 
 
 def dsh_file_signatures(root: Path) -> Tuple[Tuple[str, int, int], ...]:
@@ -339,15 +369,46 @@ def dsh_seed_boundary(
     return max(markers), False
 
 
+def _attempt_stream_usage(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The provider usage chunk embedded in an ``assistant/attempt``'s stream.
+
+    From dsh v2 on, the standalone ``assistant/chunk`` usage events are folded
+    into the attempt's ``stream`` and ``assistant/attempt`` declares no
+    top-level ``usage`` of its own. A call that never produced a final message
+    leaves only that attempt, so its stream's ``chunk.type == "usage"`` record is
+    the only durable record of what the provider billed (#171). The last such
+    record wins; ``None`` means the attempt reported no usage (an absent value is
+    absent, not zero).
+    """
+    stream = data.get("stream")
+    if not isinstance(stream, list):
+        return None
+    found: Optional[Dict[str, Any]] = None
+    for record in stream:
+        if not isinstance(record, dict) or record.get("type") != "chunk":
+            continue
+        chunk = record.get("chunk")
+        if not isinstance(chunk, dict) or chunk.get("type") != "usage":
+            continue
+        usage = chunk.get("usage")
+        if isinstance(usage, dict):
+            found = usage
+    return found
+
+
 def fold_dsh_usage_samples(
     header: Dict[str, Any],
     events: Tuple[Dict[str, Any], ...],
 ) -> List[Dict[str, Any]]:
-    """Fold provider usage events into one sample per ``(turn, step)``.
+    """Fold provider usage events into one sample per usage coordinate.
 
-    Two event shapes report usage: an early ``assistant/chunk`` whose
-    ``chunk.type == "usage"``, and the finalized ``assistant/message`` carrying
-    ``data.usage``. The fold is replace-not-add against a map keyed on the whole
+    Four event shapes report usage: an early ``assistant/chunk`` whose
+    ``chunk.type == "usage"``; the finalized ``assistant/message`` carrying
+    ``data.usage``; the usage chunk dsh v2+ embeds in an ``assistant/attempt``'s
+    ``stream`` (a call that never produced a final message); and a
+    ``compaction/summary``'s own ``data.usage`` (a billable summarization call
+    that is not a loop step). For the loop-step shapes the fold is
+    replace-not-add against a map keyed on the whole
     file's ``(turn, step)``, so the LAST sample for a key wins wherever it sits:
     a final message replaces its earlier chunk instead of double-counting it, an
     early chunk with no final message stays counted, and a key that repeats
@@ -356,11 +417,13 @@ def fold_dsh_usage_samples(
     Keying the whole file rather than only the previous sample is what keeps the
     dashboard's two surfaces in agreement. ``coding_tools.DSHParser`` and
     ``sessions._parse_dsh_session_file`` both consume this list and both key
-    their own dedup on :func:`dsh_entry_id`, which carries no file path — so a
-    second sample sharing a ``(turn, step)`` collapsed to one entry in the usage
-    view while staying two turns in the Sessions view, and the two surfaces
-    reported different totals for one corpus. One sample per key makes that
-    impossible by construction.
+    their own dedup on :func:`dsh_sample_entry_id`, which carries no file path —
+    so a second sample sharing a ``(turn, step)`` collapsed to one entry in the
+    usage view while staying two turns in the Sessions view, and the two
+    surfaces reported different totals for one corpus. One sample per key makes
+    that impossible by construction. A compaction sample carries no
+    ``(turn, step)``: its coordinate is its own event time, see
+    :func:`dsh_sample_entry_id`.
 
     Events before the fork boundary are inherited from the parent log and
     skipped; ``parentSession`` alone skips nothing, and with a declared boundary
@@ -389,6 +452,7 @@ def fold_dsh_usage_samples(
                 latest_provider = provider
             continue
 
+        is_compaction = False
         if event_type == "assistant/chunk":
             chunk = data.get("chunk") if isinstance(data.get("chunk"), dict) else {}
             if chunk.get("type") != "usage":
@@ -407,6 +471,22 @@ def fold_dsh_usage_samples(
             source = message.get("source") if isinstance(message.get("source"), dict) else {}
             model = str(source.get("model") or "").strip() or latest_model
             provider = str(source.get("provider") or "").strip() or latest_provider
+        elif event_type == "assistant/attempt":
+            usage = _attempt_stream_usage(data)
+            if usage is None:
+                continue
+            model = latest_model
+            provider = latest_provider
+        elif event_type == "compaction/summary":
+            # A compaction summary is its own billable model call, not a loop
+            # step, so it gets its own entry coordinate (keyed on the event
+            # time). Its usage is optional -- absent stays absent, not zero.
+            usage = data.get("usage") if isinstance(data.get("usage"), dict) else None
+            if usage is None:
+                continue
+            model = str(data.get("model") or "").strip() or latest_model
+            provider = str(data.get("provider") or "").strip() or latest_provider
+            is_compaction = True
         else:
             continue
 
@@ -420,10 +500,13 @@ def fold_dsh_usage_samples(
         if seed_unprovable or (seed_length and (seq is None or seq < seed_length)):
             continue
 
-        turn = _to_int(data.get("turn"))
-        step = _to_int(data.get("step"))
-        if turn is None or step is None:
-            continue
+        if is_compaction:
+            turn = step = None
+        else:
+            turn = _to_int(data.get("turn"))
+            step = _to_int(data.get("step"))
+            if turn is None or step is None:
+                continue
 
         input_tokens = _to_int(usage.get("inputTokens"))
         output_tokens = _to_int(usage.get("outputTokens"))
@@ -449,9 +532,16 @@ def fold_dsh_usage_samples(
         if timestamp_ms is None:
             continue
 
+        # A compaction call has no (turn, step); it is keyed on its own event time
+        # so two physical copies of one session -- which share timestamps but may
+        # not share dense seq positions across a format generation (upstream
+        # renumbers those on conversion while preserving timestamps) -- land on
+        # the same entry id and dedup under the earliest-(timestamp, path) rule.
+        entry_key = f"c:{timestamp_ms}" if is_compaction else f"{turn}:{step}"
         sample = {
             "turn": turn,
             "step": step,
+            "entry_key": entry_key,
             "timestamp_ms": timestamp_ms,
             "model": model or "unknown",
             "provider": provider,
@@ -463,7 +553,7 @@ def fold_dsh_usage_samples(
             # separately here would count those tokens twice downstream.
             "reasoning": 0,
         }
-        samples[(turn, step)] = sample
+        samples[entry_key] = sample
 
     return list(samples.values())
 
@@ -471,3 +561,18 @@ def fold_dsh_usage_samples(
 def dsh_entry_id(session_id: Any, turn: Any, step: Any) -> str:
     """Stable usage-entry identity, unchanged when a chunk row is replaced."""
     return f"dsh:{session_id}:{turn}:{step}"
+
+
+def dsh_sample_entry_id(session_id: Any, sample: Dict[str, Any]) -> str:
+    """Stable usage-entry identity for one folded sample.
+
+    ``entry_key`` is the sample's coordinate within its session: ``{turn}:{step}``
+    for a message, chunk or attempt sample, and ``c:{time_ms}`` for a compaction
+    call, which has no loop step. A compaction is keyed on its event time rather
+    than its ``seq`` because the two physical copies of one session that #148's
+    winner rule must collapse can be different format generations, and dsh's
+    released conversions renumber dense sequence positions when they insert
+    events while preserving event timestamps (upstream V2->V3 specification).
+    Timestamps are the one coordinate the copies are guaranteed to share.
+    """
+    return f"dsh:{session_id}:{sample['entry_key']}"

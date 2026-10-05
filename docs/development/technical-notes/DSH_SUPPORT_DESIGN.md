@@ -167,13 +167,18 @@ changes usage accounting.
 
 ## Usage accounting
 
-Provider usage appears in two event shapes:
+Provider usage appears in four event shapes:
 
 1. `assistant/chunk` with `data.chunk.type == "usage"`, an early sample that can survive a later
    request failure.
 2. `assistant/message` with `data.usage`, the finalized sample for a successful provider call.
+3. `assistant/attempt`, whose `stream` embeds the `chunk.type == "usage"` record of a call that
+   never produced a final message (retried, aborted, or stream-error). Dsh v2+ folded the
+   standalone chunks into this stream, and `assistant/attempt` has no top-level `usage` of its own.
+4. `compaction/summary` with `data.usage`, the provider-reported cost of a summarization call.
+   It is not a loop step, so `turn`/`step` are `null` and it uses its own identity (below).
 
-Both carry a `(turn, step)` identity. dsh's token-meter projection relies on the ordering
+Shapes 1-3 carry a `(turn, step)` identity. dsh's token-meter projection relies on the ordering
 invariant that samples for one `(turn, step)` are adjacent: once a later step reports usage, a
 legal log does not report the earlier step again. Tokdash must implement the same
 replace-not-add fold:
@@ -192,6 +197,18 @@ dsh:<session-id>:<turn>:<step>
 
 Do not use the physical line number, because the finalized event follows the chunk under a
 different `seq`.
+
+A compaction sample has no `(turn, step)`, so it gets its own identity:
+
+```text
+dsh:<session-id>:c:<time_ms>
+```
+
+The coordinate is the event `time`, not its `seq`: the two physical copies of one session that must
+collapse to one entry can be different format generations, and dsh's released conversions renumber
+dense sequence positions when they insert events while preserving event timestamps (upstream
+V2-to-V3 specification). `compaction/summary.usage` is optional; an absent value stays absent
+rather than becoming zero.
 
 ### Field mapping
 
@@ -406,6 +423,10 @@ Avoid maintaining a frontend-only source list that can drift from the backend re
   report (#151).
 - Damaged interior zstd frame: keep the rows of every other frame, report `frames-lost`, and skip
   the file if the damaged frame carried the header.
+- A file that breaks again after it recovered is reported again: a clean decode clears that path's
+  entries from the once-per-problem registry. The registry is not keyed on the file signature
+  (`mtime_ns`, `size`) -- a live session with a damaged interior frame changes its signature on
+  every append and would warn on every refresh instead.
 - Duplicate physical files for one header id: deduplicate by session id and stable event key, with
   the earliest `(timestamp, path)` copy winning on every surface.
 - Missing title: use the first user preview and then the existing fallback.
@@ -416,11 +437,24 @@ Avoid maintaining a frontend-only source list that can drift from the backend re
 - Torn zstd tail or trailing partial JSON line: keep complete rows only.
 - One malformed file: never blank the whole DSH source.
 
-Auxiliary model calls are a known undercount, not an implementation bug. Upstream records the
-session-title request but does not attach finalized usage to the durable session surface, and its
-compaction path makes a direct LLM call without appending usage of its own. Tokdash can count
-durable conversation calls accurately but cannot recover these auxiliary calls from the current
-format. Revisit if upstream persists auxiliary usage.
+Compaction usage is counted. A `compaction/summary` carries its own `data.usage` -- the
+provider-reported cost of the summarization call -- alongside `provider`/`model`, with `turn` and
+`step` null. It is not a loop step, so it cannot use the `(turn, step)` fold or the
+`dsh:<session-id>:<turn>:<step>` id; Tokdash folds it as its own sample on both surfaces, keyed on
+the event time (`dsh:<session-id>:c:<time_ms>`). The usage object is optional, so an absent one
+stays absent rather than becoming zero.
+
+Usage on a failed or retried attempt is counted too. From dsh v2 on, the standalone
+`assistant/chunk` usage events are folded into the attempt's `stream` and `assistant/attempt`
+declares no top-level `usage` of its own, so a call that never produced a final message leaves only
+that attempt. Its stream's `chunk.type == "usage"` record is folded on `(turn, step)` like the rest:
+an early attempt with no final message stays counted, and a later final message for the same step
+still replaces it.
+
+The session-title request remains the known undercount. Upstream records
+`session/title-llm-request` as a log-only pre-dispatch record of the request, and the accepted
+`session/title` snapshot carries the provider/model identity but no finalized usage, so Tokdash
+cannot recover the title call's cost from the current format. Revisit if upstream persists it.
 
 ## Test plan
 

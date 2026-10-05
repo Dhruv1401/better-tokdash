@@ -7,6 +7,7 @@ Format reference: docs/development/technical-notes/DSH_SUPPORT_DESIGN.md.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -85,6 +86,35 @@ def _user_message(seq, text="fix the flaky test"):
             "source": {"kind": "user"},
         },
     )
+
+
+def _compaction_summary(seq, time_ms, usage, model="deepseek-v4-flash", provider="deepseek"):
+    """A v4 compaction/summary: its own billable model call, turn/step null."""
+    return _event(
+        seq,
+        "compaction/summary",
+        {
+            "turn": None,
+            "step": None,
+            "usage": usage,
+            "model": model,
+            "provider": provider,
+            "shadowedTokenCount": 12345,
+        },
+        time_ms=time_ms,
+    )
+
+
+def _assistant_attempt(seq, turn, step, usage=None):
+    """An assistant/attempt whose stream carries the attempt's usage chunk.
+
+    From dsh v2 on a call that never produced a final message leaves only this
+    event; it declares no top-level ``usage`` and embeds the stream instead.
+    """
+    stream = []
+    if usage is not None:
+        stream.append({"type": "chunk", "chunk": {"type": "usage", "usage": usage}})
+    return _event(seq, "assistant/attempt", {"turn": turn, "step": step, "stream": stream})
 
 
 def _write_jsonl(path: Path, rows, trailing="") -> Path:
@@ -955,6 +985,173 @@ def test_duplicate_copies_bill_once_in_the_persistent_store(_isolated_dsh_home):
     rows = store.query_entries(sources=["dsh"])
     assert len(rows) == 1
     assert rows[0]["input"] == 100
+
+
+# --- issue #171: compaction usage, attempt usage, recurring diagnostics ---------
+
+
+def test_compaction_summary_usage_is_counted(_isolated_dsh_home):
+    """A compaction/summary is its own billable model call with turn/step null,
+    so it never went through the (turn, step) fold. It now bills under its own
+    time-keyed entry id (#171)."""
+    home = _isolated_dsh_home
+    _write_jsonl(
+        _session_path(home),
+        [
+            _header(),
+            _assistant_message(1, 0, 0, {"inputTokens": 100, "outputTokens": 10}),
+            _compaction_summary(
+                2,
+                TS_BASE + 5000,
+                {
+                    "inputTokens": 3,
+                    "outputTokens": 4429,
+                    "cacheReadTokens": 5130,
+                    "cacheWriteTokens": 139885,
+                },
+            ),
+        ],
+    )
+
+    entries = _collect(home)
+    assert [entry["entry_id"] for entry in entries] == [
+        "dsh:session-abc:0:0",
+        f"dsh:session-abc:c:{TS_BASE + 5000}",
+    ]
+    compaction = entries[1]
+    assert (compaction["input"], compaction["output"]) == (3, 4429)
+    assert compaction["cacheRead"] == 5130
+    assert compaction["cacheWrite"] == 139885
+    assert compaction["model"] == "deepseek-v4-flash"
+    assert compaction["provider"] == "deepseek"
+
+
+def test_compaction_usage_absent_is_not_zero(_isolated_dsh_home):
+    """``compaction/summary.usage`` is optional; an absent object stays absent
+    rather than becoming a zero row."""
+    home = _isolated_dsh_home
+    _write_jsonl(
+        _session_path(home),
+        [
+            _header(),
+            _event(
+                1,
+                "compaction/summary",
+                {"turn": None, "step": None, "model": "deepseek-v4-flash", "provider": "deepseek"},
+                time_ms=TS_BASE + 5000,
+            ),
+        ],
+    )
+    assert _collect(home) == []
+
+
+def test_compaction_copies_dedup_by_time_not_seq(_isolated_dsh_home):
+    """Two physical copies of one session share timestamps even when a format
+    generation renumbers their dense seq positions, so the compaction entry id
+    is keyed on time and the earliest-(timestamp, path) copy wins, exactly as
+    #148 requires. A seq-keyed id would bill such a pair twice."""
+    home = _isolated_dsh_home
+    # Same session id and compaction time, different seq -- what a renumbered
+    # generation of one session presents.
+    _write_jsonl(
+        _session_path(home),
+        [_header(), _compaction_summary(2, TS_BASE + 5000, {"inputTokens": 3, "outputTokens": 100})],
+    )
+    _write_jsonl(
+        _session_path(home, project_dir="--other-key--", suffix=".v4.jsonl"),
+        [
+            _header(version=4, isSeeded=False),
+            _compaction_summary(9, TS_BASE + 5000, {"inputTokens": 3, "outputTokens": 100}),
+        ],
+    )
+
+    entries = _collect(home)
+    assert len(entries) == 1
+    assert entries[0]["entry_id"] == f"dsh:session-abc:c:{TS_BASE + 5000}"
+
+
+def test_attempt_only_usage_is_counted(_isolated_dsh_home):
+    """From dsh v2 on, a call that never produced a final message leaves only an
+    assistant/attempt, whose stream carries the usage. Without reading it that
+    provider-billed usage went missing (#171)."""
+    home = _isolated_dsh_home
+    _write_jsonl(
+        _session_path(home, suffix=".v4.jsonl"),
+        [
+            _header(version=4, isSeeded=False),
+            _assistant_attempt(1, 0, 0, {"inputTokens": 250, "outputTokens": 40}),
+        ],
+    )
+
+    entries = _collect(home)
+    assert [(e["entry_id"], e["input"], e["output"]) for e in entries] == [
+        ("dsh:session-abc:0:0", 250, 40)
+    ]
+
+
+def test_attempt_usage_is_replaced_by_a_later_final_message(_isolated_dsh_home):
+    """An attempt's usage chunk and the finalized message share a (turn, step),
+    so the final message still replaces it instead of double-counting."""
+    home = _isolated_dsh_home
+    _write_jsonl(
+        _session_path(home, suffix=".v4.jsonl"),
+        [
+            _header(version=4, isSeeded=False),
+            _assistant_attempt(1, 0, 0, {"inputTokens": 100, "outputTokens": 10}),
+            _assistant_message(2, 0, 0, {"inputTokens": 100, "outputTokens": 12}),
+        ],
+    )
+
+    entries = _collect(home)
+    assert len(entries) == 1
+    assert entries[0]["output"] == 12
+    assert entries[0]["entry_id"] == "dsh:session-abc:0:0"
+
+
+def test_attempt_without_a_usage_chunk_is_ignored(_isolated_dsh_home):
+    """An attempt that streamed no usage contributes nothing, and does not
+    fabricate a zero row."""
+    home = _isolated_dsh_home
+    _write_jsonl(
+        _session_path(home, suffix=".v4.jsonl"),
+        [_header(version=4, isSeeded=False), _assistant_attempt(1, 0, 0, None)],
+    )
+    assert _collect(home) == []
+
+
+def test_diagnostics_warn_again_after_the_file_recovers(_isolated_dsh_home, caplog):
+    """report_dsh_diagnostic warns once per (path, kind, detail) and nothing in
+    production ever cleared the registry, so a file that recovered and then
+    broke again stayed silent for the rest of the process (#171). A clean decode
+    forgets the path, so the recurrence is reported again -- while a file that
+    stays broken still warns only once."""
+    from tokdash.sources import dsh_log
+
+    reset_dsh_diagnostics()
+    caplog.set_level(logging.WARNING, logger="tokdash.sources.dsh_log")
+    home = _isolated_dsh_home
+    path = _session_path(home, suffix=".jsonl.zstd")
+    rows = [_header(), _assistant_message(1, 0, 0, {"inputTokens": 100, "outputTokens": 10})]
+
+    def decode_once():
+        _sig_cache.clear()
+        BaseParser._entry_cache.clear()
+        decoded = decode_dsh_session_file(path)
+        dsh_log.report_dsh_decode(str(path), decoded)
+        return decoded
+
+    _write_zstd_frames(path, rows, corrupt_frame=1)
+    assert decode_once().failed_frames == 1
+    # Still corrupt: the same problem must not warn a second time.
+    assert decode_once().failed_frames == 1
+
+    _write_zstd_frames(path, rows)
+    assert decode_once().failed_frames == 0
+
+    _write_zstd_frames(path, rows, corrupt_frame=1)
+    assert decode_once().failed_frames == 1
+
+    assert caplog.text.count("frames-lost") == 2
 
 
 def test_healthy_zstd_never_takes_the_recovery_path(_isolated_dsh_home, monkeypatch):
