@@ -38,7 +38,9 @@ DSH_DECODER_VERSION = 2
 #    is not a loop step, and the usage chunk dsh v2+ embeds in an
 #    assistant/attempt's stream, so a retried or aborted attempt that never
 #    produced a final message is still billed. Stored rows must reparse.
-DSH_ACCOUNTING_VERSION = 3
+# 4: llm/retry-started opens a new billable attempt within (turn, step), so
+#    later settlements no longer overwrite earlier attempts' usage.
+DSH_ACCOUNTING_VERSION = 4
 
 # Format generations Tokdash reads. A version outside this set is unsupported,
 # not corrupt — the file is skipped, never treated as empty.
@@ -428,8 +430,9 @@ def fold_dsh_usage_samples(
     ``stream`` (a call that never produced a final message); and a
     ``compaction/summary``'s own ``data.usage`` (a billable summarization call
     that is not a loop step). For the loop-step shapes the fold is
-    replace-not-add against a map keyed on the whole
-    file's ``(turn, step)``, so the LAST sample for a key wins wherever it sits:
+    replace-not-add against a map keyed on ``(turn, step, attempt)``. Each
+    ``llm/retry-started`` advances that step's attempt, preserving the previous
+    attempt's bill. The LAST sample within an attempt wins wherever it sits:
     a final message replaces its earlier chunk instead of double-counting it, an
     early chunk with no final message stays counted, and a key that repeats
     non-adjacently still yields exactly one sample.
@@ -456,6 +459,7 @@ def fold_dsh_usage_samples(
     # Insertion-ordered: a replaced key keeps the position of its first sighting,
     # so the emitted order stays the log's order rather than the fold's.
     samples: Dict[str, Dict[str, Any]] = {}
+    attempts: Dict[Tuple[int, int], int] = {}
     latest_model = ""
     latest_provider = ""
 
@@ -470,6 +474,27 @@ def fold_dsh_usage_samples(
             provider = str(data.get("provider") or "").strip()
             if provider:
                 latest_provider = provider
+            continue
+
+        if event_type not in (
+            "assistant/chunk", "assistant/message", "assistant/attempt",
+            "compaction/summary", "llm/retry-started",
+        ):
+            continue
+
+        # A forked child owns only events after its inherited prefix. Apply the
+        # same boundary to retry markers and usage so inherited retries cannot
+        # change the coordinates of the child's own calls.
+        seq = _to_int(event.get("seq"))
+        if seed_unprovable or (seed_length and (seq is None or seq < seed_length)):
+            continue
+
+        if event_type == "llm/retry-started":
+            turn = _to_int(data.get("turn"))
+            step = _to_int(data.get("step"))
+            if turn is not None and step is not None:
+                key = (turn, step)
+                attempts[key] = attempts.get(key, 0) + 1
             continue
 
         is_compaction = False
@@ -516,16 +541,6 @@ def fold_dsh_usage_samples(
         else:
             continue
 
-        # A forked child clones the parent's completed prefix into its own
-        # durable log; the parent already owns those events. Fail closed: with
-        # a declared seed boundary, an event whose seq is unreadable cannot
-        # prove it is not inherited, so it is skipped too — and a seeded log
-        # whose boundary is missing skips everything instead of double-billing
-        # the parent's whole prefix.
-        seq = _to_int(event.get("seq"))
-        if seed_unprovable or (seed_length and (seq is None or seq < seed_length)):
-            continue
-
         if is_compaction:
             turn = step = None
         else:
@@ -564,9 +579,15 @@ def fold_dsh_usage_samples(
         # renumbers those on conversion while preserving timestamps) -- land on
         # the same entry id and dedup under the earliest-(timestamp, path) rule.
         # The `c:` prefix also keeps the two key spaces disjoint so one map can
-        # hold both: a loop-step key is always `int:int` (both are validated as
-        # non-negative ints above) and can never equal `c:<time_ms>`.
+        # hold both: a loop-step key starts with a non-negative integer and can
+        # never equal `c:<time_ms>`.
         entry_key = f"c:{timestamp_ms}" if is_compaction else f"{turn}:{step}"
+        if not is_compaction:
+            attempt = attempts.get((turn, step), 0)
+            if attempt:
+                # Retry ordinals survive format conversions that renumber seq.
+                # Keep the original first-attempt id for sessions with no retry.
+                entry_key += f":r:{attempt}"
         sample = {
             "turn": turn,
             "step": step,
@@ -591,8 +612,11 @@ def dsh_sample_entry_id(session_id: Any, sample: Dict[str, Any]) -> str:
     """Stable usage-entry identity for one folded sample.
 
     ``entry_key`` is the sample's coordinate within its session: ``{turn}:{step}``
-    for a message, chunk or attempt sample, and ``c:{time_ms}`` for a compaction
-    call, which has no loop step. A compaction is keyed on its event time rather
+    for the first attempt, ``{turn}:{step}:r:{attempt}`` for a started retry,
+    and ``c:{time_ms}`` for a compaction call, which has no loop step.
+    The retry ordinal counts durable ``llm/retry-started`` boundaries for that
+    step, independently of whether its attempts report usable usage.
+    A compaction is keyed on its event time rather
     than its ``seq`` because the two physical copies of one session that #148's
     winner rule must collapse can be different format generations, and dsh's
     released conversions renumber dense sequence positions when they insert

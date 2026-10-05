@@ -5190,7 +5190,8 @@ class DSHParser(BaseParser):
     ``assistant/chunk`` usage sample, the finalized ``assistant/message`` usage,
     the usage chunk embedded in an ``assistant/attempt``'s ``stream``, and a
     ``compaction/summary``'s own usage. The first three fold replace-not-add per
-    ``(turn, step)``; a compaction is not a loop step, so it gets its own
+    ``(turn, step, attempt)``, advancing on ``llm/retry-started``; a compaction
+    is not a loop step, so it gets its own
     time-keyed coordinate. Framing, fork boundaries and the fold itself live in
     ``sources/dsh_log.py``, shared with the session parser.
     """

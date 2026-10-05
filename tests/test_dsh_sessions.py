@@ -398,6 +398,60 @@ def test_overview_and_sessions_agree_on_compaction_usage(_isolated_dsh_home):
     assert overview == sessions_total == 103
 
 
+@pytest.mark.parametrize("stored", [False, True], ids=["live", "stored"])
+def test_overview_and_sessions_keep_retry_usage_in_duplicate_copies(_isolated_dsh_home, monkeypatch, stored):
+    from tokdash.compute import _collect_parser_file
+    from tokdash.sources.coding_tools import DSHParser
+    from tokdash.usage_store import UsageEntryStore
+
+    home = _isolated_dsh_home
+    monkeypatch.setenv("TOKDASH_USAGE_DB", "1" if stored else "0")
+    rows = [
+        {
+            "type": "request/context", "seq": 1, "time": DAY1_MS,
+            "data": {"provider": "deepseek", "model": "deepseek-v4-flash"},
+        },
+        {
+            "type": "assistant/attempt", "seq": 2, "time": DAY1_MS + 1000,
+            "data": {
+                "turn": 0, "step": 0,
+                "stream": [{"type": "chunk", "time": DAY1_MS + 1000, "chunk": {
+                    "type": "usage", "usage": {"inputTokens": 100, "outputTokens": 10},
+                }}],
+            },
+        },
+        {
+            "type": "llm/retry-started", "seq": 3, "time": DAY1_MS + 2000,
+            "data": {"retryId": "retry-abc", "turn": 0, "step": 0, "retry": 1},
+        },
+        _assistant_message(4, 0, 0, {"inputTokens": 200, "outputTokens": 20}, DAY1_MS + 3000),
+    ]
+    _write_copied_session(home, "s10", [_header("s10", version=3, isSeeded=False), *rows], "--work-a--")
+    _write_copied_session(
+        home, "s10",
+        [_header("s10", version=4, isSeeded=False), *[dict(row, seq=row["seq"] + 10) for row in rows]],
+        "--work-b--",
+    )
+
+    if stored:
+        parser = DSHParser(PricingDatabase())
+        store = UsageEntryStore()
+        store.sync_files(
+            "dsh", sessions._dsh_session_signatures(),
+            parser=parser.persistent_parser_signature(),
+            parse_file_entries=lambda sig: _collect_parser_file(parser, sig),
+            cross_file_stable_keys=True,
+        )
+        overview_entries = store.query_entries(sources=["dsh"])
+        overview = sum(e["input"] for e in overview_entries)
+    else:
+        overview = _overview_tokens_in()
+    summary = get_sessions_data("dsh", "all")["sessions"][0]
+    assert overview == summary["tokens_in"] == 300
+    assert summary["tokens_out"] == 30
+    assert summary["token_events"] == 2
+
+
 # --- issue #147 diagnostics: neither surface may be the silent one ---------------
 
 

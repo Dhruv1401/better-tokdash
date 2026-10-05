@@ -141,6 +141,14 @@ def _assistant_attempt(seq, turn, step, usage=None):
     return _event(seq, "assistant/attempt", {"turn": turn, "step": step, "stream": stream})
 
 
+def _retry_started(seq, turn=0, step=0, retry=1):
+    return _event(
+        seq,
+        "llm/retry-started",
+        {"retryId": "retry-abc", "turn": turn, "step": step, "retry": retry},
+    )
+
+
 def _write_jsonl(path: Path, rows, trailing="") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row) + "\n" for row in rows) + trailing, encoding="utf-8")
@@ -1130,6 +1138,143 @@ def test_attempt_usage_is_replaced_by_a_later_final_message(_isolated_dsh_home):
     assert len(entries) == 1
     assert entries[0]["output"] == 12
     assert entries[0]["entry_id"] == "dsh:session-abc:0:0"
+
+
+@pytest.mark.parametrize("version", [3, 4])
+@pytest.mark.parametrize("settlement", [_assistant_message, _assistant_attempt], ids=["message", "attempt"])
+def test_started_retry_keeps_the_previous_attempts_usage(_isolated_dsh_home, version, settlement):
+    """Separate provider calls add across a retry boundary on both generations."""
+    home = _isolated_dsh_home
+    _write_jsonl(
+        _session_path(home, suffix=f".v{version}.jsonl"),
+        [
+            _header(version=version, isSeeded=False),
+            _request_context(1),
+            _assistant_attempt(2, 0, 0, {"inputTokens": 100, "outputTokens": 10}),
+            _retry_started(3),
+            settlement(4, 0, 0, {"inputTokens": 200, "outputTokens": 20}),
+        ],
+    )
+
+    entries = _collect(home)
+    assert [(e["entry_id"], e["input"], e["output"]) for e in entries] == [
+        ("dsh:session-abc:0:0", 100, 10),
+        ("dsh:session-abc:0:0:r:1", 200, 20),
+    ]
+    pricing = PricingDatabase()
+    assert sum(e["cost"] for e in entries) == pytest.approx(
+        pricing.get_cost("deepseek-v4-flash", 100, 10)
+        + pricing.get_cost("deepseek-v4-flash", 200, 20)
+    )
+
+
+def test_multiple_retries_replace_usage_only_within_each_attempt(_isolated_dsh_home):
+    """Early chunks and settlements replace each other without erasing retries."""
+    home = _isolated_dsh_home
+    _write_jsonl(
+        _session_path(home),
+        [
+            _header(),
+            _request_context(1),
+            _usage_chunk(2, 0, 0, inputTokens=100, outputTokens=10),
+            _retry_started(3),
+            _usage_chunk(4, 0, 0, inputTokens=200, outputTokens=20),
+            _assistant_attempt(5, 0, 0, {"inputTokens": 220, "outputTokens": 22}),
+            _retry_started(6, retry=2),
+            _usage_chunk(7, 0, 0, inputTokens=300, outputTokens=30),
+            _assistant_message(8, 0, 0, {"inputTokens": 330, "outputTokens": 33}),
+        ],
+    )
+
+    entries = _collect(home)
+    assert [(e["entry_id"], e["input"], e["output"]) for e in entries] == [
+        ("dsh:session-abc:0:0", 100, 10),
+        ("dsh:session-abc:0:0:r:1", 220, 22),
+        ("dsh:session-abc:0:0:r:2", 330, 33),
+    ]
+
+
+@pytest.mark.parametrize("usage", [None, {"inputTokens": 0, "outputTokens": 0}])
+def test_retry_identity_does_not_depend_on_previous_usage(_isolated_dsh_home, usage):
+    home = _isolated_dsh_home
+    _write_jsonl(
+        _session_path(home, suffix=".v4.jsonl"),
+        [
+            _header(version=4, isSeeded=False),
+            _assistant_attempt(1, 0, 0, usage),
+            _retry_started(2),
+            _assistant_message(3, 0, 0, {"inputTokens": 200, "outputTokens": 20}),
+        ],
+    )
+    assert [e["entry_id"] for e in _collect(home)] == ["dsh:session-abc:0:0:r:1"]
+
+
+def test_scheduled_retry_does_not_open_a_new_attempt(_isolated_dsh_home):
+    home = _isolated_dsh_home
+    _write_jsonl(
+        _session_path(home, suffix=".v4.jsonl"),
+        [
+            _header(version=4, isSeeded=False),
+            _assistant_attempt(1, 0, 0, {"inputTokens": 100, "outputTokens": 10}),
+            _event(2, "llm/retry", {"retryId": "retry-abc", "turn": 0, "step": 0, "retry": 1}),
+            _assistant_message(3, 0, 0, {"inputTokens": 200, "outputTokens": 20}),
+        ],
+    )
+    assert [(e["entry_id"], e["input"]) for e in _collect(home)] == [("dsh:session-abc:0:0", 200)]
+
+
+def test_retry_boundaries_are_scoped_to_their_step(_isolated_dsh_home):
+    home = _isolated_dsh_home
+    _write_jsonl(
+        _session_path(home, suffix=".v4.jsonl"),
+        [
+            _header(version=4, isSeeded=False),
+            _assistant_attempt(1, 0, 0, {"inputTokens": 100, "outputTokens": 10}),
+            _retry_started(2, step=1),
+            _assistant_message(3, 0, 0, {"inputTokens": 200, "outputTokens": 20}),
+        ],
+    )
+    assert [(e["entry_id"], e["input"]) for e in _collect(home)] == [("dsh:session-abc:0:0", 200)]
+
+
+def test_retry_copies_dedup_when_sequence_positions_differ(_isolated_dsh_home):
+    home = _isolated_dsh_home
+    events = [
+        _request_context(1),
+        _assistant_attempt(2, 0, 0, {"inputTokens": 100, "outputTokens": 10}),
+        _retry_started(3),
+        _assistant_message(4, 0, 0, {"inputTokens": 200, "outputTokens": 20}),
+    ]
+    _write_jsonl(_session_path(home, suffix=".v3.jsonl"), [_header(version=3, isSeeded=False), *events])
+    _write_jsonl(
+        _session_path(home, project_dir="--other-key--", suffix=".v4.jsonl"),
+        [_header(version=4, isSeeded=False), *[dict(e, seq=e["seq"] + 10) for e in events]],
+    )
+    assert [(e["entry_id"], e["input"]) for e in _collect(home)] == [
+        ("dsh:session-abc:0:0", 100),
+        ("dsh:session-abc:0:0:r:1", 200),
+    ]
+
+
+def test_inherited_retry_does_not_advance_the_childs_attempt(_isolated_dsh_home):
+    home = _isolated_dsh_home
+    _write_jsonl(
+        _session_path(home, suffix=".v4.jsonl"),
+        [
+            _header(version=4, isSeeded=True),
+            _request_context(1),
+            _assistant_attempt(2, 0, 0, {"inputTokens": 100, "outputTokens": 10}),
+            _retry_started(3),
+            _end_seed(4, inherited=True),
+            _assistant_attempt(5, 0, 0, {"inputTokens": 200, "outputTokens": 20}),
+            _retry_started(6, retry=2),
+            _assistant_message(7, 0, 0, {"inputTokens": 300, "outputTokens": 30}),
+        ],
+    )
+    assert [(e["entry_id"], e["input"]) for e in _collect(home)] == [
+        ("dsh:session-abc:0:0", 200),
+        ("dsh:session-abc:0:0:r:1", 300),
+    ]
 
 
 def test_attempt_without_a_usage_chunk_is_ignored(_isolated_dsh_home):

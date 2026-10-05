@@ -182,16 +182,16 @@ Provider usage appears in four event shapes:
 4. `compaction/summary` with `data.usage`, the provider-reported cost of a summarization call.
    It is not a loop step, so `turn`/`step` are `null` and it uses its own identity (below).
 
-Shapes 1-3 carry a `(turn, step)` identity. dsh's token-meter projection relies on the ordering
-invariant that samples for one `(turn, step)` are adjacent: once a later step reports usage, a
-legal log does not report the earlier step again. Tokdash must implement the same
-replace-not-add fold:
+Shapes 1-3 carry `(turn, step)`, but a started retry is a separate provider call with the same
+coordinates. As in dsh's token-meter, `llm/retry-started` closes the previous attempt's replacement
+slot. Tokdash folds against a map keyed on `(turn, step, attempt)`:
 
-1. Keep the most recent accepted sample as `last = (turn, step, buckets)`.
-2. When a new sample has the same key as `last`, replace the pending usage row.
-3. Otherwise append a new row and replace `last`.
-4. An early chunk with no final assistant message remains counted.
-5. A final message replaces its earlier chunk instead of double-counting it.
+1. Start each step's attempt ordinal at zero.
+2. Each local `llm/retry-started` advances that step's ordinal, even when the preceding attempt
+   has absent or all-zero usage. A scheduled `llm/retry` alone does not advance it.
+3. Replace earlier samples only within the same attempt; retain the bills of previous attempts.
+4. An early chunk or failed attempt with no final assistant message remains counted.
+5. Apply the fork boundary to both retry markers and usage, excluding inherited calls.
 
 Use a persistent usage entry id stable across that in-file replacement:
 
@@ -199,8 +199,10 @@ Use a persistent usage entry id stable across that in-file replacement:
 dsh:<session-id>:<turn>:<step>
 ```
 
-Do not use the physical line number, because the finalized event follows the chunk under a
-different `seq`.
+Started retries append `:r:<attempt>` to that id. The ordinal depends on durable retry boundaries,
+not which samples report usable usage, so copies with missing or all-zero attempt usage keep the
+same retry identities. Do not use the physical line number or `seq`: finalized usage follows its
+earlier sample at a different position, and format conversions can renumber sequence positions.
 
 A compaction sample has no `(turn, step)`, so it gets its own identity:
 
@@ -452,9 +454,9 @@ stays absent rather than becoming zero.
 Usage on a failed or retried attempt is counted too. From dsh v2 on, the standalone
 `assistant/chunk` usage events are folded into the attempt's `stream` and `assistant/attempt`
 declares no top-level `usage` of its own, so a call that never produced a final message leaves only
-that attempt. Its stream's `chunk.type == "usage"` record is folded on `(turn, step)` like the rest:
-an early attempt with no final message stays counted, and a later final message for the same step
-still replaces it.
+that attempt. Its stream's `chunk.type == "usage"` record is folded on `(turn, step, attempt)` like
+the rest: an early attempt with no final message stays counted, and a later final message replaces
+usage within its own attempt. A `llm/retry-started` boundary preserves the previous attempt's bill.
 
 The session-title request remains the known undercount. Upstream records
 `session/title-llm-request` as a log-only pre-dispatch record of the request, and the accepted
