@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 2.6.11 - Unreleased
+
+### Fixed
+
+- DeepSeek Harness compaction and failed-attempt usage is counted, and a log that breaks again after recovering warns again. A `compaction/summary` event carries the summarize call's own provider usage with `turn` and `step` both `null`, so it never went through the `(turn, step)` fold and its cost was dropped -- one remembered event carried 149,447 tokens and it recurs on every compaction. It is now its own sample, identified as `dsh:<session>:c:<time_ms>`. The coordinate is the event time rather than its `seq` on purpose: the two physical copies #148 collapses can be different format generations, and dsh's released conversions renumber dense sequence positions when they insert events while preserving timestamps, so a `seq`-keyed id would bill such a pair twice. Usage that dsh v2+ embeds in an `assistant/attempt`'s `stream` is counted too, so a retried or aborted call that never produced a final message is no longer missing; usage samples replace each other only within an attempt, while `llm/retry-started` preserves prior attempts' bills under a stable retry ordinal, and a finalized message whose adapter omitted `data.usage` falls back to the last usage chunk in its own stream, as upstream's token-meter does. Both surfaces fold the same list, so Overview and the Sessions tab keep agreeing, and a DSH accounting-version bump reparses stored rows. Separately, `report_dsh_diagnostic` warned once per `(path, kind, detail)` and nothing in production ever cleared that registry, so a file that went corrupt, recovered, then went corrupt again logged nothing the second time for the rest of the process; a clean decode now forgets the path. (#181, closes #171, thanks @Dhruv1401)
+
 ## 2.6.10 - 2026-10-04
 
 ### Added

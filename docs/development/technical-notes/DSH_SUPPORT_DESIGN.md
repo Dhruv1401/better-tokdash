@@ -167,22 +167,31 @@ changes usage accounting.
 
 ## Usage accounting
 
-Provider usage appears in two event shapes:
+Provider usage appears in four event shapes:
 
 1. `assistant/chunk` with `data.chunk.type == "usage"`, an early sample that can survive a later
    request failure.
-2. `assistant/message` with `data.usage`, the finalized sample for a successful provider call.
+2. `assistant/message` with `data.usage`, the finalized sample for a successful provider call. When
+   the adapter omitted `data.usage`, the last `chunk.type == "usage"` record in the message's own
+   `stream` is used instead, mirroring dsh's token-meter (`lastAssistantStreamChunk(stream,
+   "usage")`). A usage chunk is never packed into a delta run, so it always appears verbatim in the
+   stream.
+3. `assistant/attempt`, whose `stream` embeds the `chunk.type == "usage"` record of a call that
+   never produced a final message (retried, aborted, or stream-error). Dsh v2+ folded the
+   standalone chunks into this stream, and `assistant/attempt` has no top-level `usage` of its own.
+4. `compaction/summary` with `data.usage`, the provider-reported cost of a summarization call.
+   It is not a loop step, so `turn`/`step` are `null` and it uses its own identity (below).
 
-Both carry a `(turn, step)` identity. dsh's token-meter projection relies on the ordering
-invariant that samples for one `(turn, step)` are adjacent: once a later step reports usage, a
-legal log does not report the earlier step again. Tokdash must implement the same
-replace-not-add fold:
+Shapes 1-3 carry `(turn, step)`, but a started retry is a separate provider call with the same
+coordinates. As in dsh's token-meter, `llm/retry-started` closes the previous attempt's replacement
+slot. Tokdash folds against a map keyed on `(turn, step, attempt)`:
 
-1. Keep the most recent accepted sample as `last = (turn, step, buckets)`.
-2. When a new sample has the same key as `last`, replace the pending usage row.
-3. Otherwise append a new row and replace `last`.
-4. An early chunk with no final assistant message remains counted.
-5. A final message replaces its earlier chunk instead of double-counting it.
+1. Start each step's attempt ordinal at zero.
+2. Each local `llm/retry-started` advances that step's ordinal, even when the preceding attempt
+   has absent or all-zero usage. A scheduled `llm/retry` alone does not advance it.
+3. Replace earlier samples only within the same attempt; retain the bills of previous attempts.
+4. An early chunk or failed attempt with no final assistant message remains counted.
+5. Apply the fork boundary to both retry markers and usage, excluding inherited calls.
 
 Use a persistent usage entry id stable across that in-file replacement:
 
@@ -190,8 +199,22 @@ Use a persistent usage entry id stable across that in-file replacement:
 dsh:<session-id>:<turn>:<step>
 ```
 
-Do not use the physical line number, because the finalized event follows the chunk under a
-different `seq`.
+Started retries append `:r:<attempt>` to that id. The ordinal depends on durable retry boundaries,
+not which samples report usable usage, so copies with missing or all-zero attempt usage keep the
+same retry identities. Do not use the physical line number or `seq`: finalized usage follows its
+earlier sample at a different position, and format conversions can renumber sequence positions.
+
+A compaction sample has no `(turn, step)`, so it gets its own identity:
+
+```text
+dsh:<session-id>:c:<time_ms>
+```
+
+The coordinate is the event `time`, not its `seq`: the two physical copies of one session that must
+collapse to one entry can be different format generations, and dsh's released conversions renumber
+dense sequence positions when they insert events while preserving event timestamps (upstream
+V2-to-V3 specification). `compaction/summary.usage` is optional; an absent value stays absent
+rather than becoming zero.
 
 ### Field mapping
 
@@ -388,7 +411,8 @@ Avoid maintaining a frontend-only source list that can drift from the backend re
 
 - Missing `DSH_HOME` directory: empty source, no error.
 - Missing header, invalid JSON header, or unsupported version: skip that file, **and report it**
-  (`report_dsh_diagnostic`, once per `(path, reason)`).
+  (`report_dsh_diagnostic`, once per `(path, reason)` per occurrence -- a clean decode of the same
+  path later lets it report again, see below).
 - File present but undecodable, or a header this build does not read: raise
   `UsageFileUnreadable` from the strict single-file entry point instead of returning an empty list.
   Under `file_replace` an empty list asserts "this file now has zero entries", and the sync would
@@ -406,6 +430,10 @@ Avoid maintaining a frontend-only source list that can drift from the backend re
   report (#151).
 - Damaged interior zstd frame: keep the rows of every other frame, report `frames-lost`, and skip
   the file if the damaged frame carried the header.
+- A file that breaks again after it recovered is reported again: a clean decode clears that path's
+  entries from the once-per-problem registry. The registry is not keyed on the file signature
+  (`mtime_ns`, `size`) -- a live session with a damaged interior frame changes its signature on
+  every append and would warn on every refresh instead.
 - Duplicate physical files for one header id: deduplicate by session id and stable event key, with
   the earliest `(timestamp, path)` copy winning on every surface.
 - Missing title: use the first user preview and then the existing fallback.
@@ -416,11 +444,24 @@ Avoid maintaining a frontend-only source list that can drift from the backend re
 - Torn zstd tail or trailing partial JSON line: keep complete rows only.
 - One malformed file: never blank the whole DSH source.
 
-Auxiliary model calls are a known undercount, not an implementation bug. Upstream records the
-session-title request but does not attach finalized usage to the durable session surface, and its
-compaction path makes a direct LLM call without appending usage of its own. Tokdash can count
-durable conversation calls accurately but cannot recover these auxiliary calls from the current
-format. Revisit if upstream persists auxiliary usage.
+Compaction usage is counted. A `compaction/summary` carries its own `data.usage` -- the
+provider-reported cost of the summarization call -- alongside `provider`/`model`, with `turn` and
+`step` null. It is not a loop step, so it cannot use the `(turn, step)` fold or the
+`dsh:<session-id>:<turn>:<step>` id; Tokdash folds it as its own sample on both surfaces, keyed on
+the event time (`dsh:<session-id>:c:<time_ms>`). The usage object is optional, so an absent one
+stays absent rather than becoming zero.
+
+Usage on a failed or retried attempt is counted too. From dsh v2 on, the standalone
+`assistant/chunk` usage events are folded into the attempt's `stream` and `assistant/attempt`
+declares no top-level `usage` of its own, so a call that never produced a final message leaves only
+that attempt. Its stream's `chunk.type == "usage"` record is folded on `(turn, step, attempt)` like
+the rest: an early attempt with no final message stays counted, and a later final message replaces
+usage within its own attempt. A `llm/retry-started` boundary preserves the previous attempt's bill.
+
+The session-title request remains the known undercount. Upstream records
+`session/title-llm-request` as a log-only pre-dispatch record of the request, and the accepted
+`session/title` snapshot carries the provider/model identity but no finalized usage, so Tokdash
+cannot recover the title call's cost from the current format. Revisit if upstream persists it.
 
 ## Test plan
 
