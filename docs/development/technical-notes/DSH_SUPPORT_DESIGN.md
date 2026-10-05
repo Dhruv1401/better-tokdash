@@ -171,7 +171,11 @@ Provider usage appears in four event shapes:
 
 1. `assistant/chunk` with `data.chunk.type == "usage"`, an early sample that can survive a later
    request failure.
-2. `assistant/message` with `data.usage`, the finalized sample for a successful provider call.
+2. `assistant/message` with `data.usage`, the finalized sample for a successful provider call. When
+   the adapter omitted `data.usage`, the last `chunk.type == "usage"` record in the message's own
+   `stream` is used instead, mirroring dsh's token-meter (`lastAssistantStreamChunk(stream,
+   "usage")`). A usage chunk is never packed into a delta run, so it always appears verbatim in the
+   stream.
 3. `assistant/attempt`, whose `stream` embeds the `chunk.type == "usage"` record of a call that
    never produced a final message (retried, aborted, or stream-error). Dsh v2+ folded the
    standalone chunks into this stream, and `assistant/attempt` has no top-level `usage` of its own.

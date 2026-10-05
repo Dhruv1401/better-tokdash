@@ -379,16 +379,21 @@ def dsh_seed_boundary(
     return max(markers), False
 
 
-def _attempt_stream_usage(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The provider usage chunk embedded in an ``assistant/attempt``'s stream.
+def _settlement_stream_usage(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The last provider usage chunk embedded in a settlement's ``stream``.
 
     From dsh v2 on, the standalone ``assistant/chunk`` usage events are folded
-    into the attempt's ``stream`` and ``assistant/attempt`` declares no
-    top-level ``usage`` of its own. A call that never produced a final message
-    leaves only that attempt, so its stream's ``chunk.type == "usage"`` record is
-    the only durable record of what the provider billed (#171). The last such
-    record wins; ``None`` means the attempt reported no usage (an absent value is
-    absent, not zero).
+    into the settlement's ``stream``. An ``assistant/attempt`` declares no
+    top-level ``usage`` at all, and an ``assistant/message`` carries one only
+    when the adapter reported it. This mirrors upstream's own reader, which
+    takes ``lastAssistantStreamChunk(event.data.stream, 'usage')`` for both
+    (``packages/llm/token-meter/src/usage-projection.ts``): the last
+    ``chunk.type == "usage"`` record wins. A usage chunk is never packed into a
+    delta run -- upstream's ``RawStreamChunkType`` excludes only the delta types
+    -- so it always appears verbatim as ``{type: 'chunk', time, chunk}``. A call
+    that never produced a final message leaves only its attempt, so this is the
+    only durable record of what the provider billed (#171). ``None`` means the
+    settlement reported no usage (an absent value is absent, not zero).
     """
     stream = data.get("stream")
     if not isinstance(stream, list):
@@ -476,13 +481,19 @@ def fold_dsh_usage_samples(
         elif event_type == "assistant/message":
             usage = data.get("usage") if isinstance(data.get("usage"), dict) else None
             if usage is None:
+                # Upstream prefers `data.usage` and falls back to the embedded
+                # stream's last usage chunk when the adapter omitted it; mirror
+                # that so a message whose usage lives only in `stream` is still
+                # billed rather than dropped.
+                usage = _settlement_stream_usage(data)
+            if usage is None:
                 continue
             message = data.get("message") if isinstance(data.get("message"), dict) else {}
             source = message.get("source") if isinstance(message.get("source"), dict) else {}
             model = str(source.get("model") or "").strip() or latest_model
             provider = str(source.get("provider") or "").strip() or latest_provider
         elif event_type == "assistant/attempt":
-            usage = _attempt_stream_usage(data)
+            usage = _settlement_stream_usage(data)
             if usage is None:
                 continue
             model = latest_model

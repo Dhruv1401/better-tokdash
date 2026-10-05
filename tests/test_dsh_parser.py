@@ -114,7 +114,8 @@ def _assistant_attempt(seq, turn, step, usage=None):
     if usage is not None:
         # A raw record in the embedded compact stream: ``{type, time, chunk}``,
         # exactly what dsh's AssistantStreamAccumulator stores for a usage chunk
-        # (it never packs a usage chunk into a delta run).
+        # (packages/llm/llm/src/assistant-stream.ts: it never packs a usage chunk
+        # into a delta run -- RawStreamChunkType excludes only the delta types).
         stream.append(
             {
                 "type": "chunk",
@@ -1125,6 +1126,42 @@ def test_attempt_without_a_usage_chunk_is_ignored(_isolated_dsh_home):
         [_header(version=4, isSeeded=False), _assistant_attempt(1, 0, 0, None)],
     )
     assert _collect(home) == []
+
+
+def test_message_usage_from_stream_when_data_usage_absent(_isolated_dsh_home):
+    """Upstream's token-meter reads `data.usage`, and falls back to the last
+    usage chunk in the settlement's `stream` when the adapter omitted it
+    (packages/llm/token-meter/src/usage-projection.ts). A finalized message whose
+    usage lives only in its stream must still be billed (#171)."""
+    home = _isolated_dsh_home
+    usage = {"inputTokens": 120, "outputTokens": 30}
+    message = _event(
+        1,
+        "assistant/message",
+        {
+            "turn": 0,
+            "step": 0,
+            "message": {
+                "id": "a1",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "done"}],
+                "source": {"kind": "model", "provider": "deepseek", "model": "deepseek-v4-flash"},
+            },
+            # No top-level `usage`; only the embedded stream carries it.
+            "stream": [
+                {"type": "chunk", "time": TS_BASE, "chunk": {"type": "usage", "usage": usage}}
+            ],
+        },
+    )
+    _write_jsonl(
+        _session_path(home, suffix=".v4.jsonl"),
+        [_header(version=4, isSeeded=False), message],
+    )
+
+    entries = _collect(home)
+    assert [(e["entry_id"], e["input"], e["output"]) for e in entries] == [
+        ("dsh:session-abc:0:0", 120, 30)
+    ]
 
 
 def test_diagnostics_warn_again_after_the_file_recovers(_isolated_dsh_home, caplog):
