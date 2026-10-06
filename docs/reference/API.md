@@ -1034,16 +1034,36 @@ Returns Codex activity insights derived from usage data. Results are cached per 
 
 ```json
 {
-  "period": "today",
-  "total_tokens": 1234567,
-  "total_cost": 12.34,
-  "by_tool": {
-    "codex": {
-      "tokens": 1234567,
-      "cost": 12.34,
-      "messages": 42
+  "scope": {"tool": "codex", "local": true, "primary_only": true},
+  "recorded_chats": {
+    "value": 42,
+    "coverage": {
+      "primary_files": 100,
+      "files_with_session_id": 95,
+      "legacy_unavailable_records": 5
     }
-  }
+  },
+  "reasoning": {
+    "most_used": {"high": 10},
+    "distribution": [["high", 10], ["medium", 5]],
+    "coverage": {
+      "identified_turns": 50,
+      "known_effort_turns": 15,
+      "ambiguous_turns": 3,
+      "excluded_records": 2
+    }
+  },
+  "tools": {
+    "total_calls": 200,
+    "most_used": {"read_file": 50},
+    "distribution": [["read_file", 50], ["write", 30]],
+    "coverage": {
+      "named_calls": 180,
+      "ambiguous_name_calls": 10,
+      "excluded_records": 5
+    }
+  },
+  "timestamp": "2026-10-06T12:00:00+00:00"
 }
 ```
 
