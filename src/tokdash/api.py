@@ -1978,6 +1978,11 @@ def update_pricing_db(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @app.get("/api/usage", tags=["Usage"])
 def get_usage(
+    period: str = "today",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    refresh: bool = False,
+) -> Dict[str, Any]:
     """Get aggregated token usage and cost.
 
     Args:
@@ -1989,11 +1994,6 @@ def get_usage(
     Returns:
         Usage totals, per-tool breakdown, and period comparison.
     """
-    period: str = "today",
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    refresh: bool = False,
-) -> Dict[str, Any]:
     _validate_date_params(date_from, date_to)
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_usage
@@ -2110,17 +2110,17 @@ def get_quota() -> Dict[str, Any]:
 
 @app.get("/api/quota/history", tags=["Quota"])
 def get_quota_history(
-    """Get quota utilization and consumption history.
-
-    Returns:
-        Historical quota snapshots with usage percentages.
-    """
     providers: Optional[str] = None,
     granularity: str = "hour",
     start: Optional[int] = None,
     end: Optional[int] = None,
     max_points: Optional[int] = 300,
 ) -> Dict[str, Any]:
+    """Get quota utilization and consumption history.
+
+    Returns:
+        Historical quota snapshots with usage percentages.
+    """
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_quota_history
 
@@ -2330,6 +2330,12 @@ def get_codex_session(session_id: str) -> Dict[str, Any]:
 
 @app.get("/api/sessions", tags=["Sessions"])
 def get_sessions(
+    tool: str,
+    period: str = "today",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    include_review_sessions: Optional[bool] = None,
+) -> Dict[str, Any]:
     """List sessions for a tool.
 
     Args:
@@ -2338,12 +2344,6 @@ def get_sessions(
     Returns:
         List of sessions with metadata.
     """
-    tool: str,
-    period: str = "today",
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    include_review_sessions: Optional[bool] = None,
-) -> Dict[str, Any]:
     _validate_date_params(date_from, date_to)
     try:
         if _dev_fixture_mode() == "dense":
