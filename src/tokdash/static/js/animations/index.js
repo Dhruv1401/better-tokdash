@@ -19,3 +19,4 @@ export * from './tooltip.js';
 export * from './popover.js';
 export * from './metric-card.js';
 export * from './slot-text.js';
+export * from './animated-counter.js';

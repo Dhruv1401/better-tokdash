@@ -30,6 +30,7 @@
 
 import { mountTooltips } from './tooltip.js';
 import { renderSlotText, slotTextState } from './slot-text.js';
+import { renderCountedValue, countablePair, figureSeparators } from './animated-counter.js';
 
 const HINT_SELECTOR = '[data-tooltip]';
 // A value element this module has seen, and the text it currently stands for.
@@ -54,7 +55,7 @@ export function metricValueElements(root = document) {
 }
 
 /**
- * Hand every value that changed since the last call to the slot renderer.
+ * Hand every value that changed since the last call to a renderer.
  *
  * Called by the render that just wrote the figures, never by a timer: a writer
  * that sets `textContent` leaves a figure that is already correct, and this only
@@ -62,10 +63,20 @@ export function metricValueElements(root = document) {
  * element is ever seen with is adopted silently — the tab paints figures for the
  * first time when it opens, and a card that rolls up from zero every time it is
  * looked at is noise, not information.
+ *
+ * Which renderer runs is decided by the figure, not by the card: a quantity that
+ * kept its unit and its shape counts up or down, because the travel is the news;
+ * a figure that changed kind — a ratio, a date, a model name, a window that moved
+ * from one month to another — morphs instead, because there is no travel between
+ * two unrelated readings. `options.format` is the app's number formatter: it
+ * renders the counting frames and says how the figure's separators are read.
  */
-export function animateMetricValues(root = document) {
+export function animateMetricValues(root = document, options = {}) {
   const values = metricValueElements(root);
-  let changed = 0;
+  const format = typeof options.format === 'function' ? options.format : null;
+  const separators = options.separators || figureSeparators(format);
+  let morphed = 0;
+  let counted = 0;
   values.forEach((element) => {
     const text = element.textContent;
     const previous = seenValues.get(element);
@@ -76,12 +87,17 @@ export function animateMetricValues(root = document) {
     }
     if (previous.text === text) return;
     // The element already holds the new text — the writer put it there — so the
-    // figure to morph away from is the one this module saw last.
-    const rendered = renderSlotText(element, text, { from: previous.text });
+    // figure to move away from is the one this module saw last.
+    const countable = countablePair(previous.text, text, separators);
+    const rendered = countable
+      ? renderCountedValue(element, text, { from: previous.text, format, separators })
+      : renderSlotText(element, text, { from: previous.text });
     previous.text = text;
-    if (rendered) changed += 1;
+    if (!rendered) return;
+    if (countable) counted += 1;
+    else morphed += 1;
   });
-  return { values: values.length, changed };
+  return { values: values.length, morphed, counted, changed: morphed + counted };
 }
 
 /** One value slot's state: what it is showing and whether it is mid-morph. */

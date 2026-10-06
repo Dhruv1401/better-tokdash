@@ -11618,7 +11618,9 @@
     function commitMetricValues(scope) {
       const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
       if (animations && typeof animations.animateMetricValues === 'function') {
-        return animations.animateMetricValues(scope || document);
+        // The bundle animates; this formatter is what renders the counting frames and
+        // what tells it how these figures separate thousands from decimals.
+        return animations.animateMetricValues(scope || document, { format: formatNumber });
       }
       return null;
     }
