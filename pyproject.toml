@@ -69,3 +69,10 @@ tmp_path_retention_policy = "failed"
 markers = [
     "opens_browser: test legitimately exercises a browser-open sink; the no_browser_open backstop is suspended for it",
 ]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
