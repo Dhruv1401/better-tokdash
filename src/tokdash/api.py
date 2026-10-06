@@ -668,7 +668,22 @@ async def _lifespan(app: "FastAPI"):
             app.state.identity_warm.cancel()
 
 
-app = FastAPI(title="Tokdash", lifespan=_lifespan)
+app = FastAPI(
+    title="Tokdash",
+    description="Local token & cost dashboard for AI coding tools",
+    version=__version__,
+    lifespan=_lifespan,
+    contact={"name": "Jingbiao Mei"},
+    license_info={"name": "MIT"},
+    openapi_tags=[
+        {"name": "Pricing", "description": "Pricing database endpoints"},
+        {"name": "Usage", "description": "Token usage and cost endpoints"},
+        {"name": "Quota", "description": "Quota tracking and polling endpoints"},
+        {"name": "Sessions", "description": "Session explorer endpoints"},
+        {"name": "System", "description": "Health, version, and system endpoints"},
+        {"name": "Updater", "description": "Click-to-update and managed install endpoints"},
+    ],
+)
 # follow_symlink=True: pipx/uv installs the packaged static assets as symlinks into
 # the uv cache. Starlette defaults to follow_symlink=False, where lookup_path()
 # realpath-resolves each request out of STATIC_DIR, fails the commonpath guard, and
@@ -1893,8 +1908,13 @@ def _pricing_cache_key(base: str) -> str:
     return f"{base}_pricing_{digest}"
 
 
-@app.get("/api/pricing-db")
+@app.get("/api/pricing-db", tags=["Pricing"])
 def get_pricing_db() -> Dict[str, Any]:
+    """Get the current pricing database snapshot.
+
+    Returns:
+        Pricing database with model rates and metadata.
+    """
     if _dev_fixture_mode() == "dense":
         # The packaged baseline is part of the install, not user data, so the
         # editor still renders. The override under the data dir is neither read
@@ -1922,7 +1942,7 @@ def get_pricing_db() -> Dict[str, Any]:
     }
 
 
-@app.put("/api/pricing-db")
+@app.put("/api/pricing-db", tags=["Pricing"])
 def update_pricing_db(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         if "text" in payload:
@@ -1956,8 +1976,19 @@ def update_pricing_db(payload: Dict[str, Any]) -> Dict[str, Any]:
             "baseline_version": _baseline_version(), "source": "override", "data": data, "text": formatted}
 
 
-@app.get("/api/usage")
+@app.get("/api/usage", tags=["Usage"])
 def get_usage(
+    """Get aggregated token usage and cost.
+
+    Args:
+        period: Time period (today, week, month, year, all, or custom).
+        date_from: Start date (YYYY-MM-DD) for custom range.
+        date_to: End date (YYYY-MM-DD) for custom range.
+        refresh: Force a fresh computation.
+
+    Returns:
+        Usage totals, per-tool breakdown, and period comparison.
+    """
     period: str = "today",
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -1990,8 +2021,13 @@ def get_usage(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/openclaw")
+@app.get("/api/openclaw", tags=["Usage"])
 def get_openclaw(period: str = "today") -> Dict[str, Any]:
+    """Get OpenClaw model breakdown.
+
+    Returns:
+        Per-model usage and cost for OpenClaw sessions.
+    """
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_openclaw
 
@@ -2017,7 +2053,7 @@ def get_openclaw(period: str = "today") -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/tools")
+@app.get("/api/tools", tags=["Usage"])
 def get_tools(period: str = "today") -> Dict[str, Any]:
     """Coding tools usage (local parsers)."""
 
@@ -2046,7 +2082,7 @@ def get_tools(period: str = "today") -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/quota")
+@app.get("/api/quota", tags=["Quota"])
 def get_quota() -> Dict[str, Any]:
     """Subscription quota state from local files and stored snapshots.
 
@@ -2072,8 +2108,13 @@ def get_quota() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/quota/history")
+@app.get("/api/quota/history", tags=["Quota"])
 def get_quota_history(
+    """Get quota utilization and consumption history.
+
+    Returns:
+        Historical quota snapshots with usage percentages.
+    """
     providers: Optional[str] = None,
     granularity: str = "hour",
     start: Optional[int] = None,
@@ -2140,7 +2181,7 @@ def _abort_quota_refresh() -> None:
         _quota_last_refresh_monotonic = _quota_prev_refresh_monotonic
 
 
-@app.post("/api/quota/consent")
+@app.post("/api/quota/consent", tags=["Quota"])
 def set_quota_consent(payload: Dict[str, Any]) -> Dict[str, Any]:
     from .sources.quota.config import set_quota_consent as _set_quota_consent
 
@@ -2149,7 +2190,7 @@ def set_quota_consent(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"consent": consent}
 
 
-@app.post("/api/quota/settings")
+@app.post("/api/quota/settings", tags=["Quota"])
 def set_quota_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Persist the quota master switch and poll interval (write-gated).
 
@@ -2183,8 +2224,13 @@ def set_quota_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
 # Read-only poll (no quota consumed): providers' usage endpoints are read-only, so this is
 # intentionally GET, not POST, so it works over Tailscale/WSL/any forward while genuine
 # config-write endpoints stay loopback-guarded.
-@app.get("/api/quota/refresh")
+@app.get("/api/quota/refresh", tags=["Quota"])
 def refresh_quota() -> Dict[str, Any]:
+    """Run an immediate quota poll.
+
+    Returns:
+        Fresh quota data from enabled providers.
+    """
     if _dev_fixture_mode() == "dense":
         return {
             "snapshots": 14,
@@ -2225,8 +2271,13 @@ def refresh_quota() -> Dict[str, Any]:
     return {"snapshots": len(snapshots), "inserted": inserted}
 
 
-@app.get("/api/codex/sessions")
+@app.get("/api/codex/sessions", tags=["Sessions"])
 def get_codex_sessions(period: str = "today", include_review_sessions: Optional[bool] = None) -> Dict[str, Any]:
+    """List Codex sessions.
+
+    Returns:
+        List of Codex sessions with metadata.
+    """
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_sessions
 
@@ -2253,8 +2304,16 @@ def get_codex_sessions(period: str = "today", include_review_sessions: Optional[
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/codex/session")
+@app.get("/api/codex/session", tags=["Sessions"])
 def get_codex_session(session_id: str) -> Dict[str, Any]:
+    """Get a single Codex session.
+
+    Args:
+        session_id: The session identifier.
+
+    Returns:
+        Detailed session data including turns and usage.
+    """
     try:
         if _dev_fixture_mode() == "dense":
             from .dev_fixtures import dense_session_detail
@@ -2269,8 +2328,16 @@ def get_codex_session(session_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/sessions")
+@app.get("/api/sessions", tags=["Sessions"])
 def get_sessions(
+    """List sessions for a tool.
+
+    Args:
+        tool: The tool name (claude, codex, etc.).
+
+    Returns:
+        List of sessions with metadata.
+    """
     tool: str,
     period: str = "today",
     date_from: Optional[str] = None,
@@ -2316,7 +2383,7 @@ def get_sessions(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/active-time")
+@app.get("/api/active-time", tags=["Sessions"])
 def get_active_time(
     period: str = "today",
     date_from: Optional[str] = None,
@@ -2366,8 +2433,16 @@ def get_active_time(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/session")
+@app.get("/api/session", tags=["Sessions"])
 def get_session(tool: str, session_id: str) -> Dict[str, Any]:
+    """Get detailed turns for a single session.
+
+    Args:
+        session_id: The session identifier.
+
+    Returns:
+        Session details including all turns and usage.
+    """
     try:
         if _dev_fixture_mode() == "dense":
             from .dev_fixtures import dense_session_detail
@@ -2449,8 +2524,16 @@ async def serve_service_worker(request: Request):
     )
 
 
-@app.get("/api/stats")
+@app.get("/api/stats", tags=["Usage"])
 def get_stats(year: Optional[int] = None) -> Dict[str, Any]:
+    """Get annual stats aggregation.
+
+    Args:
+        year: Optional year to filter by.
+
+    Returns:
+        Annual usage statistics.
+    """
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_stats
 
@@ -2471,7 +2554,7 @@ def get_stats(year: Optional[int] = None) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/insights")
+@app.get("/api/insights", tags=["Usage"])
 def get_insights(
     period: str = "year",
     date_from: Optional[str] = None,
@@ -2537,8 +2620,16 @@ def get_insights(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/activity-insights")
+@app.get("/api/activity-insights", tags=["Usage"])
 def get_activity_insights(refresh: bool = False) -> dict[str, Any]:
+    """Get Codex activity insights.
+
+    Args:
+        refresh: Force a fresh computation.
+
+    Returns:
+        Activity insights including reasoning and tool usage.
+    """
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_activity_insights
 
@@ -2561,7 +2652,7 @@ def get_activity_insights(refresh: bool = False) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/health")
+@app.get("/health", tags=["System"])
 async def health_check():
     # async so the liveness probe answers even when every worker thread is busy in a
     # heavy compute — this is what makes an external /health watchdog reliable (P4).
@@ -2599,7 +2690,7 @@ def _read_install_manifest() -> Dict[str, Any]:
         return {}
 
 
-@app.get("/api/version")
+@app.get("/api/version", tags=["System"])
 async def get_version() -> Dict[str, Any]:
     # Local-only version info; async to stay responsive like /health. Provenance
     # fields come from the setup manifest when present (Phase 1+), else None.
@@ -2635,7 +2726,7 @@ def _update_check_enabled() -> bool:
         return False
 
 
-@app.post("/api/update-check/consent")
+@app.post("/api/update-check/consent", tags=["System"])
 async def update_check_consent() -> Dict[str, Any]:
     # Write-gated by _write_guard (loopback + Host/Origin + token). One-time opt-in that
     # persists consent to config.json so the dashboard can offer update checks (§14).
@@ -2652,7 +2743,7 @@ async def update_check_consent() -> Dict[str, Any]:
 # (§14). An upgrade is still never a web-triggered shell: the one web-traversable apply
 # (the §15 amendment) is the authenticated /api/update/* family below, which runs only the
 # fixed self-update of a verified managed installation through the independent helper.
-@app.get("/api/update-check")
+@app.get("/api/update-check", tags=["System"])
 async def run_update_check() -> Dict[str, Any]:
     from .onboard import updatecheck
 
@@ -2661,7 +2752,7 @@ async def run_update_check() -> Dict[str, Any]:
     return {"enabled": True, **updatecheck.check(__version__)}
 
 
-@app.get("/api/csrf-token")
+@app.get("/api/csrf-token", tags=["System"])
 async def get_csrf_token(request: Request) -> Dict[str, str]:
     # The dashboard fetches this right before a write and echoes it back as
     # X-Tokdash-Token. The default CORS regex permits any localhost *port*, so we cannot
@@ -2716,8 +2807,13 @@ def _update_request_class(request: Request) -> str:
 # coroutines those would block the event loop — stalling every other request
 # including /health, which the browser recovery loop itself polls. Plain ``def``
 # routes run in Starlette's threadpool instead.
-@app.get("/api/update/capability")
+@app.get("/api/update/capability", tags=["Updater"])
 def update_capability(request: Request, want_csrf: bool = False) -> Dict[str, Any]:
+    """Get managed update capability.
+
+    Returns:
+        Whether updates are available and target version.
+    """
     from .onboard import update_auth, update_control
 
     plane = _update_request_class(request)
@@ -2746,7 +2842,7 @@ def update_capability(request: Request, want_csrf: bool = False) -> Dict[str, An
     return payload
 
 
-@app.post("/api/update/enroll")
+@app.post("/api/update/enroll", tags=["Updater"])
 def update_enroll(request: Request, payload: Dict[str, Any] = None) -> JSONResponse:
     from .onboard import update_auth
 
@@ -2780,7 +2876,7 @@ def update_enroll(request: Request, payload: Dict[str, Any] = None) -> JSONRespo
     return response
 
 
-@app.post("/api/update/start")
+@app.post("/api/update/start", tags=["Updater"])
 def update_start(request: Request, payload: Dict[str, Any] = None) -> JSONResponse:
     from .onboard import update_control
 
@@ -2798,8 +2894,16 @@ def update_start(request: Request, payload: Dict[str, Any] = None) -> JSONRespon
     return JSONResponse(body, status_code=status)
 
 
-@app.get("/api/update/status")
+@app.get("/api/update/status", tags=["Updater"])
 def update_status(request: Request, job: Optional[str] = None) -> Dict[str, Any]:
+    """Get managed update status.
+
+    Args:
+        job: Optional job identifier.
+
+    Returns:
+        Update job progress and status.
+    """
     from .onboard import update_auth, update_jobs
 
     plane = _update_request_class(request)
