@@ -795,6 +795,45 @@
     .metric-card[data-variant="bare"]::after { display: none; }
     .metric-card[data-variant="bare"] .metric-card-value { min-height: 26px; font-size: 18px; line-height: 26px; }
 
+    /* ---------------------------------------------------------------------
+       Slot text
+       One slot per changed character, as wide as the wider of the two characters
+       it holds and holding that width for the whole morph — which is what stops a
+       value that grows a digit from pushing the digits after it sideways. The
+       arriving character is in flow and carries the slot's baseline, so a slot
+       sits on the same baseline as the text around it; the leaving one is out of
+       flow above it. Duration and per-slot delay come from the module (the same
+       numbers its settle timer uses), so the sheet cannot drift from the timer
+       that puts the plain text back.
+       --------------------------------------------------------------------- */
+    .metric-slot-text { display: inline; }
+    /* Height comes from the module, which measures the value's own line: a
+       top-aligned slot of exactly that height occupies the line box the text
+       already had, so a morph cannot grow the line, the card, or the row below. */
+    .metric-slot {
+      position: relative;
+      display: inline-block;
+      height: var(--metric-slot-h, 30px);
+      overflow: hidden;
+      vertical-align: top;
+    }
+    .metric-slot-char {
+      display: block;
+      line-height: var(--metric-slot-h, 30px);
+      white-space: pre;
+      transition: transform var(--slot-duration, 240ms) cubic-bezier(.16, 1, .3, 1) var(--slot-delay, 0ms), opacity var(--slot-duration, 240ms) linear var(--slot-delay, 0ms);
+    }
+    .metric-slot-char[data-role="old"] {
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform: translateY(0);
+      opacity: 1;
+    }
+    .metric-slot-char[data-role="new"] { transform: translateY(100%); opacity: 0; }
+    .metric-slot[data-arriving="true"] .metric-slot-char[data-role="new"] { transform: translateY(0); opacity: 1; }
+    .metric-slot[data-leaving="true"] .metric-slot-char[data-role="old"] { transform: translateY(-100%); opacity: 0; }
+
     @media (max-width: 640px) {
       .toast-region { right: 12px; left: 12px; bottom: 12px; width: auto; }
     }
@@ -11572,6 +11611,18 @@
       return `${name}${sources}`;
     }
 
+    // A render writes plain text, which is what the tab shows with no bundle loaded
+    // at all; handing the finished render to the bundle is what turns a changed
+    // figure into a morph or a count instead of a blink. Called at the end of a
+    // render, never on a timer, so it can only ever see finished figures.
+    function commitMetricValues(scope) {
+      const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
+      if (animations && typeof animations.animateMetricValues === 'function') {
+        return animations.animateMetricValues(scope || document);
+      }
+      return null;
+    }
+
     // The refresh report is a popover: its geometry, its dismissal and where focus
     // goes belong to the animation bundle's primitive, while the panel's markup and
     // the visible hidden/aria-expanded contract stay written here. The bundle loads
@@ -22048,6 +22099,7 @@
         document.getElementById('statActiveDays').textContent = (stats.active_days || 0) + '/' + (stats.total_days || 0);
         document.getElementById('statTotalDays').textContent = formatNumber(stats.total_days || 0);
         document.getElementById('statTotalCost').textContent = formatCurrency((data.summary || {}).totalCost || 0);
+        commitMetricValues(document);
 
         const filledContributions = reconcileTodayProfileContribution(
           fillMissingDays(data.contributions),
@@ -22516,6 +22568,7 @@
       document.getElementById('statActiveDays').textContent = `${activeDays}/${monthDays.length}`;
       document.getElementById('statTotalDays').textContent = String(monthDays.length);
       document.getElementById('statTotalCost').textContent = formatCurrency(totalCost);
+      commitMetricValues(document);
     }
 
     function updateTopStatsForYear() {
@@ -22602,6 +22655,7 @@
       document.getElementById('statActiveDays').textContent = `${activeDays}/${totalDaysInYear}`;
       document.getElementById('statTotalDays').textContent = String(totalDaysInYear);
       document.getElementById('statTotalCost').textContent = formatCurrency(totalCost);
+      commitMetricValues(document);
     }
 
     function updateTopStatsForAllTime() {
@@ -22682,6 +22736,7 @@
       document.getElementById('statActiveDays').textContent = `${activeDays}/${contributions.length}`;
       document.getElementById('statTotalDays').textContent = String(contributions.length);
       document.getElementById('statTotalCost').textContent = formatCurrency(totalCost);
+      commitMetricValues(document);
     }
 
     /* The year grid solves --hy-cell against the pane instead of fixing it: 53

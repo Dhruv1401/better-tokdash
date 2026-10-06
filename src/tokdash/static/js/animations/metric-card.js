@@ -11,19 +11,29 @@
  * `metric-card.js` owns the card as one surface: the label / value / meta rhythm,
  * the reserved value line, the tabular numerals that keep that line from moving
  * when a digit changes, and the hint chip that carries the detail a figure cannot
- * fit. The value's *transition* — morphing a changed string, counting a changed
- * number — is deliberately not here; that is `slot-text.js` and
- * `animated-counter.js`, which this module hands the value slots to.
+ * fit. It also owns *when* a value transitions: writers keep writing plain text
+ * (so the tab is correct with no bundle loaded at all), and the render that just
+ * finished calls `animateMetricValues`, which compares what each slot reads now
+ * against what it read last. The moving itself belongs to `slot-text.js`.
  *
  * Markup contract: `data-metric-card` marks a card, `.metric-card-value` is the
  * slot whose text is the figure, `data-value-kind="text"` sizes a non-numeric
  * value (a model name) down to what it needs, and `data-variant="bare"` drops the
  * surface for cells that live inside a panel which is already one.
+ *
+ * The value slot is marked by its class, not by its card: `.metric-card-value`
+ * carries the reserved line, the tabular numerals and the transitions, so a figure
+ * that stands on its own can adopt the slot without a card around it. The Overview
+ * KPI row keeps its own count-up (`animateOverviewCounter`), which is why nothing
+ * else claims its values here — two animations on one figure is worse than one.
  */
 
 import { mountTooltips } from './tooltip.js';
+import { renderSlotText, slotTextState } from './slot-text.js';
 
 const HINT_SELECTOR = '[data-tooltip]';
+// A value element this module has seen, and the text it currently stands for.
+const seenValues = new WeakMap();
 
 /** The card's value slot. One per card: the figure the card exists to show. */
 export function metricValueElement(card) {
@@ -35,6 +45,50 @@ export function metricValueElement(card) {
 export function metricHintElement(card) {
   if (!card) return null;
   return card.querySelector(HINT_SELECTOR);
+}
+
+/** Every value slot under `root`, in document order. */
+export function metricValueElements(root = document) {
+  if (!root || typeof root.querySelectorAll !== 'function') return [];
+  return [...root.querySelectorAll('.metric-card-value')];
+}
+
+/**
+ * Hand every value that changed since the last call to the slot renderer.
+ *
+ * Called by the render that just wrote the figures, never by a timer: a writer
+ * that sets `textContent` leaves a figure that is already correct, and this only
+ * decides whether the change to it should be seen as a change. The first text an
+ * element is ever seen with is adopted silently — the tab paints figures for the
+ * first time when it opens, and a card that rolls up from zero every time it is
+ * looked at is noise, not information.
+ */
+export function animateMetricValues(root = document) {
+  const values = metricValueElements(root);
+  let changed = 0;
+  values.forEach((element) => {
+    const text = element.textContent;
+    const previous = seenValues.get(element);
+    if (previous == null) {
+      // First sight of this slot: adopt what it says without animating it.
+      seenValues.set(element, { text });
+      return;
+    }
+    if (previous.text === text) return;
+    // The element already holds the new text — the writer put it there — so the
+    // figure to morph away from is the one this module saw last.
+    const rendered = renderSlotText(element, text, { from: previous.text });
+    previous.text = text;
+    if (rendered) changed += 1;
+  });
+  return { values: values.length, changed };
+}
+
+/** One value slot's state: what it is showing and whether it is mid-morph. */
+export function metricValueState(element) {
+  if (!element) return null;
+  const seen = seenValues.get(element);
+  return { last: seen ? seen.text : null, ...slotTextState(element) };
 }
 
 /**
