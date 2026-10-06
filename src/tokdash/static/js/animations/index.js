@@ -17,3 +17,4 @@ export * from './toast.js';
 export * from './theme-switcher.js';
 export * from './tooltip.js';
 export * from './popover.js';
+export * from './metric-card.js';

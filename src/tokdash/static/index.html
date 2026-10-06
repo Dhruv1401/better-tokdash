@@ -705,6 +705,96 @@
     .tooltip[data-placement="top"] .tooltip-bubble::after { top: 100%; border-top-color: var(--color-text); }
     .tooltip[data-placement="bottom"] .tooltip-bubble::after { bottom: 100%; border-bottom-color: var(--color-text); }
 
+    /* ---------------------------------------------------------------------
+       Metric cards
+       The Stats tab drew its figures as nine hand-written copies of ".surface"
+       with a label and a value, sized by whatever utility classes that copy
+       happened to carry: the numbers landed at body size next to the KPI row's
+       30px figures, the label colour was hardcoded slate rather than the theme's
+       label token, and no card reserved room for its own value. This is that
+       card as one class — a fixed label / value / meta rhythm, a value slot that
+       reserves its line, and tabular numerals so changing a digit cannot move
+       the layout. It *extends* .surface instead of replacing it, which is what
+       keeps every theme's surface treatment (17 of them, in themes.css) applying
+       to these cards unchanged.
+       --------------------------------------------------------------------- */
+    .metric-card {
+      position: relative;
+      display: grid;
+      gap: 6px;
+      align-content: start;
+      overflow: hidden;
+      transition: transform var(--t-med) cubic-bezier(.16, 1, .3, 1), box-shadow var(--t-med) cubic-bezier(.16, 1, .3, 1), border-color var(--t-fast) ease;
+    }
+    /* A wash of the theme's own primary, on hover only. It has to be a token and
+       not a fixed accent: this card appears in all 17 themes. */
+    .metric-card::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      background: radial-gradient(130% 100% at 0% 0%, color-mix(in srgb, var(--color-primary) 12%, transparent), transparent 62%);
+      opacity: 0;
+      transition: opacity var(--t-med) ease;
+      pointer-events: none;
+    }
+    .metric-card:hover::after { opacity: 1; }
+    .metric-card > * { position: relative; }
+    .metric-card-head { display: flex; align-items: center; gap: 6px; min-height: 16px; }
+    .metric-card-label {
+      color: var(--color-label);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .metric-card-hint {
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      line-height: 1;
+      opacity: .55;
+      cursor: help;
+      user-select: none;
+      transition: opacity var(--t-fast) ease;
+    }
+    .metric-card-hint:hover, .metric-card-hint:focus-visible { opacity: 1; }
+    .metric-card-hint:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 4px; }
+    /* The value slot reserves its line so a value that grows a character cannot
+       change the card's height or shift the row below it. */
+    /* No colour here on purpose: the value inherits the card's text colour, and a
+       card that wants an accent keeps the same utility the KPI row above it uses
+       (whose light-mode remap already lives further down this sheet), so the two
+       sizes of card cannot disagree about what "token blue" means. */
+    .metric-card-value {
+      min-height: 30px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 22px;
+      font-weight: 800;
+      line-height: 30px;
+      letter-spacing: -0.01em;
+      font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere;
+    }
+    .metric-card[data-value-kind="text"] .metric-card-value {
+      min-height: 24px;
+      font-size: 17px;
+      line-height: 24px;
+      letter-spacing: 0;
+    }
+    .metric-card-meta { color: var(--color-muted); font-size: 12px; font-weight: 600; }
+    /* Bare cells: the same rhythm inside a panel that is already a surface, so
+       the Month Stats grid stops inventing its own label colour (slate) and its
+       own value size next to cards that use the shared ones. */
+    .metric-card[data-variant="bare"] {
+      background: none;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+    .metric-card[data-variant="bare"]::after { display: none; }
+    .metric-card[data-variant="bare"] .metric-card-value { min-height: 26px; font-size: 18px; line-height: 26px; }
+
     @media (max-width: 640px) {
       .toast-region { right: 12px; left: 12px; bottom: 12px; width: auto; }
     }
@@ -5250,60 +5340,88 @@
     <!-- Stats Tab -->
     <div id="stats-content" class="tab-content">
       <section id="statsSummaryCards" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <div class="surface p-4">
-          <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="topModelCost">Top Model (Cost)</div>
-          <div id="statFavoriteModel" class="tokdash-loading-placeholder mt-2 font-extrabold mono"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
+        <div class="surface metric-card p-4" data-metric-card data-value-kind="text">
+          <div class="metric-card-head">
+            <span class="metric-card-label" data-i18n="topModelCost">Top Model (Cost)</span>
+          </div>
+          <div id="statFavoriteModel" class="metric-card-value text-amber-300 tokdash-loading-placeholder"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
-        <div class="surface p-4">
-          <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="totalTokens">Total Tokens</div>
-          <div id="statTotalTokens" class="tokdash-loading-placeholder mt-2 font-extrabold"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
+        <div class="surface metric-card p-4" data-metric-card>
+          <div class="metric-card-head">
+            <span class="metric-card-label" data-i18n="totalTokens">Total Tokens</span>
+          </div>
+          <div id="statTotalTokens" class="metric-card-value text-indigo-400 tokdash-loading-placeholder"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
-        <div class="surface p-4">
-          <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="sessions">Sessions</div>
-          <div id="statSessions" class="tokdash-loading-placeholder mt-2 font-extrabold"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
+        <div class="surface metric-card p-4" data-metric-card>
+          <div class="metric-card-head">
+            <span class="metric-card-label" data-i18n="sessions">Sessions</span>
+          </div>
+          <div id="statSessions" class="metric-card-value text-purple-400 tokdash-loading-placeholder"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
-        <div class="surface p-4">
-          <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="streak">Streak</div>
-          <div id="statCurrentStreak" class="tokdash-loading-placeholder mt-2 font-extrabold"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
+        <div class="surface metric-card p-4" data-metric-card>
+          <div class="metric-card-head">
+            <span class="metric-card-label" data-i18n="streak">Streak</span>
+            <span class="metric-card-hint" tabindex="0" data-tooltip data-i18n-title="statsStreakHint" title="Consecutive active days ending today or yesterday — a day still in progress does not break a streak.">ⓘ</span>
+          </div>
+          <div id="statCurrentStreak" class="metric-card-value text-sky-400 tokdash-loading-placeholder"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
-        <div class="surface p-4">
-          <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="longestStreak">Longest Streak</div>
-          <div id="statLongestStreak" class="tokdash-loading-placeholder mt-2 font-extrabold"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
+        <div class="surface metric-card p-4" data-metric-card>
+          <div class="metric-card-head">
+            <span class="metric-card-label" data-i18n="longestStreak">Longest Streak</span>
+            <span class="metric-card-hint" tabindex="0" data-tooltip data-i18n-title="statsLongestStreakHint" title="The longest run of consecutive active days in this window.">ⓘ</span>
+          </div>
+          <div id="statLongestStreak" class="metric-card-value text-sky-400 tokdash-loading-placeholder"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
-        <div class="surface p-4">
-          <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="activeDays">Active Days</div>
-          <div id="statActiveDays" class="tokdash-loading-placeholder mt-2 font-extrabold"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
+        <div class="surface metric-card p-4" data-metric-card>
+          <div class="metric-card-head">
+            <span class="metric-card-label" data-i18n="activeDays">Active Days</span>
+            <span class="metric-card-hint" tabindex="0" data-tooltip data-i18n-title="statsActiveDaysHint" title="Days with recorded activity, out of every day the window covers.">ⓘ</span>
+          </div>
+          <div id="statActiveDays" class="metric-card-value text-cyan-400 tokdash-loading-placeholder"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
-        <div class="surface p-4">
-          <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="totalDays">Total Days</div>
-          <div id="statTotalDays" class="tokdash-loading-placeholder mt-2 font-extrabold"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
+        <div class="surface metric-card p-4" data-metric-card>
+          <div class="metric-card-head">
+            <span class="metric-card-label" data-i18n="totalDays">Total Days</span>
+            <span class="metric-card-hint" tabindex="0" data-tooltip data-i18n-title="statsTotalDaysHint" title="Every day the window covers, active or not.">ⓘ</span>
+          </div>
+          <div id="statTotalDays" class="metric-card-value text-slate-300 tokdash-loading-placeholder"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
-        <div class="surface p-4">
-          <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="totalCost">Total Cost</div>
-          <div id="statTotalCost" class="tokdash-loading-placeholder mt-2 font-extrabold"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
+        <div class="surface metric-card p-4" data-metric-card>
+          <div class="metric-card-head">
+            <span class="metric-card-label" data-i18n="totalCost">Total Cost</span>
+          </div>
+          <div id="statTotalCost" class="metric-card-value text-emerald-400 tokdash-loading-placeholder"><span class="tokdash-loading-label" data-i18n="loading">Loading…</span></div>
         </div>
       </section>
 
       <section id="statsInsightCards" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-        <div class="surface p-4">
-          <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="peakDay">Peak Day</div>
-          <div id="statPeakDay" class="mt-2 font-extrabold mono">—</div>
-          <div id="statPeakDayMeta" class="text-sm mt-1" style="color: var(--color-muted);">—</div>
+        <div class="surface metric-card p-4" data-metric-card data-value-kind="text">
+          <div class="metric-card-head">
+            <span class="metric-card-label" data-i18n="peakDay">Peak Day</span>
+          </div>
+          <div id="statPeakDay" class="metric-card-value text-teal-400">—</div>
+          <div id="statPeakDayMeta" class="metric-card-meta">—</div>
         </div>
-        <div class="surface p-4">
-          <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="peakWeek">Peak Week</div>
-          <div id="statPeakWeek" class="mt-2 font-extrabold mono">—</div>
-          <div id="statPeakWeekMeta" class="text-sm mt-1" style="color: var(--color-muted);">—</div>
+        <div class="surface metric-card p-4" data-metric-card data-value-kind="text">
+          <div class="metric-card-head">
+            <span class="metric-card-label" data-i18n="peakWeek">Peak Week</span>
+          </div>
+          <div id="statPeakWeek" class="metric-card-value text-teal-400">—</div>
+          <div id="statPeakWeekMeta" class="metric-card-meta">—</div>
         </div>
-        <div class="surface p-4">
-          <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="peakWeekday">Top Weekday</div>
-          <div id="statPeakWeekday" class="mt-2 font-extrabold mono">—</div>
-          <div id="statPeakWeekdayMeta" class="text-sm mt-1" style="color: var(--color-muted);">—</div>
+        <div class="surface metric-card p-4" data-metric-card data-value-kind="text">
+          <div class="metric-card-head">
+            <span class="metric-card-label" data-i18n="peakWeekday">Top Weekday</span>
+          </div>
+          <div id="statPeakWeekday" class="metric-card-value text-teal-400">—</div>
+          <div id="statPeakWeekdayMeta" class="metric-card-meta">—</div>
         </div>
-        <div class="surface p-4">
-          <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--color-label);" data-i18n="avgActiveDay">Avg / Active Day</div>
-          <div id="statAvgActiveDay" class="mt-2 font-extrabold mono">—</div>
-          <div id="statAvgActiveDayMeta" class="text-sm mt-1" style="color: var(--color-muted);" data-i18n="activeDaysOnly">Across active days</div>
+        <div class="surface metric-card p-4" data-metric-card>
+          <div class="metric-card-head">
+            <span class="metric-card-label" data-i18n="avgActiveDay">Avg / Active Day</span>
+          </div>
+          <div id="statAvgActiveDay" class="metric-card-value text-indigo-400">—</div>
+          <div id="statAvgActiveDayMeta" class="metric-card-meta" data-i18n="activeDaysOnly">Across active days</div>
         </div>
       </section>
 
@@ -5400,45 +5518,60 @@
 
               <div class="grid grid-cols-2 gap-x-5 gap-y-4">
                 <!-- Top model by cost -->
-                <div>
-                  <div class="text-xs font-semibold text-slate-500 mb-1" data-i18n="topModelCost">Top Model (Cost)</div>
-                  <div id="monthFavoriteModel" class="font-bold text-base mono" style="color: var(--color-primary);">—</div>
+                <div class="metric-card" data-metric-card data-variant="bare" data-value-kind="text">
+                  <div class="metric-card-head">
+                    <span class="metric-card-label" data-i18n="topModelCost">Top Model (Cost)</span>
+                  </div>
+                  <div id="monthFavoriteModel" class="metric-card-value text-amber-300">—</div>
                 </div>
 
                 <!-- Total Tokens -->
-                <div>
-                  <div class="text-xs font-semibold text-slate-500 mb-1" data-i18n="totalTokens">Total Tokens</div>
-                  <div id="monthTotalTokens" class="font-extrabold text-xl" style="color: var(--color-primary);">0</div>
+                <div class="metric-card" data-metric-card data-variant="bare">
+                  <div class="metric-card-head">
+                    <span class="metric-card-label" data-i18n="totalTokens">Total Tokens</span>
+                  </div>
+                  <div id="monthTotalTokens" class="metric-card-value text-indigo-400">0</div>
                 </div>
 
                 <!-- Total Cost -->
-                <div>
-                  <div class="text-xs font-semibold text-slate-500 mb-1" data-i18n="totalCost">Total Cost</div>
-                  <div id="monthTotalCost" class="font-extrabold text-xl" style="color: var(--color-cost);">$0.00</div>
+                <div class="metric-card" data-metric-card data-variant="bare">
+                  <div class="metric-card-head">
+                    <span class="metric-card-label" data-i18n="totalCost">Total Cost</span>
+                  </div>
+                  <div id="monthTotalCost" class="metric-card-value text-emerald-400">$0.00</div>
                 </div>
 
                 <!-- Sessions -->
-                <div>
-                  <div class="text-xs font-semibold text-slate-500 mb-1" data-i18n="messages">Messages</div>
-                  <div id="monthTotalSessions" class="font-bold text-lg">0</div>
+                <div class="metric-card" data-metric-card data-variant="bare">
+                  <div class="metric-card-head">
+                    <span class="metric-card-label" data-i18n="messages">Messages</span>
+                  </div>
+                  <div id="monthTotalSessions" class="metric-card-value text-purple-400">0</div>
                 </div>
 
                 <!-- Active Days -->
-                <div>
-                  <div class="text-xs font-semibold text-slate-500 mb-1" data-i18n="activeDays">Active Days</div>
-                  <div id="monthActiveDays" class="font-bold text-lg">0</div>
+                <div class="metric-card" data-metric-card data-variant="bare">
+                  <div class="metric-card-head">
+                    <span class="metric-card-label" data-i18n="activeDays">Active Days</span>
+                  </div>
+                  <div id="monthActiveDays" class="metric-card-value text-cyan-400">0</div>
                 </div>
 
                 <!-- Streak -->
-                <div>
-                  <div class="text-xs font-semibold text-slate-500 mb-1" data-i18n="streak">Streak</div>
-                  <div id="monthCurrentStreak" class="font-bold text-lg">0 days</div>
+                <div class="metric-card" data-metric-card data-variant="bare">
+                  <div class="metric-card-head">
+                    <span class="metric-card-label" data-i18n="streak">Streak</span>
+                  </div>
+                  <div id="monthCurrentStreak" class="metric-card-value text-sky-400">0 days</div>
                 </div>
 
                 <!-- Cache Hit Rate -->
-                <div>
-                  <div class="text-xs font-semibold text-slate-500 mb-1" data-i18n="cacheHitRate">Cache Hit Rate</div>
-                  <div id="monthCacheHitRate" class="font-bold text-lg" style="color: var(--color-primary);">—</div>
+                <div class="metric-card" data-metric-card data-variant="bare">
+                  <div class="metric-card-head">
+                    <span class="metric-card-label" data-i18n="cacheHitRate">Cache Hit Rate</span>
+                    <span class="metric-card-hint" tabindex="0" data-tooltip data-i18n-title="cacheHitRateHint" title="Share of prompt input served from cache (cache reads ÷ all prompt input). Cache writes count as misses; output excluded.">ⓘ</span>
+                  </div>
+                  <div id="monthCacheHitRate" class="metric-card-value text-cyan-400">—</div>
                 </div>
               </div>
             </div>
@@ -7477,6 +7610,10 @@
         sessions: 'Sessions',
         streak: 'Streak',
         longestStreak: 'Longest Streak',
+        statsStreakHint: 'Consecutive active days ending today or yesterday — a day still in progress does not break a streak.',
+        statsLongestStreakHint: 'The longest run of consecutive active days in this window.',
+        statsActiveDaysHint: 'Days with recorded activity, out of every day the window covers.',
+        statsTotalDaysHint: 'Every day the window covers, active or not.',
         activeDays: 'Active Days',
         totalDays: 'Total Days',
         dailyActivity: 'Daily Activity',
@@ -8058,6 +8195,10 @@
         sessions: '会话数',
         streak: '连续天数',
         longestStreak: '最长连续天数',
+        statsStreakHint: '截至今天或昨天的连续活跃天数——当天尚未结束不会中断连续记录。',
+        statsLongestStreakHint: '此时间范围内最长的连续活跃天数。',
+        statsActiveDaysHint: '有记录活动的天数，占时间范围覆盖的全部天数。',
+        statsTotalDaysHint: '时间范围覆盖的每一天，无论是否有活动。',
         activeDays: '活跃天数',
         totalDays: '总天数',
         dailyActivity: '每日活跃',
@@ -8640,6 +8781,10 @@
         sessions: 'セッション',
         streak: '連続日数',
         longestStreak: '最長連続日数',
+        statsStreakHint: '今日または昨日まで続く連続アクティブ日数 — 進行中の当日は連続を途切れさせません。',
+        statsLongestStreakHint: 'この期間で最も長い連続アクティブ日数。',
+        statsActiveDaysHint: '記録のある日数（期間が対象とする全日数に対して）。',
+        statsTotalDaysHint: '期間が対象とするすべての日数（アクティブかどうかに関わらず）。',
         activeDays: 'アクティブ日数',
         totalDays: '総日数',
         dailyActivity: '日別アクティビティ',
@@ -9222,6 +9367,10 @@
         sessions: '세션',
         streak: '연속일',
         longestStreak: '최장 연속일',
+        statsStreakHint: '오늘 또는 어제까지 이어진 연속 활동 일수 — 진행 중인 오늘은 연속 기록을 끊지 않습니다.',
+        statsLongestStreakHint: '이 기간에서 가장 긴 연속 활동 일수.',
+        statsActiveDaysHint: '기록이 있는 날짜 수(기간이 포함하는 전체 일수 기준).',
+        statsTotalDaysHint: '기간이 포함하는 모든 날짜(활동 여부와 무관).',
         activeDays: '활성일',
         totalDays: '전체 일수',
         dailyActivity: '일일 활동',
@@ -9804,6 +9953,10 @@
         sessions: 'Sesiones',
         streak: 'Racha',
         longestStreak: 'Racha más larga',
+        statsStreakHint: 'Días activos consecutivos que terminan hoy o ayer: un día aún en curso no rompe la racha.',
+        statsLongestStreakHint: 'La racha más larga de días activos consecutivos en esta ventana.',
+        statsActiveDaysHint: 'Días con actividad registrada, sobre todos los días que cubre la ventana.',
+        statsTotalDaysHint: 'Todos los días que cubre la ventana, con actividad o sin ella.',
         activeDays: 'Días activos',
         totalDays: 'Días totales',
         dailyActivity: 'Actividad diaria',
@@ -10386,6 +10539,10 @@
         sessions: 'Sessões',
         streak: 'Sequência',
         longestStreak: 'Maior sequência',
+        statsStreakHint: 'Dias ativos consecutivos terminando hoje ou ontem — um dia ainda em andamento não quebra a sequência.',
+        statsLongestStreakHint: 'A maior sequência de dias ativos consecutivos nesta janela.',
+        statsActiveDaysHint: 'Dias com atividade registrada, de todos os dias que a janela cobre.',
+        statsTotalDaysHint: 'Todos os dias que a janela cobre, com ou sem atividade.',
         activeDays: 'Dias ativos',
         totalDays: 'Dias totais',
         dailyActivity: 'Atividade diária',
@@ -24295,6 +24452,14 @@
           Animations.mountThemeSwitcher(document.getElementById('styleThemeSwitcher'));
         }
       } catch (_) { /* the native select is still there and still works */ }
+
+      try {
+        // The metric cards own their own value transitions; mounting claims the
+        // cards and wires their hint chips through the tooltip above.
+        if (typeof Animations.mountMetricCards === 'function') {
+          Animations.mountMetricCards(document);
+        }
+      } catch (_) { /* the markup is a plain card without the bundle */ }
 
       // Start hero loader with --rate 0.8 on initial boot, dismiss after exactly 254ms
       Animations.showLoader({ initialRate: 0.8 });
