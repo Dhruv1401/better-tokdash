@@ -206,18 +206,21 @@
       box-shadow: none;
     }
 
-    .tool-chart-shell{display:grid;height:280px;grid-template-rows:minmax(0,1fr) auto;gap:8px;min-width:0;}
-    .tool-chart-canvas{position:relative;min-height:0;min-width:0;}
-    /* Chart.js can leave the canvas a few px wider than its box (it sizes against
-       the shell, not the canvas cell); when the viewport narrows the whole donut
-       then drifts right. Clamping the canvas keeps it inside the card at any width. */
-    .tool-chart-canvas canvas{max-width:100%;}
-    .tool-chart-legend{display:flex;min-height:22px;flex-wrap:wrap;align-items:center;justify-content:center;gap:7px 16px;}
-    .tool-chart-legend-item{display:inline-flex;align-items:center;gap:7px;min-width:0;color:var(--color-muted);font-size:12px;}
-    .tool-chart-legend-swatch{width:15px;height:3px;flex:0 0 auto;border-radius:999px;}
-    .tool-chart-legend .tool-identity{gap:6px;}.tool-chart-legend .tool-identity[data-compact="true"] .tool-brand-icon{width:22px;height:22px;}.tool-chart-legend .tool-identity[data-compact="true"] .tool-brand-icon img{width:20px;height:20px;}.tool-chart-legend .tool-brand-label{color:var(--color-muted);font-size:12px;font-weight:650;}
+    .tool-chart-shell{display:grid;height:252px;grid-template-rows:minmax(0,1fr) auto;gap:10px;min-width:0;}
+    .tool-chart-canvas{position:relative;min-height:0;min-width:0;display:grid;place-items:center;}
+    /* The donut is an SVG viewBox, so it scales itself to the box it is given
+       the way the canvas used to be clamped into it. */
+    .tool-chart-canvas svg{width:auto;height:100%;max-width:100%;max-height:100%;}
+    .tool-chart-canvas .tool-donut-twin{opacity:0;transition:opacity 0.15s ease;pointer-events:none;}
+    .tool-chart-canvas [data-tool]{outline:none;}
+    .tool-chart-canvas [data-tool]:focus-visible{opacity:1 !important;}
+    .tool-chart-canvas [data-tool]:focus-visible + .tool-donut-twin{opacity:1;}
+    .tool-chart-legend{display:flex;min-height:20px;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 10px;}
+    .tool-chart-legend-item{display:inline-flex;align-items:center;gap:5px;min-width:0;padding:2px 7px 2px 3px;border-radius:999px;color:var(--color-muted);font-size:11px;}
+    .tool-chart-legend-swatch{width:8px;height:8px;flex:0 0 auto;border-radius:999px;box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--color-text) 14%, transparent);}
+    .tool-chart-legend .tool-identity{gap:5px;}.tool-chart-legend .tool-identity[data-compact="true"] .tool-brand-icon{width:18px;height:18px;}.tool-chart-legend .tool-identity[data-compact="true"] .tool-brand-icon img{width:16px;height:16px;}.tool-chart-legend .tool-brand-label{color:var(--color-muted);font-size:11px;font-weight:650;}
     .tool-chart-legend .tool-identity[data-logo-kind="wordmark"] .tool-brand-label{display:none;}
-    .tool-chart-legend-more{display:inline-flex;align-items:center;min-height:22px;padding-left:2px;color:var(--color-label);font-size:11px;font-weight:700;white-space:nowrap;}
+    .tool-chart-legend-more{display:inline-flex;align-items:center;min-height:20px;padding-left:4px;color:var(--color-label);font-size:10.5px;font-weight:700;white-space:nowrap;}
 
     .tokdash-loading-placeholder:has(> .tokdash-loading-label) {
       position: relative;
@@ -3763,9 +3766,7 @@
             <div class="text-xs" style="color: var(--color-muted);" data-i18n="tokens">Tokens</div>
           </div>
           <div class="tool-chart-shell">
-            <div class="tool-chart-canvas">
-              <canvas id="toolChart" aria-label="Usage by tool chart" role="img"></canvas>
-            </div>
+            <div id="toolChart" class="tool-chart-canvas" role="img" aria-label="Usage by tool chart"></div>
             <div id="toolChartLegend" class="tool-chart-legend" role="list" aria-label="Tool chart legend"></div>
           </div>
         </div>
@@ -6423,7 +6424,6 @@
     // - 3D/All-time: current ongoing streak from today
     // - "Longest Streak" always shows longest ever across all data
 
-    let toolChart = null;
     let modelChart = null;
     let sessionPerTurnChart = null;
     let sessionCumulativeChart = null;
@@ -7755,6 +7755,7 @@
         time: 'Time',
         langSystem: 'System',
         moreTools: '+{n} more tools',
+        ofTokens: 'of tokens',
         usageReport: 'Report',
         usageReportServerLabel: 'Server',
         usageReportPeriodWeek: 'Week',
@@ -8340,6 +8341,7 @@
         time: '时间',
         langSystem: '跟随系统',
         moreTools: '另有 {n} 个工具',
+        ofTokens: '的令牌',
         usageReport: '报告',
         usageReportServerLabel: '服务器',
         usageReportPeriodWeek: '周',
@@ -8926,6 +8928,7 @@
         time: '時間',
         langSystem: 'システム',
         moreTools: '他 {n} 件のツール',
+        ofTokens: 'のトークン',
         usageReport: 'レポート',
         usageReportServerLabel: 'サーバー',
         usageReportPeriodWeek: '週',
@@ -9512,6 +9515,7 @@
         time: '시간',
         langSystem: '시스템',
         moreTools: '나머지 {n}개 도구',
+        ofTokens: '의 토큰',
         usageReport: '리포트',
         usageReportServerLabel: '서버',
         usageReportPeriodWeek: '주',
@@ -10098,6 +10102,7 @@
         time: 'Hora',
         langSystem: 'Sistema',
         moreTools: '+{n} herramientas más',
+        ofTokens: 'de tokens',
         usageReport: 'Informe',
         usageReportServerLabel: 'Servidor',
         usageReportPeriodWeek: 'Semana',
@@ -10684,6 +10689,7 @@
         time: 'Hora',
         langSystem: 'Sistema',
         moreTools: '+{n} ferramentas a mais',
+        ofTokens: 'de tokens',
         usageReport: 'Relatório',
         usageReportServerLabel: 'Servidor',
         usageReportPeriodWeek: 'Semana',
@@ -12905,10 +12911,9 @@
     }
 
     function rerenderPresentation() {
-      if (toolChart) {
-        toolChart.destroy();
-        toolChart = null;
-      }
+      // The donut is plain SVG rebuilt by updateToolChart on the next render;
+      // clearing it here keeps a stale ring from outliving its theme colours.
+      document.getElementById('toolChart')?.replaceChildren();
       if (modelChart) {
         modelChart.destroy();
         modelChart = null;
@@ -12941,10 +12946,7 @@
     }
 
     function rerenderTokenPresentation() {
-      if (toolChart) {
-        toolChart.destroy();
-        toolChart = null;
-      }
+      document.getElementById('toolChart')?.replaceChildren();
       if (lastUsageResponse && isOverviewActive()) renderOverviewTab(lastUsageResponse);
       if (isSessionsActive()) renderSessionsTab();
       if (isServersActive()) renderServersTab();
@@ -15368,58 +15370,92 @@
     }
 
     // Tool pie chart
+    /**
+     * The usage-by-tool donut, drawn as vanilla SVG so the panel needs no
+     * chart library at all — the legend was already the thing that survived a
+     * missing CDN, and now the ring is too. Each tool is one wedge path plus
+     * its hover twin; the wedge carries the tool's name and value for readers,
+     * the twin brightens it and shares the tooltip layer with the KPI hints.
+     *
+     * The maths, kept inside this function because the wedge geometry IS the
+     * renderer: an arc larger than half the circle flips its large-arc flag,
+     * which is why the split is by half-circle and the two halves agree on it
+     * — one formula produces a 1% wedge and a 99% wedge alike. Gaps between
+     * wedges are drawn by stroking the wedge's own colour, not by shrinking
+     * the arc, so the proportions on screen are the proportions in the data.
+     */
     function updateToolChart(byTool) {
-      const canvas = document.getElementById('toolChart');
-      if (!canvas) return;
-      const ctx = canvas.getContext('2d');
-
+      const host = document.getElementById('toolChart');
+      if (!host) return;
       const entries = Object.entries(byTool || {}).filter(([, v]) => Number(v?.tokens || 0) > 0)
         .sort((a, b) => Number(b[1].tokens || 0) - Number(a[1].tokens || 0));
-      const labels = entries.map(([tool]) => formatToolName(tool));
       const values = entries.map(([, v]) => Number(v?.tokens || 0));
       const palette = getChartPalette();
       const colors = values.map((_, i) => palette[i % palette.length]);
       // Plain HTML, so it must keep rendering when Chart.js is missing: the
-      // legend is the only thing left that names the tools. createChart below
-      // is what absorbs the missing library, which is why there is no guard
-      // above this line.
+      // legend is the only thing left that names the tools. The donut below is
+      // vanilla SVG and has no dependency to lose.
       renderToolChartLegend(entries, colors);
+      host.replaceChildren();
+      const total = values.reduce((sum, value) => sum + value, 0);
+      if (!total) return;
 
-      if (!toolChart) {
-        toolChart = createChart(ctx, {
-          type: 'doughnut',
-          data: {
-            labels,
-            datasets: [{
-              data: values,
-              backgroundColor: colors,
-              borderWidth: 0,
-            }],
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: false,
-            plugins: {
-              legend: { display: false },
-              tooltip: {
-                callbacks: {
-                  label: (context) => {
-                    const value = context.raw ?? 0;
-                    return `${context.label}: ${formatTokenCount(value, true)}`;
-                  },
-                },
-              },
-            },
-          },
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '-112 -112 224 224');
+      svg.setAttribute('role', 'img');
+      svg.setAttribute('aria-label', t('usageByTool'));
+      const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
+      const tipOf = (tool, value, share) => `${formatToolName(tool)} — ${formatTokenCount(value, true)} (${share}% ${t('ofTokens')})`;
+      const CIRCLE = Math.PI * 2;
+      const point = (angle) => [
+        Number((Math.cos(angle) * 100).toFixed(4)),
+        Number((Math.sin(angle) * 100).toFixed(4)),
+      ];
+      let fraction = 0;
+      entries.forEach(([tool, raw], index) => {
+        const value = Number(raw?.tokens || 0);
+        const share = Math.round((value / total) * 100);
+        const sweep = Math.min(1, Math.max(0, value / total)) * CIRCLE;
+        const start = fraction * CIRCLE - Math.PI / 2;
+        fraction += value / total;
+        const [x1, y1] = point(start);
+        const [x2, y2] = point(start + sweep);
+        const largeArc = sweep > Math.PI ? 1 : 0;
+        const wedge = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        wedge.setAttribute('d', `M ${x1} ${y1} A 100 100 0 ${largeArc} 1 ${x2} ${y2}`);
+        wedge.setAttribute('fill', 'none');
+        wedge.setAttribute('stroke', colors[index]);
+        wedge.setAttribute('stroke-width', 22);
+        wedge.setAttribute('data-tool', tool);
+        wedge.setAttribute('tabindex', '0');
+        wedge.setAttribute('role', 'img');
+        wedge.setAttribute('aria-label', tipOf(tool, value, share));
+        wedge.style.cursor = 'default';
+        wedge.dataset.tooltip = '';
+        wedge.dataset.tooltipPlacement = 'bottom';
+        wedge.dataset.tooltipText = tipOf(tool, value, share);
+        // The hover twin is the wedge's own colour at full strength; the wedge
+        // sits at 88% so the gap between "resting" and "pointed at" is visible
+        // without turning the ring into a highlighter.
+        wedge.style.opacity = '0.88';
+        wedge.style.transition = 'opacity 0.15s ease';
+        const twin = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        twin.setAttribute('d', wedge.getAttribute('d'));
+        twin.setAttribute('fill', 'none');
+        twin.setAttribute('stroke', colors[index]);
+        twin.setAttribute('stroke-width', 22);
+        twin.setAttribute('data-tool', tool);
+        twin.classList.add('tool-donut-twin');
+        wedge.addEventListener('mouseenter', () => { twin.style.opacity = '1'; wedge.style.opacity = '0.55'; });
+        wedge.addEventListener('mouseleave', () => { twin.style.opacity = '0'; wedge.style.opacity = '0.88'; });
+        svg.append(wedge, twin);
+      });
+      host.appendChild(svg);
+      if (animations && typeof animations.attachTooltip === 'function') {
+        svg.querySelectorAll('[data-tool]').forEach((wedge) => {
+          try { animations.attachTooltip(wedge, { placement: 'bottom' }); } catch (_) { /* the aria-label still says it */ }
         });
-        return;
       }
-
-      toolChart.data.labels = labels;
-      toolChart.data.datasets[0].data = values;
-      toolChart.data.datasets[0].backgroundColor = colors;
-      toolChart.update('none');
     }
 
     // Model bar chart

@@ -276,7 +276,9 @@ def test_tool_chart_legend_survives_a_missing_chart_library(tmp_path: Path) -> N
         "function formatTokenCount(value) { return String(value); }\n"
         "function t(key) { return key; }\n"
         "let toolChart = null;\n"
-        "const document = { getElementById: () => ({ getContext: () => ({}) }) };\n"
+        "const els = {};\n"
+        "const makeNode = () => { const attrs = {}; return { setAttribute(n, v) { attrs[n] = v; }, getAttribute(n) { return attrs[n] ?? null; }, replaceChildren() {}, append() {}, appendChild() {}, addEventListener() {}, removeEventListener() {}, classList: { add() {} }, style: {}, dataset: {} }; };\n"
+        "const document = { getElementById: (id) => (els[id] ||= Object.assign(makeNode(), { id, getContext: () => ({}) })), createElementNS: () => makeNode(), createDocumentFragment: () => ({ appendChild() {} }) };\n"
         + _extract_js_function(source, "function createChart(context, config) {")
         + "\n"
         + _extract_js_function(source, "function updateToolChart(byTool) {")
