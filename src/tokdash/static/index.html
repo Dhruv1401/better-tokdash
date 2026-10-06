@@ -1628,6 +1628,14 @@
     .overview-profile-legend .profile-activity-legend-bar:nth-child(5){height:11px;}
     .overview-profile-legend .profile-activity-legend-badge{padding:3px 6px;font-size:8px;}
     .overview-profile-legend .profile-milestone-toggle{gap:5px;padding-left:6px;font-size:9px;}
+    .overview-profile-board{display:flex;align-items:flex-end;column-gap:8px;}
+    .overview-profile-track{flex:1 1 auto;}
+    .overview-profile-day-labels{display:grid;flex:none;grid-template-rows:repeat(7,minmax(8px,1fr));gap:3.5px;color:var(--color-muted);font-size:9px;font-weight:650;line-height:1;}
+    .overview-profile-day-labels span{display:flex;align-items:center;justify-content:flex-end;min-width:17px;padding-right:1px;letter-spacing:.02em;}
+    .overview-profile-months{display:grid;grid-template-columns:repeat(52,minmax(8px,1fr));gap:3.5px;min-width:595px;margin-bottom:6px;color:var(--color-muted);font-size:10px;font-weight:650;line-height:1;white-space:nowrap;}
+    .overview-profile-months span{overflow:visible;letter-spacing:.02em;}
+    @keyframes tokdash-heatmap-reveal{from{opacity:0;}to{opacity:1;}}
+    .overview-profile-grid-wrap.is-reveal .overview-profile-cell,.overview-profile-grid-wrap.is-reveal .profile-activity-week-hit{animation:tokdash-heatmap-reveal .34s ease both;animation-delay:calc(var(--wave-i,0) * 1.1ms);}
     .overview-activity-insights{background:transparent;min-height:56px;margin-top:12px;color:var(--color-text);}
     .overview-activity-insights-values{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:0;border-top:1px solid color-mix(in srgb,var(--color-primary) 15%,var(--color-border));}
     .overview-activity-insight-kpi{--overview-insight-tone:var(--color-primary);position:relative;min-width:0;padding:10px 10px 2px;}.overview-activity-insight-kpi[data-tone="secondary"]{--overview-insight-tone:var(--color-secondary);}.overview-activity-insight-kpi[data-tone="cost"]{--overview-insight-tone:var(--color-cost);}.overview-activity-insight-kpi[data-tone="cta"]{--overview-insight-tone:var(--color-cta);}.overview-activity-insight-kpi+.overview-activity-insight-kpi::before{content:"";position:absolute;left:0;top:10px;bottom:2px;width:1px;background:var(--color-border);}
@@ -1638,6 +1646,7 @@
     @media(max-width:768px){.profile-activity-insights-kpis,.overview-activity-insights-values{grid-template-columns:repeat(2,minmax(0,1fr));}.profile-activity-insight-kpi:nth-child(3)::before,.overview-activity-insight-kpi:nth-child(3)::before{display:none;}.profile-activity-insights-detail{grid-template-columns:minmax(0,1fr);}}
     @media(max-width:520px){.overview-profile-band{padding:14px;}.overview-profile-copy h2{font-size:20px;}.overview-profile-metrics{gap:14px 20px;}}
     @media(prefers-reduced-motion:reduce){.tokdash-loading-placeholder:has(> .tokdash-loading-label)::after,.overview-profile-skeleton-metrics i,.overview-profile-skeleton-grid,.activity-insights-skeleton{animation:none;}.overview-profile-cell{transform:none!important;}.overview-profile-open,.overview-profile-open span:last-child{transition:none;}}
+    @media(prefers-reduced-motion:reduce){.overview-profile-grid-wrap.is-reveal .overview-profile-cell,.overview-profile-grid-wrap.is-reveal .profile-activity-week-hit{animation:none;}}
 
     .pricing-editor {
       width: 100%;
@@ -3814,9 +3823,15 @@
               </div>
             </div>
             <div id="overviewProfileScroller" class="overview-profile-scroll">
-              <div id="overviewProfileGridWrap" class="overview-profile-grid-wrap">
-                <div id="overviewProfileGrid" class="overview-profile-grid" role="grid" aria-label="Token activity"></div>
-                <div id="overviewProfileWeekHits" class="profile-activity-week-hits overview-profile-week-hits" hidden></div>
+              <div class="overview-profile-board">
+                <div id="overviewProfileDayLabels" class="overview-profile-day-labels" aria-hidden="true"></div>
+                <div class="overview-profile-track">
+                  <div id="overviewProfileMonths" class="overview-profile-months" aria-hidden="true"></div>
+                  <div id="overviewProfileGridWrap" class="overview-profile-grid-wrap">
+                    <div id="overviewProfileGrid" class="overview-profile-grid" role="grid" aria-label="Token activity"></div>
+                    <div id="overviewProfileWeekHits" class="profile-activity-week-hits overview-profile-week-hits" hidden></div>
+                  </div>
+                </div>
               </div>
               <div id="overviewProfileLegend" class="profile-activity-legend overview-profile-legend"></div>
             </div>
@@ -12905,6 +12920,7 @@
       if (typeof profileActivityMode !== 'undefined') {
         renderProfileActivityLegend('profileActivityLegend', profileActivityMode);
         renderProfileActivityLegend('overviewProfileLegend', profileActivityMode);
+        renderOverviewProfileCalendarChrome();
       }
       renderActivityInsights();
       renderOverviewActiveTime();
@@ -21950,6 +21966,106 @@
       overviewProfileDidInitialScroll = true;
     }
 
+    let overviewProfileWindowDays = [];
+    let overviewProfileLabelsResizeObserver = null;
+
+    function overviewProfileFocusIndex(days) {
+      let index = -1;
+      (Array.isArray(days) ? days : []).forEach((day, dayIndex) => {
+        if (day && !day.isFuture) index = dayIndex;
+      });
+      return index >= 0 ? index : 0;
+    }
+
+    function syncOverviewProfileDayLabelHeight() {
+      const labels = document.getElementById('overviewProfileDayLabels');
+      const grid = document.getElementById('overviewProfileGrid');
+      if (!labels || !grid) return;
+      const height = Math.round(grid.getBoundingClientRect().height);
+      if (height > 0) labels.style.height = `${height}px`;
+    }
+
+    // Month strip and weekday gutter for the overview heatmap: drawn from the same
+    // Monday-first window the cells come from, so the labels share the grid's
+    // 52-column rhythm instead of floating free above it.
+    function renderOverviewProfileCalendarChrome(days) {
+      if (Array.isArray(days)) overviewProfileWindowDays = days;
+      const windowDays = overviewProfileWindowDays;
+      const dayLabels = document.getElementById('overviewProfileDayLabels');
+      const months = document.getElementById('overviewProfileMonths');
+      if (!dayLabels || !months) return;
+      if (!windowDays.length) {
+        dayLabels.replaceChildren();
+        months.replaceChildren();
+        return;
+      }
+
+      const dayNames = getDayLabels();
+      const marked = new Set([0, 3, 6]); // Mon, Thu, Sun — the month view's markers
+      dayLabels.replaceChildren(...dayNames.map((name, index) => {
+        const item = document.createElement('span');
+        item.textContent = marked.has(index) ? name : '';
+        return item;
+      }));
+
+      const monthNames = getMonthLabels();
+      const runs = [];
+      windowDays.forEach((day, index) => {
+        if (index % 7 !== 0 || !day?.date) return;
+        const month = Number(day.date.slice(5, 7)) - 1;
+        const last = runs[runs.length - 1];
+        if (last && last.month === month) last.count += 1;
+        else runs.push({ month, count: 1 });
+      });
+      let column = 1;
+      months.replaceChildren(...runs.map((run) => {
+        const item = document.createElement('span');
+        item.textContent = monthNames[run.month] || '';
+        item.style.gridColumn = `${column} / span ${run.count}`;
+        column += run.count;
+        return item;
+      }));
+
+      // The band is still data-state="loading" while this runs, so the ready block
+      // measures zero; re-measure on the next frame once the renderer flips it.
+      requestAnimationFrame(syncOverviewProfileDayLabelHeight);
+      const grid = document.getElementById('overviewProfileGrid');
+      if (grid && !overviewProfileLabelsResizeObserver && typeof ResizeObserver === 'function') {
+        overviewProfileLabelsResizeObserver = new ResizeObserver(syncOverviewProfileDayLabelHeight);
+        overviewProfileLabelsResizeObserver.observe(grid);
+      }
+    }
+
+    // Roving focus over the daily cells: arrows step a day or a week, Home and End
+    // jump to the first and last recorded day, Escape dismisses the day tooltip.
+    function bindOverviewProfileGridNav(grid) {
+      if (!grid || grid.dataset.navBound === 'true') return;
+      grid.dataset.navBound = 'true';
+      grid.addEventListener('keydown', (event) => {
+        if (profileActivityMode !== 'daily') return;
+        if (event.key === 'Escape') {
+          hideProfileActivityTooltip();
+          return;
+        }
+        const cell = event.target instanceof Element ? event.target.closest('.overview-profile-cell') : null;
+        if (!cell || !grid.contains(cell)) return;
+        const cells = Array.from(grid.querySelectorAll('.overview-profile-cell:not([disabled])'));
+        const index = cells.indexOf(cell);
+        if (index < 0) return;
+        let next = -1;
+        if (event.key === 'ArrowUp') next = index - 1;
+        else if (event.key === 'ArrowDown') next = index + 1;
+        else if (event.key === 'ArrowLeft') next = index - 7;
+        else if (event.key === 'ArrowRight') next = index + 7;
+        else if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = cells.length - 1;
+        else return;
+        event.preventDefault();
+        const target = cells[next];
+        if (target && !target.disabled) target.focus();
+      });
+    }
+
     function renderOverviewProfilePreview(contributions = statsCache.default) {
       const grid = document.getElementById('overviewProfileGrid');
       const hits = document.getElementById('overviewProfileWeekHits');
@@ -21961,20 +22077,23 @@
         return;
       }
 
-      const { summary, cells, series } = buildOverviewProfilePreview(contributions, new Date(), profileActivityMode);
+      const { summary, cells, series, days } = buildOverviewProfilePreview(contributions, new Date(), profileActivityMode);
       document.getElementById('overviewProfileActiveDays').textContent = formatNumber(summary.activeDays || 0);
       document.getElementById('overviewProfileCurrentStreak').textContent = pluralDays(summary.currentStreak || 0);
       document.getElementById('overviewProfileLongestStreak').textContent = pluralDays(summary.longestStreak || 0);
       grid.style.setProperty('--profile-activity-empty', getProfileActivityColor(0));
       grid.style.setProperty('--profile-activity-strong', getProfileActivityColor(4));
+      const wrap = document.getElementById('overviewProfileGridWrap');
       document.getElementById('overviewProfileTooltip').hidden = true;
       grid.replaceChildren();
       hits.replaceChildren();
+      wrap?.classList.add('is-reveal');
 
-      cells.forEach((definition) => {
+      cells.forEach((definition, cellIndex) => {
         const cell = document.createElement(profileActivityMode === 'daily' ? 'button' : 'span');
         cell.className = 'profile-activity-cell overview-profile-cell';
         cell.setAttribute('role', 'gridcell');
+        cell.style.setProperty('--wave-i', String(cellIndex));
         if (profileActivityMode === 'daily') {
           cell.type = 'button';
           cell.style.background = getProfileActivityColor(definition.level);
@@ -21983,6 +22102,7 @@
             cell.setAttribute('aria-hidden', 'true');
           } else {
             applyProfileMilestone(cell, definition.milestone);
+            cell.tabIndex = cellIndex === overviewProfileFocusIndex(days) ? 0 : -1;
             cell.dataset.profileTooltipId = 'overviewProfileTooltip';
             const tooltip = formatProfileDayTooltip(definition.day, profileMilestonesEnabled);
             bindProfileActivityTooltip(cell, tooltip);
@@ -21995,6 +22115,8 @@
         grid.appendChild(cell);
       });
 
+      renderOverviewProfileCalendarChrome(days);
+      bindOverviewProfileGridNav(grid);
       hits.hidden = profileActivityMode === 'daily';
       if (profileActivityMode !== 'daily') {
         series.forEach((aggregate, weekIndex) => {
@@ -22007,6 +22129,7 @@
           );
           hit.type = 'button';
           hit.className = 'profile-activity-week-hit';
+          hit.style.setProperty('--wave-i', String(weekIndex * 7));
           hit.dataset.profileTooltipId = 'overviewProfileTooltip';
           applyProfileMilestone(hit, milestone);
           bindProfileActivityTooltip(hit, tooltip);
