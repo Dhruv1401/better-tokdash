@@ -92,10 +92,10 @@ def test_date_range_trigger_markup_and_localization_contract() -> None:
     assert source.count("selectRange: '") == 6
 
 
-def test_quick_ranges_use_progressive_disclosure_without_horizontal_scroll() -> None:
+def test_range_switcher_shows_every_preset_without_a_disclosure() -> None:
     source = INDEX_HTML.read_text(encoding="utf-8")
     rail_start = source.index('<div class="topbar-control-rail">')
-    quick_start = source.index("<!-- Quick Range Buttons -->")
+    quick_start = source.index("<!-- Range switcher: every preset is a segment")
     actions_start = source.index('<div class="topbar-actions">')
     tabs_start = source.index("<!-- Tabs -->")
     quick_markup = source[quick_start:actions_start]
@@ -104,22 +104,40 @@ def test_quick_ranges_use_progressive_disclosure_without_horizontal_scroll() -> 
     quick_css = source[quick_css_start:quick_css_end]
 
     assert rail_start < quick_start < actions_start < tabs_start
-    assert quick_markup.count('class="btn btn-ghost quick-range-btn"') == 10
-    assert quick_markup.index('data-range="lastMonth"') < quick_markup.index('id="quickRangeMoreToggle"')
-    assert quick_markup.index('id="quickRangeMoreToggle"') < quick_markup.index('data-range="last14days"')
-    assert 'id="quickRangeMoreMenu"' in quick_markup
-    assert 'data-i18n="moreRanges"' in quick_markup
-    assert '"quick quick"' in source
+    # Every preset is a segment of the one control, in one learned order.
+    assert quick_markup.count('class="range-switcher-segment"') == 10
+    assert quick_markup.index('data-range="today"') < quick_markup.index('data-range="last14days"')
+    assert quick_markup.index('data-range="last14days"') < quick_markup.index('data-range="lastYear"')
+    # The disclosure is gone outright: no toggle, no menu, no i18n key left
+    # on the markup for a second control to grow behind.
+    assert 'id="quickRangeMoreToggle"' not in quick_markup
+    assert 'id="quickRangeMoreMenu"' not in quick_markup
+    assert 'data-i18n="moreRanges"' not in quick_markup
+    assert 'data-range-switcher' in quick_markup
+    assert 'aria-labelledby="dateRangeControlLabel"' in quick_markup
+    # Without the bundle the row is still a complete working toolbar.
     assert "display: flex;" in source
-    assert "flex-wrap: nowrap;" in quick_css
-    assert "flex: 0 0 auto;" in source
+    assert "flex-wrap: wrap;" in quick_css
     assert "overflow: visible;" in quick_css
     assert "overflow-x: auto;" not in quick_css
-    assert "white-space: nowrap;" in source
-    assert quick_markup.count("data-quick-primary") == 6
-    assert "function syncQuickRangeLayout()" in source
-    assert "quickRangeMoreMenu.prepend(quickRangePrimaryButtons[index]);" in source
-    assert "new ResizeObserver(scheduleQuickRangeLayout).observe(quickRangePanel);" in source
+    # The switcher's visual layer: an absolutely-placed pill under the
+    # segments, sliding on the shared token clock, never scrolling.
+    assert ".range-switcher-indicator {" in quick_css
+    assert "position: absolute;" in quick_css
+    assert "--t-med" in quick_css
+    assert "z-index: 1;" in quick_css
+    assert "position: relative;" in quick_css
+    # Report chips stay plain: they wrap and carry no pill padding.
+    assert "#reportPeriodChips { flex-wrap: wrap; padding: 0; }" in source
+    # The slide belongs to the module, mounted by the init block - the app
+    # markup carries only the static, already-working control.
+    module = (
+        Path(tokdash.__file__).parent / "static" / "js" / "animations" / "range-switcher.js"
+    ).read_text(encoding="utf-8")
+    assert "export function mountRangeSwitcher(" in module
+    assert "export function syncRangeSwitcher(" in module
+    assert "export function rangeSwitcherState(" in module
+    assert "Animations.mountRangeSwitcher(document.getElementById('overviewQuickRanges'));" in source
 
 
 def test_date_range_state_sync_does_not_fetch() -> None:
@@ -133,9 +151,10 @@ def test_date_range_state_sync_does_not_fetch() -> None:
 
     assert "activeQuickRange || 'customRange'" in sync
     assert "formatDateRangeTriggerText(currentStartDate, currentEndDate)" in sync
-    assert "button.setAttribute('aria-pressed', String(isActive));" in sync
-    assert "moreToggle?.setAttribute('aria-pressed', String(isSecondaryActive));" in sync
-    assert "moreLabel.textContent = isSecondaryActive ? t(activeQuickRange) : t('moreRanges');" in sync
+    assert "document.querySelectorAll('.range-switcher-segment').forEach((segment) => {" in sync
+    assert "segment.setAttribute('aria-pressed', String(segment.dataset.range === activeQuickRange));" in sync
+    assert "animations.syncRangeSwitcher(document.getElementById('overviewQuickRanges'));" in sync
+    assert "moreRanges" not in sync
     # A trigger the CDN banner disabled keeps its failure reason as the title
     # (test_cdn_failure_frontend.py runs both branches).
     assert "trigger.setAttribute('title', t(trigger.disabled ? 'cdnFlatpickrFailed' : 'selectRange'));" in sync

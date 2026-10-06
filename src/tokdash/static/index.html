@@ -1004,104 +1004,106 @@
       transform: rotate(180deg);
     }
 
-    .quick-range-btn[aria-pressed="true"] {
-      border-color: color-mix(in srgb, var(--color-primary) 58%, var(--color-border));
-      background: color-mix(in srgb, var(--color-primary) 12%, transparent);
-      color: var(--color-primary);
-    }
-
+    /* One control, one track. Segments size to their labels and wrap as a row
+       of pills when the rail is narrow; the sliding indicator is visual only
+       and is added by range-switcher.js. A track that has wrapped only ever
+       needs its indicator re-placed, never its DOM rearranged. */
     .quick-range-panel {
       grid-area: quick;
       display: flex;
-      flex-wrap: nowrap;
+      flex-wrap: wrap;
       gap: 8px;
-      align-items: center;
+      align-items: stretch;
       width: 100%;
       min-width: 0;
       overflow: visible;
-      /* Centered at every width so the quick-range row reads as one balanced
-         block whether it sits under the picker (wide) or stacked (phone). */
+      /* Centered at every width so the range row reads as one balanced block
+         whether it sits beside the picker (wide) or stacked (phone). */
       justify-content: center;
     }
 
-    /* Mid widths: the rail sits beside the logo block, so a preset that no
-       longer fits got tucked into More even though the header had room.
-       Wrapping beats hiding when there is vertical space to spend. */
-    @media (min-width: 640px) and (max-width: 1279px) {
-      .quick-range-panel { flex-wrap: wrap; }
-    }
-
-    /* Report chips have no overflow menu; wrap them on narrow screens. */
-    #reportPeriodChips { flex-wrap: wrap; }
-
-    .quick-range-btn {
-      flex: 0 0 auto;
-      min-height: 32px;
-      padding: 4px 9px;
-      font-size: 12px;
-      white-space: nowrap;
-    }
-
-    .quick-range-more {
+    .range-switcher {
       position: relative;
-      flex: 0 0 auto;
-    }
-
-    .quick-range-more-trigger {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      min-height: 32px;
-      padding: 4px 9px;
-      font-size: 12px;
-    }
-
-    .quick-range-more-trigger[aria-pressed="true"] {
-      border-color: color-mix(in srgb, var(--color-primary) 58%, var(--color-border));
-      background: color-mix(in srgb, var(--color-primary) 12%, transparent);
-      color: var(--color-primary);
-    }
-
-    .quick-range-more-chevron {
-      flex: 0 0 auto;
-      transition: transform var(--t-fast) ease;
-    }
-
-    .quick-range-more-trigger[aria-expanded="true"] .quick-range-more-chevron {
-      transform: rotate(180deg);
-    }
-
-    .quick-range-more-menu {
-      position: absolute;
-      z-index: 80;
-      top: calc(100% + 7px);
-      right: 0;
-      display: grid;
-      min-width: 168px;
-      gap: 3px;
-      padding: 6px;
-      border: 1px solid color-mix(in srgb, var(--color-primary) 18%, var(--color-border));
       border-radius: 12px;
-      background: color-mix(in srgb, var(--color-surface-glass) 96%, var(--color-bg));
-      box-shadow: var(--shadow-md), 0 14px 34px color-mix(in srgb, var(--color-text) 13%, transparent);
-      backdrop-filter: blur(16px);
-      transform-origin: top right;
-      animation: quick-range-menu-in var(--t-fast) cubic-bezier(.16, 1, .3, 1);
+      padding: 3px;
     }
 
-    .quick-range-more-menu[hidden] { display: none; }
+    /* Report chips are period-steppers, not switcher segments: no pill, no
+       track padding, and the pressed vocabulary they always carried. */
+    #reportPeriodChips { flex-wrap: wrap; padding: 0; }
 
-    .quick-range-more-menu .quick-range-btn {
-      width: 100%;
-      justify-content: flex-start;
-      min-height: 34px;
-      border-color: transparent;
+    #reportPeriodChips .quick-range-btn {
+      flex: 0 0 auto;
+      min-height: 30px;
+      padding: 4px 10px;
+      font-size: 11.5px;
+      font-weight: 600;
+      border-radius: 8px;
+      white-space: nowrap;
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+    #reportPeriodChips .quick-range-btn[aria-pressed="true"] {
+      border-color: color-mix(in srgb, var(--color-primary) 58%, var(--color-border)) !important;
+      background: color-mix(in srgb, var(--color-primary) 12%, transparent) !important;
+      color: var(--color-primary) !important;
+    }
+
+    .range-switcher-indicator {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 0;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--color-text) 10%, transparent);
+      opacity: 0;
+      pointer-events: none;
+      transition:
+        transform var(--t-med) cubic-bezier(.16, 1, .3, 1),
+        width var(--t-med) cubic-bezier(.16, 1, .3, 1),
+        height var(--t-med) cubic-bezier(.16, 1, .3, 1);
+    }
+    .range-switcher[data-range-switcher="ready"] .range-switcher-indicator {
+      opacity: 1;
+    }
+
+    .range-switcher-segment {
+      position: relative;
+      z-index: 1;
+      flex: 0 0 auto;
+      min-height: 30px;
+      padding: 5px 10px;
+      font-size: 11.5px;
+      font-weight: 600;
+      white-space: nowrap;
+      color: #94a3b8;
       background: transparent;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: color 0.15s ease, background 0.15s ease;
     }
-
-    @keyframes quick-range-menu-in {
-      from { opacity: 0; transform: translateY(-3px) scale(.98); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
+    html:not(.dark) .range-switcher-segment {
+      color: #64748b;
+    }
+    .range-switcher-segment:hover {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.06);
+    }
+    html:not(.dark) .range-switcher-segment:hover {
+      color: #0f172a;
+      background: rgba(0, 0, 0, 0.05);
+    }
+    /* The pressed segment carries the row's own neutral vocabulary — ink on
+       the shared wash. The pill underneath is the same wash, so the arrival is
+       a place the selection moved to, not a style that switched on. */
+    .range-switcher-segment[aria-pressed="true"] {
+      color: var(--color-text) !important;
+      background: transparent !important;
+      font-weight: 750;
+    }
+    .range-switcher-segment:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--color-primary) 70%, transparent);
+      outline-offset: 2px;
     }
 
     .topbar-actions {
@@ -1290,7 +1292,6 @@
 
     @media (max-width: 640px) {
       .date-range-control { width: 100%; min-width: 0; }
-      .quick-range-more-menu { right: auto; left: 0; transform-origin: top left; }
       .settings-trigger>span { display: none; }
       .settings-trigger { width: 44px; padding-inline: 10px; }
       .overview-token-exact-tooltip { max-width: min(260px, calc(100vw - 40px)); overflow: hidden; text-overflow: ellipsis; }
@@ -1299,11 +1300,11 @@
     @media (prefers-reduced-motion: reduce) {
       .date-range-trigger,
       .date-range-chevron,
-      .quick-range-more-chevron,
+      .range-switcher-indicator,
+      .range-switcher-segment,
       .overview-readable-tokens-track,
       .overview-readable-tokens-track::after,
       .overview-token-exact-tooltip { transition: none; }
-      .quick-range-more-menu { animation: none; }
       .server-health-dot[data-state="testing"] { animation: none; }
     }
 
@@ -2791,32 +2792,36 @@
       border-color: transparent;
       box-shadow: none;
     }
-    .quick-range-btn {
-      border-radius: 7px;
+    /* The switcher track keeps its inset so the sliding pill has somewhere to
+       sit; the transparent-panel reset above is for chips and the bare row. */
+    .range-switcher.quick-range-panel {
+      padding: 3px;
+      border-radius: 12px;
+    }
+    .range-switcher-segment {
+      border-radius: 8px;
       font-size: 11.5px;
       font-weight: 600;
       padding: 4px 10px;
       min-height: 30px;
       color: #94a3b8;
-      border-color: transparent !important;
-      transition: all 0.15s ease;
+      transition: color 0.15s ease, background 0.15s ease;
     }
-    html:not(.dark) .quick-range-btn {
+    html:not(.dark) .range-switcher-segment {
       color: #64748b;
     }
-    .quick-range-btn:hover {
+    .range-switcher-segment:hover {
       color: #ffffff;
       background: rgba(255, 255, 255, 0.06);
     }
-    html:not(.dark) .quick-range-btn:hover {
+    html:not(.dark) .range-switcher-segment:hover {
       color: #0f172a;
       background: rgba(0, 0, 0, 0.05);
     }
-    /* Selected preset in the row's own neutral vocabulary — ink + wash, no hue.
-       The saturated indigo pill read as a foreign tab inside the control rail. */
-    .quick-range-btn[aria-pressed="true"] {
-      background: color-mix(in srgb, var(--color-text) 10%, transparent) !important;
-      border-color: transparent !important;
+    /* The pressed segment carries the row's own neutral vocabulary — ink + wash,
+       no hue. The saturated indigo pill read as a foreign tab inside the rail. */
+    .range-switcher-segment[aria-pressed="true"] {
+      background: transparent !important;
       color: var(--color-text) !important;
       font-weight: 750;
     }
@@ -3512,28 +3517,21 @@
         </div>
 
         <div class="topbar-control-rail">
-          <!-- Quick Range Buttons -->
-          <div class="quick-range-panel" id="overviewQuickRanges" role="toolbar" aria-labelledby="dateRangeControlLabel">
-            <button type="button" class="btn btn-ghost quick-range-btn" data-range="today" data-quick-primary aria-pressed="true" data-i18n="today">Today</button>
-            <button type="button" class="btn btn-ghost quick-range-btn" data-range="yesterday" data-quick-primary aria-pressed="false" data-i18n="yesterday">Yesterday</button>
-            <button type="button" class="btn btn-ghost quick-range-btn" data-range="last7days" data-quick-primary aria-pressed="false" data-i18n="last7days">Last 7 Days</button>
-            <button type="button" class="btn btn-ghost quick-range-btn" data-range="lastWeek" data-quick-primary aria-pressed="false" data-i18n="lastWeek">Last Week</button>
-            <button type="button" class="btn btn-ghost quick-range-btn" data-range="thisMonth" data-quick-primary aria-pressed="false" data-i18n="thisMonth">This Month</button>
-            <button type="button" class="btn btn-ghost quick-range-btn" data-range="lastMonth" data-quick-primary aria-pressed="false" data-i18n="lastMonth">Last Month</button>
-            <div class="quick-range-more">
-              <button id="quickRangeMoreToggle" type="button" class="btn btn-ghost quick-range-more-trigger" aria-expanded="false" aria-controls="quickRangeMoreMenu" aria-pressed="false">
-                <span id="quickRangeMoreLabel" data-i18n="moreRanges">More ranges</span>
-                <svg class="quick-range-more-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="m7 10 5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
-              <div id="quickRangeMoreMenu" class="quick-range-more-menu" role="group" aria-labelledby="quickRangeMoreLabel" hidden>
-                <button type="button" class="btn btn-ghost quick-range-btn" data-range="last14days" aria-pressed="false" data-i18n="last14days">Last 14 Days</button>
-                <button type="button" class="btn btn-ghost quick-range-btn" data-range="last4weeks" aria-pressed="false" data-i18n="last4weeks">Last 4 Weeks</button>
-                <button type="button" class="btn btn-ghost quick-range-btn" data-range="thisYear" aria-pressed="false" data-i18n="thisYear">This Year</button>
-                <button type="button" class="btn btn-ghost quick-range-btn" data-range="lastYear" aria-pressed="false" data-i18n="lastYear">Last Year</button>
-              </div>
-            </div>
+          <!-- Range switcher: every preset is a segment of one control; the
+               "More ranges" disclosure is gone and nothing hides behind it.
+               The sliding pill is added by range-switcher.js at mount; without
+               the bundle this is still a complete working row of buttons. -->
+          <div class="range-switcher quick-range-panel" id="overviewQuickRanges" data-range-switcher role="toolbar" aria-labelledby="dateRangeControlLabel">
+            <button type="button" class="range-switcher-segment" data-range="today" aria-pressed="true" data-i18n="today">Today</button>
+            <button type="button" class="range-switcher-segment" data-range="yesterday" aria-pressed="false" data-i18n="yesterday">Yesterday</button>
+            <button type="button" class="range-switcher-segment" data-range="last7days" aria-pressed="false" data-i18n="last7days">Last 7 Days</button>
+            <button type="button" class="range-switcher-segment" data-range="lastWeek" aria-pressed="false" data-i18n="lastWeek">Last Week</button>
+            <button type="button" class="range-switcher-segment" data-range="last14days" aria-pressed="false" data-i18n="last14days">Last 14 Days</button>
+            <button type="button" class="range-switcher-segment" data-range="last4weeks" aria-pressed="false" data-i18n="last4weeks">Last 4 Weeks</button>
+            <button type="button" class="range-switcher-segment" data-range="thisMonth" aria-pressed="false" data-i18n="thisMonth">This Month</button>
+            <button type="button" class="range-switcher-segment" data-range="lastMonth" aria-pressed="false" data-i18n="lastMonth">Last Month</button>
+            <button type="button" class="range-switcher-segment" data-range="thisYear" aria-pressed="false" data-i18n="thisYear">This Year</button>
+            <button type="button" class="range-switcher-segment" data-range="lastYear" aria-pressed="false" data-i18n="lastYear">Last Year</button>
           </div>
 
           <!-- Report window chips: the quick ranges step aside on the Report
@@ -12894,7 +12892,10 @@
       updateMetricControls();
       syncDatePickerFooter();
       syncDateRangeControl();
-      scheduleQuickRangeLayout();
+      { const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
+        if (animations && typeof animations.syncRangeSwitcher === 'function') {
+          animations.syncRangeSwitcher(document.getElementById('overviewQuickRanges'));
+        } }
       if (typeof profileActivityMode !== 'undefined') {
         renderProfileActivityLegend('profileActivityLegend', profileActivityMode);
         renderProfileActivityLegend('overviewProfileLegend', profileActivityMode);
@@ -13320,17 +13321,16 @@
       // A trigger the CDN banner disabled keeps saying why, through every
       // range change and language switch, instead of inviting a click.
       trigger.setAttribute('title', t(trigger.disabled ? 'cdnFlatpickrFailed' : 'selectRange'));
-      let isSecondaryActive = false;
-      document.querySelectorAll('.quick-range-btn').forEach((button) => {
-        const isActive = button.dataset.range === activeQuickRange;
-        button.setAttribute('aria-pressed', String(isActive));
-        if (isActive && button.closest('#quickRangeMoreMenu')) isSecondaryActive = true;
+      // One pressed state per segment; a custom window presses nothing.
+      // The switcher's pill is re-placed from this same state so the slide
+      // follows whatever the control actually says, on range commits and on
+      // language switches that change every label's width alike.
+      document.querySelectorAll('.range-switcher-segment').forEach((segment) => {
+        segment.setAttribute('aria-pressed', String(segment.dataset.range === activeQuickRange));
       });
-      const moreToggle = document.getElementById('quickRangeMoreToggle');
-      const moreLabel = document.getElementById('quickRangeMoreLabel');
-      moreToggle?.setAttribute('aria-pressed', String(isSecondaryActive));
-      if (moreLabel) {
-        moreLabel.textContent = isSecondaryActive ? t(activeQuickRange) : t('moreRanges');
+      const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
+      if (animations && typeof animations.syncRangeSwitcher === 'function') {
+        animations.syncRangeSwitcher(document.getElementById('overviewQuickRanges'));
       }
     }
 
@@ -13532,84 +13532,13 @@
       return { startDate, endDate };
     }
 
-    function setQuickRangeMoreOpen(isOpen, restoreFocus = false) {
-      const toggle = document.getElementById('quickRangeMoreToggle');
-      const menu = document.getElementById('quickRangeMoreMenu');
-      if (!toggle || !menu) return;
-      menu.hidden = !isOpen;
-      toggle.setAttribute('aria-expanded', String(isOpen));
-      if (!isOpen && restoreFocus) toggle.focus();
-    }
-
-    const quickRangeMore = document.querySelector('.quick-range-more');
-    const quickRangeMoreToggle = document.getElementById('quickRangeMoreToggle');
-    const quickRangeMoreMenu = document.getElementById('quickRangeMoreMenu');
-    const quickRangePanel = document.querySelector('.quick-range-panel');
-    const quickRangePrimaryButtons = Array.from(document.querySelectorAll('[data-quick-primary]'));
-    let quickRangeLayoutFrame = null;
-
-    function quickRangeRequiredWidth() {
-      if (!quickRangePanel) return 0;
-      const children = Array.from(quickRangePanel.children);
-      const styles = window.getComputedStyle(quickRangePanel);
-      const gap = Number.parseFloat(styles.columnGap || styles.gap) || 0;
-      return children.reduce((total, child) => total + child.offsetWidth, 0)
-        + Math.max(0, children.length - 1) * gap;
-    }
-
-    function syncQuickRangeLayout() {
-      if (!quickRangePanel || !quickRangeMore || !quickRangeMoreMenu) return;
-
-      // Start from the preferred desktop set, then progressively move the least
-      // important visible presets into the existing disclosure until one row fits.
-      quickRangePrimaryButtons.forEach((button) => {
-        quickRangePanel.insertBefore(button, quickRangeMore);
-      });
-      syncDateRangeControl();
-
-      // A wrapping row never hides presets — showing them all wins over
-      // single-row fit (see the 640–1279px flex-wrap rule).
-      if (window.getComputedStyle(quickRangePanel).flexWrap !== 'nowrap') return;
-
-      for (let index = quickRangePrimaryButtons.length - 1;
-        index > 0 && quickRangeRequiredWidth() > quickRangePanel.clientWidth;
-        index -= 1) {
-        quickRangeMoreMenu.prepend(quickRangePrimaryButtons[index]);
-        syncDateRangeControl();
-      }
-    }
-
-    function scheduleQuickRangeLayout() {
-      if (quickRangeLayoutFrame !== null) cancelAnimationFrame(quickRangeLayoutFrame);
-      quickRangeLayoutFrame = requestAnimationFrame(() => {
-        quickRangeLayoutFrame = null;
-        syncQuickRangeLayout();
-      });
-    }
-
-    if (quickRangePanel && typeof ResizeObserver === 'function') {
-      new ResizeObserver(scheduleQuickRangeLayout).observe(quickRangePanel);
-    } else {
-      window.addEventListener('resize', scheduleQuickRangeLayout, { passive: true });
-    }
-    document.fonts?.ready.then(scheduleQuickRangeLayout);
-
-    quickRangeMoreToggle?.addEventListener('click', () => {
-      setQuickRangeMoreOpen(Boolean(quickRangeMoreMenu?.hidden));
-    });
-    document.addEventListener('click', (event) => {
-      if (!quickRangeMoreMenu?.hidden && !quickRangeMore?.contains(event.target)) {
-        setQuickRangeMoreOpen(false);
-      }
-    });
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && !quickRangeMoreMenu?.hidden) {
-        setQuickRangeMoreOpen(false, true);
-      }
-    });
-
-    // Quick range buttons
-    document.querySelectorAll('.quick-range-btn').forEach(btn => {
+    // Quick range buttons: every preset is a segment of one range switcher —
+    // the "More ranges" disclosure and its width-driven re-layout are gone, so
+    // the DOM never rearranges and a preset is never somewhere the user did
+    // not learn it. The segments' own listener still commits; the bundle's
+    // mountRangeSwitcher adds the sliding pill, arrow-key navigation and the
+    // geometry tracking when it loads.
+    document.querySelectorAll('.range-switcher-segment').forEach(btn => {
       btn.addEventListener('click', function() {
         const range = this.getAttribute('data-range');
         const { startDate, endDate } = getQuickRangeDates(range);
@@ -13625,7 +13554,6 @@
           triggerPickerSync: true,
           rangeKey: range,
         });
-        if (this.closest('#quickRangeMoreMenu')) setQuickRangeMoreOpen(false, true);
       });
     });
 
@@ -24501,6 +24429,15 @@
           Animations.mountTooltips(document);
         }
       } catch (_) { /* the hints keep their native title if this throws */ }
+
+      try {
+        // The range switcher owns the topbar's preset row: one pill sliding
+        // between segments, arrow keys walking them, and geometry kept current
+        // as fonts and languages change the track's box.
+        if (typeof Animations.mountRangeSwitcher === 'function') {
+          Animations.mountRangeSwitcher(document.getElementById('overviewQuickRanges'));
+        }
+      } catch (_) { /* the row stays a plain working set of buttons */ }
 
       try {
         if (typeof Animations.mountThemeSwitcher === 'function') {
