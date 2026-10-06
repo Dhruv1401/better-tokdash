@@ -345,11 +345,18 @@
       position: relative;
       display: inline-flex;
     }
+    /* Body-level host for portalled panels. Deliberately unstyled beyond the class:
+       the panel inside it is position: fixed, and any transform, filter or
+       backdrop-filter here would become its containing block and re-anchor it. */
+    .popover-layer { display: contents; }
     .refresh-report {
-      position: absolute;
+      /* Placed by the popover primitive with a viewport transform, so it can flip
+         above the button and clamp inside a narrow window instead of hanging off
+         one corner of the control. */
+      position: fixed;
       z-index: 115;
-      top: calc(100% + 10px);
-      right: 0;
+      top: 0;
+      left: 0;
       width: min(390px, calc(100vw - 24px));
       padding: 15px;
       border: 1px solid color-mix(in srgb, var(--color-primary) 18%, var(--color-border));
@@ -358,10 +365,14 @@
       background: color-mix(in srgb, var(--color-surface-glass) 97%, var(--color-bg));
       box-shadow: var(--shadow-md), 0 18px 44px color-mix(in srgb, var(--color-text) 15%, transparent);
       backdrop-filter: blur(18px);
-      transform-origin: top right;
       animation: refresh-report-in var(--t-fast) cubic-bezier(.16, 1, .3, 1);
     }
     .refresh-report[hidden] { display: none; }
+    /* `data-placement` is how the popover marks a panel it has positioned. Until it
+       does — and for good if the animation bundle never loads, which is the normal
+       case when a CDN is unreachable — the report stays a card under the button it
+       belongs to instead of a card in the corner of the window. */
+    .refresh-report:not([data-placement]) { position: absolute; top: calc(100% + 10px); right: 0; left: auto; }
     .refresh-report-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; }
     .refresh-report-mark {
       display: grid;
@@ -440,9 +451,15 @@
       font-weight: 650;
       line-height: 1.45;
     }
+    /* Animates the independent `translate` property, never `transform`: the popover
+       places the panel with an inline transform, and an animation of the same
+       property outranks it, which dropped the panel at the viewport origin for the
+       length of the open. A scale here would compose after that placement, so the
+       panel would slide sideways as it grew instead of growing from the corner it is
+       anchored to; fading in while it rises keeps it on its anchor in every frame. */
     @keyframes refresh-report-in {
-      from { opacity: 0; transform: translateY(-4px) scale(.985); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
+      from { opacity: 0; translate: 0 -4px; }
+      to { opacity: 1; translate: 0 0; }
     }
     .refresh-icon-spin {
       animation: tokdash-spin 0.9s linear infinite;
@@ -706,11 +723,14 @@
     }
 
     @media (max-width: 640px) {
-      /* Anchoring the card to the narrow refresh button pushed its 366px body past
-         the viewport (right edge 403px at 390px width). Re-anchor to the full-width
-         header card instead, so the card spans it and its close button stays clear. */
+      /* The card used to re-anchor to the full-width header below 640px because a
+         366px body hung off the right edge of the narrow refresh button. The
+         popover now clamps it inside the viewport at any width, so the card keeps
+         its own width and this only holds the control in the header flow. A card
+         the popover has never placed still needs the old full-width treatment,
+         because 366px does not fit beside a narrow control. */
       .refresh-control { position: static; }
-      .refresh-report { left: 12px; right: 12px; width: auto; }
+      .refresh-report:not([data-placement]) { left: 12px; right: 12px; width: auto; }
     }
 
     .btn-ghost {
@@ -11395,6 +11415,47 @@
       return `${name}${sources}`;
     }
 
+    // The refresh report is a popover: its geometry, its dismissal and where focus
+    // goes belong to the animation bundle's primitive, while the panel's markup and
+    // the visible hidden/aria-expanded contract stay written here. The bundle loads
+    // asynchronously, so with no module the report still opens and closes — it just
+    // stays anchored to the control instead of being placed against the window.
+    let refreshReportPopover = null;
+
+    function refreshReportPopoverHandle() {
+      if (refreshReportPopover) return refreshReportPopover;
+      const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
+      const panel = document.getElementById('refreshReport');
+      const trigger = document.getElementById('refreshBtn');
+      if (!animations || typeof animations.attachPopover !== 'function' || !panel || !trigger) return null;
+      refreshReportPopover = animations.attachPopover(trigger, panel, {
+        placement: 'bottom',
+        align: 'end',
+        onClose: (closedPanel, reason) => {
+          // A keyboard dismissal is a deliberate one, so the five-minute refresh
+          // must not reopen the report for this range. Outside clicks and scrolling
+          // the button away are incidental and do not claim that.
+          if (reason === 'escape') refreshReportDismissedWindowKey = lastRefreshReport?.windowKey || null;
+        },
+      });
+      return refreshReportPopover;
+    }
+
+    // `focus` is only set for a refresh the user asked for: a report that arrives
+    // on its own is a live region and must not take the caret out of a field.
+    function openRefreshReportPopover({ focus = false } = {}) {
+      const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
+      const handle = refreshReportPopoverHandle();
+      if (!handle || typeof animations?.openPopover !== 'function') return;
+      animations.openPopover(handle, { focus });
+    }
+
+    function closeRefreshReportPopover({ restoreFocus = false } = {}) {
+      const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
+      if (!refreshReportPopover || typeof animations?.closePopover !== 'function') return;
+      animations.closePopover({ restoreFocus }, refreshReportPopover);
+    }
+
     function showUsageRefreshReport(report) {
       const panel = document.getElementById('refreshReport');
       if (!panel || !report) return;
@@ -11448,11 +11509,13 @@
       document.getElementById('refreshReportClose')?.setAttribute('aria-label', t('refreshReportClose'));
       panel.hidden = false;
       document.getElementById('refreshBtn')?.setAttribute('aria-expanded', 'true');
+      openRefreshReportPopover({ focus: !!report.forced });
     }
 
     function hideUsageRefreshReport({ focusButton = false, dismissed = false } = {}) {
       const panel = document.getElementById('refreshReport');
       if (panel) panel.hidden = true;
+      closeRefreshReportPopover({ restoreFocus: focusButton });
       // An explicit dismissal remains in effect for this range, so a background
       // refresh cannot reopen and re-announce the report every five minutes.
       if (dismissed) refreshReportDismissedWindowKey = lastRefreshReport?.windowKey || null;
