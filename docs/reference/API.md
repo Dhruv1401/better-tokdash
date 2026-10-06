@@ -41,8 +41,11 @@ per-session token); see [`docs/SECURITY.md`](../SECURITY.md) and `PUT /api/prici
 | `GET` | `/api/openclaw` | OpenClaw model breakdown |
 | `GET` | `/api/stats` | Annual stats aggregation |
 | `GET` | `/api/insights` | Fine-grained analytics (hour-of-day, weekday, heatmap, projects, streaks) |
+| `GET` | `/api/activity-insights` | Codex activity insights (cached per day) |
 | `GET` | `/api/pricing-db` | Current pricing database snapshot |
 | `PUT` | `/api/pricing-db` | Update the pricing database (write-gated, requires token) |
+| `GET` | `/manifest.webmanifest` | PWA web manifest |
+| `GET` | `/sw.js` | Service worker JavaScript |
 | `GET` | `/` | Web dashboard (HTML) |
 
 ---
@@ -981,6 +984,70 @@ echo "[$MODEL] 📁 ${DIR##*/}${TOKDASH_STR}"
 - The `📊 ...` segment is omitted entirely when tokdash returns nothing — no error noise in the status bar.
 - For per-tool detail, swap in `.by_tool.claude.tokens` or similar from the same response.
 - For weekly/monthly totals, change `period=today` to `period=week` or `period=month`.
+
+---
+
+## PWA endpoints
+
+### `GET /manifest.webmanifest`
+
+Returns the PWA web manifest for installing Tokdash as a progressive web app.
+
+**Parameters:** None
+
+**Response:** `application/manifest+json`
+
+```json
+{
+  "name": "Tokdash",
+  "short_name": "Tokdash",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1a1a2e",
+  "theme_color": "#16213e"
+}
+```
+
+### `GET /sw.js`
+
+Returns the service worker JavaScript for offline caching and PWA functionality.
+
+**Parameters:** None
+
+**Response:** `application/javascript`
+
+---
+
+## Activity insights
+
+### `GET /api/activity-insights`
+
+Returns Codex activity insights derived from usage data. Results are cached per day.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `refresh` | `bool` | `false` | Force a fresh computation, bypassing the daily cache |
+
+**Response:** `application/json`
+
+```json
+{
+  "period": "today",
+  "total_tokens": 1234567,
+  "total_cost": 12.34,
+  "by_tool": {
+    "codex": {
+      "tokens": 1234567,
+      "cost": 12.34,
+      "messages": 42
+    }
+  }
+}
+```
+
+**Caching:** Uses `ACTIVITY_INSIGHTS_CACHE_KEY` with a day-scoped key. Pass `refresh=true` to bypass.
 
 ---
 
