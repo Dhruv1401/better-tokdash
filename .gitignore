@@ -34,9 +34,6 @@ Thumbs.db
 # Logs
 *.log
 
-# Linter caches
-.ruff_cache/
-
 # Secrets
 .api_keys/
 .env

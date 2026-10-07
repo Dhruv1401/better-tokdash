@@ -25,5 +25,4 @@
 ## Checklist
 
 - [ ] Localized READMEs updated if the change affects user-facing text
-- [ ] Changelog entry added if the change is notable
 - [ ] No new dependencies added (or justified in description)
