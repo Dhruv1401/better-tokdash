@@ -168,14 +168,11 @@ process.stdout.write(JSON.stringify({
 }));
 """
 
-# Every library present and the Flatpickr stylesheet's load flag set: the
-# baseline each banner test removes one thing from.
+# Every library present: the baseline each banner test removes one thing from.
 _ALL_LOADED = (
     "window.tailwind = {};\n"
     "globalThis.Chart = function Chart() {};\n"
     "globalThis.THREE = {};\n"
-    "globalThis.flatpickr = function flatpickr() {};\n"
-    "window.__tokdashFlatpickrCssLoaded = true;\n"
 )
 
 
@@ -183,18 +180,6 @@ def _run_banner(tmp_path: Path, name: str, setup: str) -> dict:
     """Run the real banner script against the stub DOM, then fire DOMContentLoaded."""
     script = _BANNER_DOM + setup + "\n" + _banner_script(_source()) + "\n" + _BANNER_REPORT
     return json.loads(_run_js(tmp_path, name, script))
-
-
-def _flatpickr_css_onload(source: str) -> str:
-    """The code the Flatpickr stylesheet link runs when it loads."""
-    link = re.search(r"<link[^>]*flatpickr\.min\.css[^>]*>", source)
-    assert link, "the Flatpickr stylesheet link not found"
-    onload = re.search(r'onload="([^"]+)"', link.group(0))
-    assert onload, (
-        "the stylesheet link must record a load flag, or a CSS-only CDN failure "
-        "is undetectable"
-    )
-    return onload.group(1)
 
 
 # --------------------------------------------------------------------------
@@ -334,18 +319,52 @@ def test_quota_charts_survive_a_missing_chart_library(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# Flatpickr: the quick ranges are the control that still works without it
+# The date range picker is the app's own, so no CDN can take it away
 # --------------------------------------------------------------------------
 
 
-@needs_node
-def test_quick_ranges_commit_without_flatpickr(tmp_path: Path) -> None:
-    """"Last 7 Days" must still fetch data when the picker failed to load.
+def test_the_date_picker_has_no_cdn_dependency() -> None:
+    """The calendar is drawn by the app now: no library, and no failure mode.
 
-    The handler used to wrap commitDateSelection in `if (flatpickrInstance)`,
-    so with the CDN blocked every quick range was a dead button: no request, and
-    the label stuck on whatever it said before. commitDateSelection already
-    no-ops its two picker-only steps, so the wrapper bought nothing.
+    It used to arrive from a CDN, and a blocked CDN disabled the trigger — the
+    one control every number on this dashboard is measured against.
+    """
+    source = _source()
+    assert "flatpickr" not in source, (
+        "no flatpickr reference may remain: the picker is the app's own now"
+    )
+    assert "tokdash-datepicker-unavailable" not in source
+    checks = source[source.index("const CDN_CHECKS = [") :]
+    checks = checks[: checks.index("];")]
+    assert "cdnFlatpickrFailed" not in checks, (
+        "a picker that cannot fail to load needs no CDN notice"
+    )
+    module = (
+        Path(tokdash.__file__).parent
+        / "static"
+        / "js"
+        / "animations"
+        / "date-range-picker.js"
+    ).read_text(encoding="utf-8")
+    assert "export function mountDateRangeControl(" in module
+    assert "export function syncDateRangePicker(" in module
+    assert "export function dateRangePickerState(" in module
+    assert "from './popover.js'" in module, (
+        "the panel is presented by the popover primitive, not by the picker"
+    )
+    assert "mountDateRangeControl(dateControl" in source, (
+        "the rail's control must be the one the module mounts"
+    )
+
+
+@needs_node
+def test_quick_ranges_commit_without_a_picker_at_all(tmp_path: Path) -> None:
+    """"Last 7 Days" must fetch data on its own, with no picker in the way.
+
+    The handler used to wrap commitDateSelection in `if (flatpickrInstance)`, so
+    a blocked CDN left every preset a dead button: no request, and the label
+    stuck on whatever it said before. The presets commit unconditionally, and a
+    missing picker changes nothing about that.
     """
     source = _source()
     handler_start = source.find("// Quick range buttons")
@@ -362,16 +381,14 @@ def test_quick_ranges_commit_without_flatpickr(tmp_path: Path) -> None:
         "  getAttribute(name) { return name === 'data-range' ? this.range : null; },\n"
         "  closest() { return null; },\n"
         "}));\n"
-        "const document = { querySelectorAll: () => buttons };\n"
-        "let flatpickrInstance = null;\n"
+        "const document = { querySelectorAll: () => buttons, getElementById: () => null };\n"
         "let currentStartDate = null, currentEndDate = null;\n"
         "let pendingStartDate = null, pendingEndDate = null, activeQuickRange = null;\n"
-        "let isSyncingDatePicker = false, isCommittingDatePicker = false;\n"
         "function cloneDate(date) { return new Date(date.getTime()); }\n"
         "function ymd(date) { return date.toISOString().slice(0, 10); }\n"
-        "function syncDatePickerFooter() {}\n"
         "function syncDateRangeControl() {}\n"
-        "function setQuickRangeMoreOpen() {}\n"
+        "function animationsApi() { return null; }\n"
+        "function dateRangeControlEl() { return null; }\n"
         "function updateDashboardByDateRange(start, end) {"
         " clicks.push([ymd(start), ymd(end)]); }\n"
         + _extract_js_function(source, "function commitDateSelection(startDate, endDate, options = {}) {")
@@ -386,8 +403,7 @@ def test_quick_ranges_commit_without_flatpickr(tmp_path: Path) -> None:
     out = json.loads(_run_js(tmp_path, "quick_ranges", script))
 
     assert len(out["clicks"]) == 3, (
-        "every quick range must request data without flatpickr, got "
-        f"{out['clicks']}"
+        f"every quick range must request data, got {out['clicks']}"
     )
     assert out["clicks"][0][0] == out["clicks"][0][1], "today must be a single day"
     assert out["clicks"][1][0] == out["clicks"][1][1], "yesterday must be a single day"
@@ -396,132 +412,48 @@ def test_quick_ranges_commit_without_flatpickr(tmp_path: Path) -> None:
 
 
 @needs_node
-def test_flatpickr_stylesheet_failure_is_actually_detectable(tmp_path: Path) -> None:
-    """The link's own onload code is what tells the check the CSS arrived.
-
-    A <link rel="stylesheet"> that fails to load still appears in
-    document.styleSheets carrying its href, so an href sniff always passes and
-    the notice never fires for the CSS-only failure. The link records a load
-    flag instead. Running the link's real onload code, then the real check,
-    ties the two together: a renamed flag on either side shows the warning on
-    every normal load, and a check that cannot fire misses the failure.
-    """
-    onload = _flatpickr_css_onload(_source())
-    loaded_setup = _ALL_LOADED.replace("window.__tokdashFlatpickrCssLoaded = true;\n", "")
-
-    loaded = _run_banner(tmp_path, "flatpickr_css_loaded", loaded_setup + onload + ";\n")
-    failed = _run_banner(tmp_path, "flatpickr_css_failed", loaded_setup)
-
-    assert loaded["threw"] is None and failed["threw"] is None
-    assert loaded["cards"] == [], (
-        "a stylesheet that ran its onload must not be reported as failed, got "
-        f"{[card['key'] for card in loaded['cards']]}"
-    )
-    assert [card["key"] for card in failed["cards"]] == ["cdnFlatpickrFailed"], (
-        "a stylesheet that never loaded must be reported"
-    )
-
-
-@needs_node
-def test_a_failed_date_picker_is_disabled_rather_than_left_dead(tmp_path: Path) -> None:
-    """Script or stylesheet missing: hide the calendar and disable its trigger.
-
-    Without the stylesheet the calendar is an unstyled block left static in the
-    body's flex row (a 528x6451px column at 1400x900, the whole viewport on a
-    phone); without the script the trigger opens nothing. Either way the page
-    marks the picker unavailable, and the trigger says why instead of inviting
-    a click. With both loaded, nothing about the trigger changes.
-    """
-    setup = "function t(key) { return 'T:' + key; }\n"
-    no_css = _run_banner(
-        tmp_path,
-        "picker_no_css",
-        setup + _ALL_LOADED.replace("window.__tokdashFlatpickrCssLoaded = true;\n", ""),
-    )
-    no_script = _run_banner(
-        tmp_path,
-        "picker_no_script",
-        setup + _ALL_LOADED.replace("globalThis.flatpickr = function flatpickr() {};\n", ""),
-    )
-    healthy = _run_banner(tmp_path, "picker_healthy", setup + _ALL_LOADED)
-
-    for name, out in (("stylesheet", no_css), ("script", no_script)):
-        assert out["threw"] is None, f"missing {name}: the banner threw {out['threw']}"
-        assert "tokdash-datepicker-unavailable" in out["htmlClasses"], (
-            f"missing {name}: the calendar must be hidden"
-        )
-        assert out["trigger"] == {
-            "disabled": True,
-            "haspopup": None,
-            "title": "T:cdnFlatpickrFailed",
-        }, f"missing {name}: the trigger must be disabled and say why, got {out['trigger']}"
-
-    assert healthy["htmlClasses"] == []
-    assert healthy["trigger"] == {"disabled": False, "haspopup": "dialog", "title": None}
-
-    rule = re.search(
-        r"\.tokdash-datepicker-unavailable\s+\.flatpickr-calendar\s*\{([^}]*)\}", _source()
-    )
-    assert rule and re.search(r"display:\s*none", rule.group(1)), (
-        "the unavailable class must actually hide the calendar"
-    )
-
-
-@needs_node
-def test_the_disabled_date_trigger_keeps_its_reason(tmp_path: Path) -> None:
-    """syncDateRangeControl rewrites the trigger's title on every range change
-    and language switch, so it must not put back "select a range" on a trigger
-    that cannot open."""
-    source = _source()
-    script = (
-        "function t(key) { return 'T:' + key; }\n"
-        "const els = {\n"
-        "  dateRangeTrigger: { disabled: false, attrs: {},"
-        " setAttribute(name, value) { this.attrs[name] = value; } },\n"
-        "  dateRangePresetLabel: { textContent: '' },\n"
-        "  dateRangeExactLabel: { textContent: '' },\n"
-        "};\n"
-        "const document = { getElementById: (id) => els[id] || null, querySelectorAll: () => [] };\n"
-        "let activeQuickRange = 'today', currentStartDate = null, currentEndDate = null;\n"
-        "function formatDateRangeTriggerText() { return ''; }\n"
-        + _extract_js_function(source, "function syncDateRangeControl() {")
-        + "\n"
-        + "syncDateRangeControl();\n"
-        + "const enabledTitle = els.dateRangeTrigger.attrs.title;\n"
-        + "els.dateRangeTrigger.disabled = true;\n"
-        + "syncDateRangeControl();\n"
-        + "process.stdout.write(JSON.stringify({ enabledTitle,"
-        " disabledTitle: els.dateRangeTrigger.attrs.title }));\n"
-    )
-    out = json.loads(_run_js(tmp_path, "trigger_title", script))
-
-    assert out["enabledTitle"] == "T:selectRange"
-    assert out["disabledTitle"] == "T:cdnFlatpickrFailed"
-
-
-@needs_node
-def test_date_picker_init_survives_a_missing_flatpickr(tmp_path: Path) -> None:
-    """initDateRangePicker is a top-level call in the main script; a throw here
-    used to take the initial data load down with it."""
+def test_date_picker_init_survives_a_missing_animation_bundle(tmp_path: Path) -> None:
+    """initDateRangePicker is a top-level call in the main script: a throw here
+    takes the initial data load down with it. Without the bundle it must bind the
+    plain disclosure instead, so the trigger still opens the calendar it shows."""
     source = _source()
     script = (
         "console.error = () => {};\n"
-        "const handlers = {};\n"
-        "const document = { getElementById: (id) => ({ id,"
-        " addEventListener(type, fn) { handlers[id + ':' + type] = fn; } }) };\n"
-        "let flatpickrInstance = null;\n"
+        "const els = {};\n"
+        "const make = (id) => (els[id] ||= { id, hidden: true, dataset: {}, attrs: {},\n"
+        "  setAttribute(n, v) { this.attrs[n] = String(v); },\n"
+        "  getAttribute(n) { return this.attrs[n] ?? null; },\n"
+        "  addEventListener(type, fn) { this['on' + type] = fn; } });\n"
+        "const document = { getElementById: (id) => make(id) };\n"
+        "let dateRangePickerFallbackBound = false;\n"
+        + _extract_js_function(source, "function animationsApi() {")
+        + "\n"
+        + _extract_js_function(source, "function dateRangeControlEl() {")
+        + "\n"
         + _extract_js_function(source, "function initDateRangePicker() {")
         + "\n"
-        + "let threw = null;\n"
-        + "try { initDateRangePicker(); handlers['dateRangeTrigger:click'](); }"
-        " catch (err) { threw = String(err); }\n"
-        + "process.stdout.write(JSON.stringify({ threw,"
-        " instanceIsNull: flatpickrInstance === null }));\n"
+        "let threw = null;\n"
+        "try { initDateRangePicker(); } catch (err) { threw = String(err); }\n"
+        "const panel = make('dateRangePanel');\n"
+        "const trigger = make('dateRangeTrigger');\n"
+        "const opened = { hidden: panel.hidden, expanded: trigger.getAttribute('aria-expanded') };\n"
+        "trigger.onclick();\n"
+        "const afterFirst = { hidden: panel.hidden, expanded: trigger.getAttribute('aria-expanded') };\n"
+        "trigger.onclick();\n"
+        "process.stdout.write(JSON.stringify({ threw, opened, afterFirst, afterSecond: panel.hidden }));\n"
     )
     out = json.loads(_run_js(tmp_path, "picker_init", script))
 
-    assert out["threw"] is None, f"initDateRangePicker threw without flatpickr: {out['threw']}"
-    assert out["instanceIsNull"]
+    assert out["threw"] is None, f"initDateRangePicker threw without the bundle: {out['threw']}"
+    assert out["opened"] == {"hidden": True, "expanded": None}, (
+        "the panel must start closed and unannounced"
+    )
+    assert out["afterFirst"] == {"hidden": False, "expanded": "true"}, (
+        "without the bundle the trigger is still a disclosure"
+    )
+    assert out["afterSecond"] is True, "and it closes again"
+
+
 
 
 # --------------------------------------------------------------------------
@@ -540,8 +472,6 @@ def test_one_failed_notice_cannot_silence_the_others(tmp_path: Path) -> None:
     """
     setup = (
         "function t(key) { return 'T:' + key; }\n"
-        "globalThis.flatpickr = function flatpickr() {};\n"
-        "window.__tokdashFlatpickrCssLoaded = true;\n"
         "createFailures = 1;\n"
     )
     out = _run_banner(tmp_path, "isolated_notices", setup)
@@ -637,11 +567,12 @@ def test_every_locale_carries_the_cdn_keys() -> None:
     this guards against the keys being dropped from the object entirely.
     """
     source = _source()
+    # No cdnFlatpickrFailed: the date range picker is the app's own now, so it is
+    # not one of the things a CDN can take away.
     for key in (
         "cdnTailwindFailed",
         "cdnChartFailed",
         "cdnThreeFailed",
-        "cdnFlatpickrFailed",
         "cdnFontsFailed",
     ):
         assert source.count(f"{key}:") == 6, f"{key} must exist in all six locales"

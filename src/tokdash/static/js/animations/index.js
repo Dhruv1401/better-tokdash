@@ -22,3 +22,4 @@ export * from './slot-text.js';
 export * from './animated-counter.js';
 export * from './range-switcher.js';
 export * from './search-field.js';
+export * from './date-range-picker.js';

@@ -34,13 +34,8 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 
-  <!-- Flatpickr Date Picker. The stylesheet link sets a flag when it loads:
-       a link that fails to load still appears in document.styleSheets with its
-       href, so the CDN banner cannot detect the failure by inspecting sheets.
-       The load event is the only positive evidence the CSS arrived, and it has
-       always fired by the time the banner checks at DOMContentLoaded. -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css" onload="window.__tokdashFlatpickrCssLoaded = true">
-  <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
+  <!-- The date range picker is the app's own (js/animations/date-range-picker.js),
+       so a blocked CDN can no longer take the range control away with it. -->
 
   <style>
     :root {
@@ -376,6 +371,186 @@
        case when a CDN is unreachable — the report stays a card under the button it
        belongs to instead of a card in the corner of the window. */
     .refresh-report:not([data-placement]) { position: absolute; top: calc(100% + 10px); right: 0; left: auto; }
+    /* Visually hidden, but still a name: the calendar's arrows and any other
+       icon-only control in the rail take their accessible name from real text
+       rather than a title, which a reader may never announce. */
+    .vh-label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    /* The rail's calendar. Same panel vocabulary as the refresh report — one
+       body-level layer, one fixed position, one entry — because it is the same
+       kind of thing: a control's own panel. The grid inside is drawn in the
+       --datepickr-* palette this app already carries for a calendar surface, so
+       the picker reads as Tokdash in every theme rather than as a library. */
+    .date-range-panel {
+      position: fixed;
+      z-index: 115;
+      top: 0;
+      left: 0;
+      width: min(324px, calc(100vw - 24px));
+      padding: 12px;
+      border: 1px solid color-mix(in srgb, var(--color-primary) 18%, var(--color-border));
+      border-radius: 16px;
+      color: var(--color-text);
+      background: color-mix(in srgb, var(--datepickr-panel-bg) 97%, var(--color-bg));
+      box-shadow: var(--shadow-md), 0 18px 44px color-mix(in srgb, var(--color-text) 15%, transparent);
+      backdrop-filter: blur(18px);
+      animation: refresh-report-in var(--t-fast) cubic-bezier(.16, 1, .3, 1);
+    }
+    .date-range-panel[hidden] { display: none; }
+    /* Until the popover marks the panel as placed — and for good when the bundle
+       never loads — it belongs under the control that opened it. */
+    .date-range-panel:not([data-placement]) { position: absolute; top: calc(100% + 10px); left: 0; right: auto; }
+    .date-range-panel-head {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .date-range-panel-title {
+      text-align: center;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+    .date-range-nav {
+      position: relative;
+      display: grid;
+      width: 26px;
+      height: 26px;
+      place-items: center;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--color-muted);
+      cursor: pointer;
+      transition: color var(--t-fast) ease, background var(--t-fast) ease, border-color var(--t-fast) ease;
+    }
+    .date-range-nav:hover {
+      border-color: color-mix(in srgb, var(--color-primary) 26%, var(--color-border));
+      background: color-mix(in srgb, var(--color-text) 8%, transparent);
+      color: var(--color-text);
+    }
+    .date-range-nav:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--color-primary) 70%, transparent);
+      outline-offset: 2px;
+    }
+    .date-range-nav svg {
+      width: 14px;
+      height: 14px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .date-range-weekdays,
+    .date-range-days {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 2px;
+    }
+    .date-range-weekday {
+      display: grid;
+      place-items: center;
+      padding: 2px 0 4px;
+      color: var(--datepickr-weekday-fg);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .date-range-day {
+      display: grid;
+      min-height: 30px;
+      place-items: center;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--color-text);
+      font: 600 12px/1 "Fira Code", ui-monospace, monospace;
+      cursor: pointer;
+      transition: background var(--t-fast) ease, border-color var(--t-fast) ease, color var(--t-fast) ease, transform var(--t-fast) ease;
+    }
+    .date-range-day:hover {
+      border-color: var(--datepickr-day-hover-border);
+      background: var(--datepickr-day-hover-bg);
+    }
+    .date-range-day.is-outside {
+      color: color-mix(in srgb, var(--color-muted) 55%, transparent);
+    }
+    .date-range-day.is-today {
+      border-color: color-mix(in srgb, var(--datepickr-day-today-border) 60%, transparent);
+      background: var(--datepickr-day-today-bg);
+    }
+    /* The span between the two endpoints is a wash, not a second selection: the
+       endpoints are the decision, everything between them is its consequence. */
+    .date-range-day.is-in-range {
+      border-color: transparent;
+      border-radius: 6px;
+      background: var(--datepickr-day-range-bg);
+      color: var(--datepickr-day-range-fg);
+    }
+    .date-range-day.is-start,
+    .date-range-day.is-end {
+      border-color: color-mix(in srgb, var(--color-primary) 62%, var(--color-border));
+      background: var(--datepickr-day-selected-bg);
+      color: var(--datepickr-day-selected-fg);
+      font-weight: 800;
+    }
+    .date-range-day:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--color-primary) 70%, transparent);
+      outline-offset: 1px;
+    }
+    .date-range-day:active { transform: scale(.96); }
+    .date-range-panel-foot {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--datepickr-footer-border);
+    }
+    .date-range-summary {
+      color: var(--datepickr-summary-fg);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+    .date-range-panel-actions {
+      display: inline-flex;
+      flex: 0 0 auto;
+      gap: 6px;
+      align-items: center;
+    }
+    .date-range-panel .btn {
+      min-height: 32px;
+      padding: 5px 11px;
+      border-radius: 8px;
+      font-size: 11.5px;
+    }
+    /* The trigger is one control with the presets beside it, so an open picker
+       marks the trigger the way the switcher marks the segment it is showing. */
+    .date-range-trigger[aria-expanded="true"] {
+      border-color: color-mix(in srgb, var(--color-primary) 34%, var(--color-border));
+      background: color-mix(in srgb, var(--color-text) 6%, transparent);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .date-range-panel { animation: none; }
+      .date-range-day:active { transform: none; }
+    }
     .refresh-report-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; }
     .refresh-report-mark {
       display: grid;
@@ -936,13 +1111,6 @@
       min-width: min(240px, 100%);
     }
 
-    .date-range-native-input {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      opacity: 0;
-      pointer-events: none;
-    }
 
     .date-range-trigger {
       width: 100%;
@@ -2031,198 +2199,6 @@
     html.dark .hover\:bg-slate-50:hover { background-color: rgba(51, 65, 85, 0.3); }
     html.dark .border-b { border-color: #334155; }
 
-    /* Without flatpickr.min.css the calendar loses its position:absolute and its
-       closed-state hiding, and sits static in the body's flex row. The CDN
-       banner sets this class when the stylesheet (or the script) failed. */
-    .tokdash-datepicker-unavailable .flatpickr-calendar {
-      display: none !important;
-    }
-
-    /* Flatpickr Custom Styles */
-    .flatpickr-calendar {
-      background: var(--datepickr-panel-bg);
-      border: 1px solid var(--datepickr-panel-border);
-      border-radius: var(--datepickr-radius);
-      box-shadow: var(--shadow-lg);
-      font-family: "Fira Sans", sans-serif;
-      overflow: hidden;
-    }
-
-    .flatpickr-months {
-      background: var(--datepickr-header-bg);
-      border-radius: var(--datepickr-radius) var(--datepickr-radius) 0 0;
-      padding: 12px;
-    }
-
-    .flatpickr-current-month {
-      color: var(--datepickr-header-fg);
-      font-weight: 600;
-    }
-
-    .flatpickr-prev-month, .flatpickr-next-month {
-      fill: var(--datepickr-header-fg);
-    }
-
-    .flatpickr-prev-month:hover, .flatpickr-next-month:hover {
-      fill: color-mix(in srgb, var(--datepickr-header-fg) 82%, transparent);
-    }
-
-    .flatpickr-day {
-      border-radius: var(--datepickr-day-radius);
-      font-weight: 500;
-      transition: all var(--t-fast) ease;
-      color: var(--datepickr-day-fg);
-    }
-
-    .flatpickr-day:hover,
-    .flatpickr-day:focus {
-      background: var(--datepickr-day-hover-bg);
-      border-color: var(--datepickr-day-hover-border);
-      outline: none;
-    }
-
-    .flatpickr-day.selected,
-    .flatpickr-day.startRange,
-    .flatpickr-day.endRange,
-    .flatpickr-day.selected.inRange,
-    .flatpickr-day.startRange.inRange,
-    .flatpickr-day.endRange.inRange,
-    .flatpickr-day.selected:hover,
-    .flatpickr-day.startRange:hover,
-    .flatpickr-day.endRange:hover,
-    .flatpickr-day.selected:focus,
-    .flatpickr-day.startRange:focus,
-    .flatpickr-day.endRange:focus {
-      background: var(--datepickr-day-selected-bg);
-      border-color: var(--datepickr-day-selected-bg);
-      color: var(--datepickr-day-selected-fg);
-      box-shadow: none;
-    }
-
-    .flatpickr-day.inRange {
-      background: var(--datepickr-day-range-bg);
-      border-color: transparent;
-      box-shadow:
-        calc(-1 * var(--datepickr-range-join-size)) 0 0 var(--datepickr-day-range-bg),
-        var(--datepickr-range-join-size) 0 0 var(--datepickr-day-range-bg);
-      color: var(--datepickr-day-range-fg);
-    }
-
-    .flatpickr-day.inRange:hover,
-    .flatpickr-day.inRange:focus,
-    .flatpickr-day.today.inRange,
-    .flatpickr-day.today.inRange:hover,
-    .flatpickr-day.today.inRange:focus {
-      background: var(--datepickr-day-range-bg);
-      border-color: transparent;
-      box-shadow:
-        calc(-1 * var(--datepickr-range-join-size)) 0 0 var(--datepickr-day-range-bg),
-        var(--datepickr-range-join-size) 0 0 var(--datepickr-day-range-bg);
-      color: var(--datepickr-day-range-fg);
-    }
-
-    .flatpickr-day.selected.startRange,
-    .flatpickr-day.startRange.startRange,
-    .flatpickr-day.endRange.startRange {
-      border-radius: var(--datepickr-day-radius) 0 0 var(--datepickr-day-radius);
-    }
-
-    .flatpickr-day.selected.endRange,
-    .flatpickr-day.startRange.endRange,
-    .flatpickr-day.endRange.endRange {
-      border-radius: 0 var(--datepickr-day-radius) var(--datepickr-day-radius) 0;
-    }
-
-    .flatpickr-day.selected.startRange.endRange,
-    .flatpickr-day.startRange.startRange.endRange,
-    .flatpickr-day.endRange.startRange.endRange {
-      border-radius: var(--datepickr-day-radius);
-    }
-
-    .flatpickr-day.selected.startRange + .endRange:not(:nth-child(7n+1)),
-    .flatpickr-day.startRange.startRange + .endRange:not(:nth-child(7n+1)),
-    .flatpickr-day.endRange.startRange + .endRange:not(:nth-child(7n+1)) {
-      box-shadow: calc(-2 * var(--datepickr-range-join-size)) 0 0 var(--datepickr-day-selected-bg);
-    }
-
-    .flatpickr-day.today.selected,
-    .flatpickr-day.today.startRange,
-    .flatpickr-day.today.endRange,
-    .flatpickr-day.today.selected:hover,
-    .flatpickr-day.today.startRange:hover,
-    .flatpickr-day.today.endRange:hover,
-    .flatpickr-day.today.selected:focus,
-    .flatpickr-day.today.startRange:focus,
-    .flatpickr-day.today.endRange:focus {
-      background: var(--datepickr-day-selected-bg);
-      border-color: var(--datepickr-day-selected-bg);
-      color: var(--datepickr-day-selected-fg);
-      box-shadow: none;
-    }
-
-    .flatpickr-day.today {
-      border-color: var(--datepickr-day-today-border);
-      font-weight: 700;
-    }
-
-    .flatpickr-day.today:hover {
-      background: var(--datepickr-day-today-bg);
-      border-color: var(--datepickr-day-today-border);
-    }
-
-    .flatpickr-weekday {
-      color: var(--datepickr-weekday-fg);
-    }
-
-    .flatpickr-calendar.arrowTop:before {
-      border-bottom-color: var(--datepickr-panel-border);
-    }
-
-    .flatpickr-calendar.arrowTop:after {
-      border-bottom-color: var(--datepickr-panel-bg);
-    }
-
-    .flatpickr-footer {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      padding: 12px;
-      border-top: 1px solid var(--datepickr-footer-border);
-      background: var(--datepickr-footer-bg);
-    }
-
-    .flatpickr-footer-summary {
-      min-height: 40px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 8px 10px;
-      border-radius: var(--datepickr-day-radius);
-      border: 1px solid var(--datepickr-summary-border);
-      background: var(--datepickr-summary-bg);
-      color: var(--datepickr-summary-fg);
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.01em;
-      text-align: center;
-    }
-
-    .flatpickr-confirm-button {
-      width: 100%;
-      min-height: 40px;
-    }
-
-    .flatpickr-confirm-button:disabled {
-      cursor: not-allowed;
-      opacity: 0.55;
-      transform: none !important;
-      box-shadow: none !important;
-    }
-
-    .flatpickr-confirm-button:disabled::before {
-      display: none;
-    }
-
     /* Update notice (badge right of the range picker; opt-in check, terminal-only upgrade) */
     .update-notice { position: relative; display: flex; align-items: center; }
     .update-badge {
@@ -2838,16 +2814,6 @@
       border-color: rgba(99, 102, 241, 0.35);
       background: rgba(255, 255, 255, 0.06);
     }
-    /* Flatpickr failed to load (script or stylesheet), so the CDN banner has
-       disabled the trigger. It still shows the selected range; hovering it
-       shows why it cannot open rather than inviting a click. */
-    .date-range-trigger:disabled,
-    .date-range-trigger:disabled:hover {
-      cursor: not-allowed;
-      opacity: 0.6;
-      border-color: var(--color-border);
-      background: color-mix(in srgb, var(--color-text) 3%, transparent);
-    }
     /* KPI cards sparkline stretching */
     #overviewKpiGrid .surface {
       position: relative;
@@ -3367,27 +3333,9 @@
         ['cdnTailwindFailed', 'critical', () => !window.tailwind],
         ['cdnChartFailed', 'critical', () => typeof Chart === 'undefined'],
         ['cdnThreeFailed', 'warning', () => typeof THREE === 'undefined'],
-        // A <link rel="stylesheet"> that failed to load still shows up in
-        // document.styleSheets carrying its href, so sniffing the sheet list
-        // always passes. The link sets a flag on a successful load instead,
-        // which is the only positive evidence the CSS actually arrived.
-        ['cdnFlatpickrFailed', 'warning', () => typeof flatpickr === 'undefined'
-          || !window.__tokdashFlatpickrCssLoaded, disableDatePicker],
+        // No entry for the date range picker: it is drawn by this app now, so it
+        // is the one control a blocked CDN cannot take away.
       ];
-
-      // Without the script there is no picker, and without the stylesheet its
-      // calendar is an unstyled block left static in the body's flex row: a
-      // 528x6451px column at 1400x900, the whole viewport on a phone. Hide it,
-      // and take the trigger out of play rather than leave a button that opens
-      // nothing. The quick ranges still work without either.
-      function disableDatePicker() {
-        document.documentElement.classList.add('tokdash-datepicker-unavailable');
-        const trigger = document.getElementById('dateRangeTrigger');
-        if (!trigger) return;
-        trigger.disabled = true;
-        trigger.removeAttribute('aria-haspopup');
-        trigger.setAttribute('title', translate('cdnFlatpickrFailed'));
-      }
 
       // t is a hoisted function declaration, so `typeof t === 'function'` is
       // true even when the main script died before it reached `const I18N`, and
@@ -3747,9 +3695,8 @@
             <!-- Date Range Picker positioned right below Refresh Button -->
             <div class="range-picker-group">
               <label for="dateRangeTrigger" id="dateRangeControlLabel" class="sr-only" data-i18n="range">Range</label>
-              <div class="date-range-control">
-                <input type="text" id="dateRangePicker" class="date-range-native-input" readonly tabindex="-1" aria-hidden="true" />
-                <button id="dateRangeTrigger" class="date-range-trigger" type="button" aria-haspopup="dialog" aria-expanded="false" aria-labelledby="dateRangeControlLabel dateRangePresetLabel dateRangeExactLabel">
+              <div class="date-range-control" id="dateRangeControl" data-date-range-control>
+                <button id="dateRangeTrigger" class="date-range-trigger" type="button" data-daterange-trigger aria-haspopup="dialog" aria-expanded="false" aria-labelledby="dateRangeControlLabel dateRangePresetLabel dateRangeExactLabel" data-tooltip data-tooltip-placement="bottom" data-i18n-title="selectRange" title="Select range">
                   <svg class="date-range-calendar-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <rect x="3" y="5" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.8"/>
                     <path d="M8 3v4M16 3v4M3 10h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
@@ -3762,6 +3709,32 @@
                     <path d="m7 10 5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
                 </button>
+                <!-- The calendar itself: a month grid the app draws, in the panel
+                     vocabulary the refresh report already wears. The popover
+                     primitive places it; without the bundle it anchors itself
+                     under the control rather than not opening at all. -->
+                <div class="date-range-panel" id="dateRangePanel" data-daterange-panel role="dialog" aria-label="Select range" hidden>
+                  <div class="date-range-panel-head">
+                    <button class="date-range-nav" type="button" data-daterange-prev data-tooltip data-tooltip-placement="bottom" data-i18n-title="previousMonth" title="Previous month">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg>
+                      <span class="vh-label" data-i18n="previousMonth">Previous month</span>
+                    </button>
+                    <span class="date-range-panel-title mono" id="dateRangeMonthLabel" data-daterange-month aria-live="polite"></span>
+                    <button class="date-range-nav" type="button" data-daterange-next data-tooltip data-tooltip-placement="bottom" data-i18n-title="nextMonth" title="Next month">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 6 6 6-6 6"/></svg>
+                      <span class="vh-label" data-i18n="nextMonth">Next month</span>
+                    </button>
+                  </div>
+                  <div class="date-range-weekdays" data-daterange-weekdays aria-hidden="true"></div>
+                  <div class="date-range-days" data-daterange-days role="group" aria-labelledby="dateRangeMonthLabel"></div>
+                  <div class="date-range-panel-foot">
+                    <span class="date-range-summary mono" data-daterange-summary aria-live="polite"></span>
+                    <span class="date-range-panel-actions">
+                      <button class="btn btn-ghost date-range-reset" type="button" data-daterange-reset data-i18n="today">Today</button>
+                      <button class="btn btn-primary date-range-apply" type="button" data-daterange-apply data-i18n="apply">Apply</button>
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
             <span id="serverCountChip" class="text-xs font-semibold" style="display:none;padding:5px 9px;border:1px solid var(--color-border);border-radius:999px;"></span>
@@ -8011,7 +7984,8 @@
         cdnTailwindFailed: 'Tailwind CSS failed to load. The dashboard may not display correctly.',
         cdnChartFailed: 'Chart.js failed to load. Charts will not be available.',
         cdnThreeFailed: 'Three.js failed to load. The 3D stats view will not be available.',
-        cdnFlatpickrFailed: 'Flatpickr failed to load, so the date picker is unavailable. The quick range buttons still work.',
+        previousMonth: 'Previous month',
+        nextMonth: 'Next month',
         cdnFontsFailed: 'Google Fonts failed to load. Using system fonts.',
       },
       zh: {
@@ -8600,7 +8574,8 @@
         cdnTailwindFailed: 'Tailwind CSS 加载失败，仪表板可能无法正常显示。',
         cdnChartFailed: 'Chart.js 加载失败，图表将不可用。',
         cdnThreeFailed: 'Three.js 加载失败，3D 统计视图将不可用。',
-        cdnFlatpickrFailed: 'Flatpickr 加载失败，日期选择器不可用。快捷范围按钮仍可使用。',
+        previousMonth: '上个月',
+        nextMonth: '下个月',
         cdnFontsFailed: 'Google Fonts 加载失败，正在使用系统字体。',
       },
 
@@ -9190,7 +9165,8 @@
         cdnTailwindFailed: 'Tailwind CSS の読み込みに失敗しました。ダッシュボードが正しく表示されない可能性があります。',
         cdnChartFailed: 'Chart.js の読み込みに失敗しました。チャートは利用できません。',
         cdnThreeFailed: 'Three.js の読み込みに失敗しました。3D 統計ビューは利用できません。',
-        cdnFlatpickrFailed: 'Flatpickr の読み込みに失敗したため、日付ピッカーは利用できません。クイックレンジボタンは引き続き利用できます。',
+        previousMonth: '前の月',
+        nextMonth: '次の月',
         cdnFontsFailed: 'Google Fonts の読み込みに失敗しました。システムフォントを使用しています。',
       },
 
@@ -9780,7 +9756,8 @@
         cdnTailwindFailed: 'Tailwind CSS를 불러오지 못했습니다. 대시보드가 제대로 표시되지 않을 수 있습니다.',
         cdnChartFailed: 'Chart.js를 불러오지 못했습니다. 차트를 사용할 수 없습니다.',
         cdnThreeFailed: 'Three.js를 불러오지 못했습니다. 3D 통계 보기를 사용할 수 없습니다.',
-        cdnFlatpickrFailed: 'Flatpickr를 불러오지 못해 날짜 선택기를 사용할 수 없습니다. 빠른 기간 버튼은 계속 사용할 수 있습니다.',
+        previousMonth: '이전 달',
+        nextMonth: '다음 달',
         cdnFontsFailed: 'Google Fonts를 불러오지 못했습니다. 시스템 폰트를 사용합니다.',
       },
 
@@ -10370,7 +10347,8 @@
         cdnTailwindFailed: 'Tailwind CSS no se pudo cargar. El panel puede no mostrarse correctamente.',
         cdnChartFailed: 'Chart.js no se pudo cargar. Los gráficos no estarán disponibles.',
         cdnThreeFailed: 'Three.js no se pudo cargar. La vista de estadísticas 3D no estará disponible.',
-        cdnFlatpickrFailed: 'Flatpickr no se pudo cargar, así que el selector de fechas no está disponible. Los botones de rango rápido siguen funcionando.',
+        previousMonth: 'Mes anterior',
+        nextMonth: 'Mes siguiente',
         cdnFontsFailed: 'Google Fonts no se pudo cargar. Usando fuentes del sistema.',
       },
 
@@ -10960,7 +10938,8 @@
         cdnTailwindFailed: 'Tailwind CSS não pôde ser carregado. O painel pode não ser exibido corretamente.',
         cdnChartFailed: 'Chart.js não pôde ser carregado. Os gráficos não estarão disponíveis.',
         cdnThreeFailed: 'Three.js não pôde ser carregado. A visualização de estatísticas 3D não estará disponível.',
-        cdnFlatpickrFailed: 'Flatpickr não pôde ser carregado, então o seletor de datas não está disponível. Os botões de intervalo rápido continuam funcionando.',
+        previousMonth: 'Mês anterior',
+        nextMonth: 'Próximo mês',
         cdnFontsFailed: 'Google Fonts não pôde ser carregado. Usando fontes do sistema.',
       },
     };
@@ -13076,7 +13055,6 @@
       rerenderTokenPresentation();
       updateTimestamp();
       updateMetricControls();
-      syncDatePickerFooter();
       syncDateRangeControl();
       { const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
         if (animations && typeof animations.syncRangeSwitcher === 'function') {
@@ -13435,25 +13413,26 @@
     }
 
     // Date range picker initialization
-    let flatpickrInstance = null;
     let currentStartDate = null;
     let currentEndDate = null;
     let pendingStartDate = null;
     let pendingEndDate = null;
     let activeQuickRange = 'today';
-    let isDatePickerInitializing = true;
-    let isSyncingDatePicker = false;
-    let isCommittingDatePicker = false;
+    let dateRangePickerFallbackBound = false;
 
     function cloneDate(date) {
       return date ? new Date(date.getTime()) : null;
     }
 
-    function getPendingRangeFromSelection(selectedDates = []) {
-      if (!selectedDates.length) return [null, null];
-      const start = cloneDate(selectedDates[0]);
-      const end = cloneDate(selectedDates[selectedDates.length - 1] || selectedDates[0]);
-      return [start, end];
+    // The panel is the animation bundle's date range picker; this is the control
+    // it belongs to. Held so a preset click or a language switch can re-draw an
+    // open panel without reaching for the DOM twice.
+    function dateRangeControlEl() {
+      return document.getElementById('dateRangeControl');
+    }
+
+    function animationsApi() {
+      return typeof window !== 'undefined' ? window.TokDashAnimations : null;
     }
 
     function formatCalendarFooterDate(date) {
@@ -13503,7 +13482,7 @@
       exact.textContent = formatDateRangeTriggerText(currentStartDate, currentEndDate);
       // A trigger the CDN banner disabled keeps saying why, through every
       // range change and language switch, instead of inviting a click.
-      trigger.setAttribute('title', t(trigger.disabled ? 'cdnFlatpickrFailed' : 'selectRange'));
+      trigger.setAttribute('title', t('selectRange'));
       // One pressed state per segment; a custom window presses nothing.
       // The switcher's pill is re-placed from this same state so the slide
       // follows whatever the control actually says, on range commits and on
@@ -13511,53 +13490,26 @@
       document.querySelectorAll('.range-switcher-segment').forEach((segment) => {
         segment.setAttribute('aria-pressed', String(segment.dataset.range === activeQuickRange));
       });
-      const animations = typeof window !== 'undefined' ? window.TokDashAnimations : null;
+      const animations = animationsApi();
       if (animations && typeof animations.syncRangeSwitcher === 'function') {
         animations.syncRangeSwitcher(document.getElementById('overviewQuickRanges'));
       }
-    }
-
-    function syncDatePickerFooter() {
-      if (!flatpickrInstance?.calendarContainer) return;
-      const summary = flatpickrInstance.calendarContainer.querySelector('.flatpickr-footer-summary');
-      const button = flatpickrInstance.calendarContainer.querySelector('.flatpickr-confirm-button');
-      if (summary) {
-        summary.textContent = getDisplayRangeText(pendingStartDate, pendingEndDate);
-      }
-      if (button) {
-        button.textContent = t('apply');
-        button.setAttribute('aria-label', t('apply'));
-        button.disabled = !(pendingStartDate || pendingEndDate);
+      // An open panel follows the same commit the trigger just took, so a preset
+      // click while the calendar is up moves the calendar too instead of leaving
+      // it on a month and a selection the dashboard no longer shows.
+      if (animations && typeof animations.syncDateRangePicker === 'function') {
+        const pickerControl = dateRangeControlEl();
+        if (pickerControl) animations.syncDateRangePicker(pickerControl);
       }
     }
 
-    function attachDatePickerFooter(instance) {
-      if (!instance?.calendarContainer || instance.calendarContainer.querySelector('.flatpickr-footer')) return;
-
-      const footer = document.createElement('div');
-      footer.className = 'flatpickr-footer';
-
-      const summary = document.createElement('div');
-      summary.className = 'flatpickr-footer-summary mono';
-      footer.appendChild(summary);
-
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'btn btn-primary flatpickr-confirm-button';
-      button.addEventListener('click', () => {
-        applyPendingDateSelection();
-      });
-      footer.appendChild(button);
-
-      instance.calendarContainer.appendChild(footer);
-      syncDatePickerFooter();
-    }
-
+    // One commit path for every range this dashboard can be showing: a preset
+    // segment, the picker's Apply, and the picker's reset all land here, so a
+    // window picked by hand takes exactly the route a preset takes.
     function commitDateSelection(startDate, endDate, options = {}) {
       const {
         closePicker = false,
         triggerUpdate = true,
-        triggerPickerSync = true,
         rangeKey = null,
       } = options;
       if (!startDate || !endDate) return;
@@ -13568,22 +13520,20 @@
       pendingEndDate = cloneDate(endDate);
       activeQuickRange = rangeKey;
 
-      if (flatpickrInstance && triggerPickerSync) {
-        isSyncingDatePicker = true;
-        flatpickrInstance.setDate([currentStartDate, currentEndDate], false);
-        isSyncingDatePicker = false;
-      }
-
-      syncDatePickerFooter();
+      // The trigger's own labels and the preset row are re-derived here, so a
+      // hand-picked window clears every pressed segment and says "Custom range".
       syncDateRangeControl();
 
       if (triggerUpdate) {
         updateDashboardByDateRange(currentStartDate, currentEndDate);
       }
 
-      if (closePicker && flatpickrInstance) {
-        isCommittingDatePicker = true;
-        flatpickrInstance.close();
+      if (closePicker) {
+        const animations = animationsApi();
+        if (animations && typeof animations.dismissDateRangePicker === 'function') {
+          const control = dateRangeControlEl();
+          if (control) animations.dismissDateRangePicker(control);
+        }
       }
     }
 
@@ -13591,79 +13541,72 @@
       const startDate = pendingStartDate || pendingEndDate;
       const endDate = pendingEndDate || pendingStartDate;
       if (!startDate || !endDate) return;
-      commitDateSelection(startDate, endDate, { closePicker: true, triggerUpdate: true, triggerPickerSync: true });
+      commitDateSelection(startDate, endDate, { closePicker: true, triggerUpdate: true });
     }
 
+    // Wire the rail's calendar to the range the app owns. The grid, the range
+    // pick and the keys are the bundle's (js/animations/date-range-picker.js);
+    // every value that leaves this control goes through commitDateSelection, and
+    // every value that enters it comes from the same two dates the presets write.
+    // When the bundle is missing the trigger still reveals the panel — a range
+    // control is not something that may go missing on a date-driven dashboard —
+    // because the panel's own CSS anchors it under the control until the popover
+    // primitive marks it as placed.
     function initDateRangePicker() {
-      const dateInput = document.getElementById('dateRangePicker');
+      const dateControl = dateRangeControlEl();
       const dateTrigger = document.getElementById('dateRangeTrigger');
-      if (!dateInput || !dateTrigger) return;
-      dateTrigger.addEventListener('click', () => flatpickrInstance?.open());
+      if (!dateControl || !dateTrigger) return;
 
-      // flatpickr comes from a CDN; without it this top-level call used to
-      // throw and take the rest of the main script (including the initial
-      // updateDashboardByDateRange) down with it.
-      if (typeof flatpickr !== 'function') {
-        console.error('[Tokdash] flatpickr is unavailable; the date range picker is disabled');
+      const animations = animationsApi();
+      if (animations && typeof animations.mountDateRangeControl === 'function') {
+        // Marks the control as the bundle's, so the disclosure bound before the
+        // module arrived (see below) stands down instead of toggling a panel the
+        // popover primitive is now placing.
+        dateControl.dataset.dateRangeMode = 'module';
+        animations.mountDateRangeControl(dateControl, {
+          lang: () => currentLang,
+          summary: (startDate, endDate) => getDisplayRangeText(startDate, endDate),
+          // The panel previews the *pending* window: confirming it is Apply, and
+          // closing without confirming drops back to what the dashboard shows.
+          getRange: () => ({ start: pendingStartDate, end: pendingEndDate }),
+          onRangeChange: (startDate, endDate) => {
+            pendingStartDate = cloneDate(startDate);
+            pendingEndDate = endDate ? cloneDate(endDate) : null;
+          },
+          onApply: () => applyPendingDateSelection(),
+          onReset: () => {
+            const today = new Date();
+            commitDateSelection(today, today, { closePicker: true, rangeKey: 'today' });
+          },
+          onOpen: () => {
+            pendingStartDate = cloneDate(currentStartDate);
+            pendingEndDate = cloneDate(currentEndDate);
+          },
+          onClose: () => {
+            // Not confirming must not leave a half-picked window behind for the
+            // next open to inherit as if it had been chosen.
+            pendingStartDate = cloneDate(currentStartDate);
+            pendingEndDate = cloneDate(currentEndDate);
+          },
+        });
         return;
       }
-      flatpickrInstance = flatpickr(dateInput, {
-        mode: 'range',
-        dateFormat: 'Y-m-d',
-        maxDate: 'today',
-        closeOnSelect: false,
-        clickOpens: false,
-        positionElement: dateTrigger,
-        onChange: function(selectedDates) {
-          // Skip update during initialization
-          if (isDatePickerInitializing || isSyncingDatePicker) return;
 
-          [pendingStartDate, pendingEndDate] = getPendingRangeFromSelection(selectedDates);
-          syncDatePickerFooter();
-        },
-        onReady: function(dateObj, dateStr, instance) {
-          // Set default to today (for display only, won't trigger onChange due to flag)
-          const today = new Date();
-          currentStartDate = cloneDate(today);
-          currentEndDate = cloneDate(today);
-          pendingStartDate = cloneDate(today);
-          pendingEndDate = cloneDate(today);
-          attachDatePickerFooter(instance);
-          isSyncingDatePicker = true;
-          instance.setDate([today, today], false);
-          isSyncingDatePicker = false;
-          syncDatePickerFooter();
-          syncDateRangeControl();
-          // Allow onChange to work after initialization
-          setTimeout(() => { isDatePickerInitializing = false; }, 100);
-        },
-        onOpen: function(selectedDates) {
-          dateTrigger.setAttribute('aria-expanded', 'true');
-          [pendingStartDate, pendingEndDate] = selectedDates.length
-            ? getPendingRangeFromSelection(selectedDates)
-            : [cloneDate(currentStartDate), cloneDate(currentEndDate)];
-          syncDatePickerFooter();
-        },
-        onClose: function() {
-          dateTrigger.setAttribute('aria-expanded', 'false');
-          if (isCommittingDatePicker) {
-            isCommittingDatePicker = false;
-            return;
-          }
-
-          pendingStartDate = cloneDate(currentStartDate);
-          pendingEndDate = cloneDate(currentEndDate);
-
-          if (flatpickrInstance) {
-            isSyncingDatePicker = true;
-            flatpickrInstance.setDate([currentStartDate, currentEndDate], false);
-            isSyncingDatePicker = false;
-          }
-
-          syncDatePickerFooter();
-        }
+      const panel = document.getElementById('dateRangePanel');
+      if (!panel || dateRangePickerFallbackBound) return;
+      dateRangePickerFallbackBound = true;
+      dateTrigger.addEventListener('click', () => {
+        if (dateControl.dataset.dateRangeMode === 'module') return;
+        const isOpen = !panel.hidden;
+        panel.hidden = isOpen;
+        dateTrigger.setAttribute('aria-expanded', String(!isOpen));
       });
     }
+
+    // The main script runs before the animation bundle is imported, so this is
+    // called once here (binding the disclosure fallback) and once more from the
+    // module init block, when the real picker can take the control over.
+    window.tokdashInitDateRangePicker = initDateRangePicker;
 
     function getQuickRangeDates(range, today = new Date()) {
       const referenceDate = new Date(today.getTime());
@@ -13726,15 +13669,11 @@
         const range = this.getAttribute('data-range');
         const { startDate, endDate } = getQuickRangeDates(range);
 
-        // Not guarded on flatpickrInstance: commitDateSelection already no-ops
-        // the two picker-only steps when the picker is missing, so wrapping this
-        // used to leave the quick ranges doing nothing at all - no fetch, label
-        // stuck on "Today" - which is the one date control that still works
-        // without the CDN.
+        // Unconditionally: a preset must commit on its own, without asking the
+        // picker anything, and it closes an open panel on the way past.
         commitDateSelection(startDate, endDate, {
           closePicker: true,
           triggerUpdate: true,
-          triggerPickerSync: true,
           rangeKey: range,
         });
       });
@@ -24723,6 +24662,12 @@
     const today = new Date();
     currentStartDate = today;
     currentEndDate = today;
+    // The trigger's own labels and the picker's opening selection are derived
+    // from this range, so they are seeded with it rather than waiting for the
+    // first commit to say what the dashboard is already showing.
+    pendingStartDate = cloneDate(today);
+    pendingEndDate = cloneDate(today);
+    syncDateRangeControl();
     updateDashboardByDateRange(today, today);
 
     // Stats warming is scheduled after the first dashboard request completes, so it
@@ -24761,6 +24706,14 @@
           Animations.mountSearchFields(document);
         }
       } catch (_) { /* the box is still a working input without this */ }
+
+      try {
+        // The rail's calendar is the bundle's now, so the control upgrades from
+        // the plain disclosure the main script bound to the real picker.
+        if (typeof window.tokdashInitDateRangePicker === 'function') {
+          window.tokdashInitDateRangePicker();
+        }
+      } catch (_) { /* the trigger stays a plain disclosure */ }
 
       try {
         // The range switcher owns the topbar's preset row: one pill sliding

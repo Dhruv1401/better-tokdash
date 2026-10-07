@@ -155,9 +155,12 @@ def test_date_range_state_sync_does_not_fetch() -> None:
     assert "segment.setAttribute('aria-pressed', String(segment.dataset.range === activeQuickRange));" in sync
     assert "animations.syncRangeSwitcher(document.getElementById('overviewQuickRanges'));" in sync
     assert "moreRanges" not in sync
-    # A trigger the CDN banner disabled keeps its failure reason as the title
-    # (test_cdn_failure_frontend.py runs both branches).
-    assert "trigger.setAttribute('title', t(trigger.disabled ? 'cdnFlatpickrFailed' : 'selectRange'));" in sync
+    # The trigger always says what it does: the picker is the app's own now, so
+    # there is no CDN failure branch left to carry a reason for.
+    assert "trigger.setAttribute('title', t('selectRange'));" in sync
+    # An open panel follows the same commit the trigger just took, so a preset
+    # moves the calendar with it instead of leaving it on a stale selection.
+    assert "animations.syncDateRangePicker(pickerControl);" in sync
     assert "fetch(" not in sync
     assert "updateDashboard" not in sync
     assert "rangeKey = null" in commit
@@ -167,13 +170,38 @@ def test_date_range_state_sync_does_not_fetch() -> None:
 
 
 def test_date_range_open_and_commit_contract() -> None:
+    """The trigger opens an app-drawn panel, and every way out of it commits
+    through the same call the presets use."""
     source = INDEX_HTML.read_text(encoding="utf-8")
-    assert "positionElement: dateTrigger" in source
-    assert (
-        "dateTrigger.addEventListener('click', () => flatpickrInstance?.open());"
-        in source
-    )
-    assert "dateTrigger.setAttribute('aria-expanded', 'true');" in source
-    assert "dateTrigger.setAttribute('aria-expanded', 'false');" in source
+    picker = _extract_js_function(source, "function initDateRangePicker() {")
+
+    # The rail's control hands the panel to the module, which presents it through
+    # the committed popover primitive: the panel is the popover's, not a dialog
+    # of the picker's own.
+    assert "mountDateRangeControl(dateControl, {" in picker
+    assert 'id="dateRangePanel"' in source
+    assert 'class="date-range-panel"' in source
+    assert 'data-daterange-trigger' in source
+    assert 'data-daterange-panel' in source
+    assert 'aria-haspopup="dialog"' in source
+
+    # Confirm applies the pending window; reset returns to the Today preset
+    # rather than to a window of its own invention.
+    assert "onApply: () => applyPendingDateSelection()" in picker
+    assert "commitDateSelection(today, today, { closePicker: true, rangeKey: 'today' })" in picker
+    assert "getRange: () => ({ start: pendingStartDate, end: pendingEndDate })" in picker
+    # Closing without confirming drops the half-picked window instead of keeping it.
+    assert "pendingStartDate = cloneDate(currentStartDate);" in picker
+    assert "getDisplayRangeText(startDate, endDate)" in picker
+
+    # Without the bundle the trigger is still a disclosure of the same panel, and
+    # the summary is the app's own formatter either way.
+    assert "panel.hidden = isOpen;" in picker
+    assert "dateControl.dataset.dateRangeMode === 'module'" in picker
+    assert "window.tokdashInitDateRangePicker = initDateRangePicker;" in source
+    assert "window.tokdashInitDateRangePicker();" in source
+
+    # The presets keep committing themselves with their own range key.
     assert "rangeKey: range" in source
     assert "let activeQuickRange = 'today';" in source
+    assert "flatpickr" not in source
