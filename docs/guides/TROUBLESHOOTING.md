@@ -9,6 +9,12 @@ Common errors and how to fix them.
 **Cause:** Another process (often another Tokdash instance) is bound to port 55423.
 
 **Fix:**
+1. Run diagnostics to identify the process holding the port:
+```bash
+tokdash doctor
+```
+2. If the process is Tokdash's own managed service, stop it via `tokdash setup` or the service manager. Otherwise, kill it manually:
+
 ```bash
 # Windows: find and kill the process
 netstat -ano | findstr 55423
@@ -32,8 +38,10 @@ tokdash serve --port 55424
 
 **Fix:** Update Tokdash:
 ```bash
-pip install -U tokdash
+tokdash update
 ```
+
+Then restart any other Tokdash processes using this data directory.
 
 Do NOT delete the database — it contains your full usage history.
 
@@ -51,20 +59,31 @@ tokdash db repair
 ```
 
 **When to use `db resync` vs `db repair`:**
-- `tokdash db resync` — rebuilds the database from source files. Use when the database is out of date or missing entries.
-- `tokdash db repair` — fixes database corruption. Use when the database is corrupted or has WAL sidecar issues.
+- `tokdash db repair` — recomputes derived counters and checkpoints the WAL. Does **not** fix physical SQLite corruption.
+- `tokdash db resync` — rebuilds the database from source logs. Can drop durable rows if logs have been pruned. Use only when `db sync` cannot recover missing entries.
 
-## macOS Keychain prompts during Claude profile scans
+For missing entries, run `tokdash db sync` first.
 
-**Symptom:** macOS shows Keychain consent prompts when Tokdash scans Claude config files.
+## macOS Keychain prompts during Claude quota polling
 
-**Cause:** Tokdash reads Claude config files that macOS protects via Keychain.
+**Symptom:** macOS shows Keychain consent prompts when Tokdash polls Claude Code quota.
+
+**Cause:** The prompt comes from opt-in Claude quota polling reading the Claude Code credential item, not from scanning config files.
 
 **Fix:**
-- Grant access when prompted
-- Or limit which profiles are scanned:
+- Grant access when prompted, or
+- Disable Claude API polling:
 ```bash
-export TOKDASH_CLAUDE_PROFILES="profile1,profile2"
+tokdash quota consent --claude-api off
+```
+- Or disable all quota polling:
+```bash
+export TOKDASH_QUOTA_POLL=0
+```
+
+To limit which Claude profile directories are scanned (OS path separator, not comma-separated):
+```bash
+export TOKDASH_CLAUDE_PROFILES="/Users/me/.claude:/Users/me/.claude-academic"
 ```
 
 ## WSL2 localhost binding
@@ -74,15 +93,14 @@ export TOKDASH_CLAUDE_PROFILES="profile1,profile2"
 **Cause:** WSL2 has its own localhost, not shared with Windows.
 
 **Fix:**
-```bash
-# Option 1: bind to all interfaces
-tokdash serve --bind 0.0.0.0
+Windows' localhost forwarding already reaches a WSL2 loopback bind, so the default `127.0.0.1` bind works from Windows. Do **not** use `--bind 0.0.0.0` — it makes the effective bind non-loopback and disables writes entirely (see [SECURITY.md](../../SECURITY.md)).
 
-# Option 2: SSH port forwarding from Windows
+```bash
+# SSH port forwarding from Windows (if localhost forwarding is insufficient)
 ssh -L 55423:127.0.0.1:55423 <wsl-host>
 
-# Option 3: set the public base path
-export TOKDASH_PUBLIC_BASE_PATH="http://<windows-ip>:55423"
+# Set the public base path (a path prefix, not a full URL)
+export TOKDASH_PUBLIC_BASE_PATH="/tokdash"
 ```
 
 ## Enabling OTel exports for GitHub Copilot
@@ -93,14 +111,14 @@ export TOKDASH_PUBLIC_BASE_PATH="http://<windows-ip>:55423"
 
 **Fix:**
 ```bash
-# Windows
-set COPILOT_OTEL_FILE_EXPORTER_PATH=%USERPROFILE%\.copilot\otel
+# Windows (use setx or System Properties for persistence — `set` only lasts for that console)
+setx COPILOT_OTEL_FILE_EXPORTER_PATH "%USERPROFILE%\.copilot\otel\usage.jsonl"
 
 # macOS/Linux
-export COPILOT_OTEL_FILE_EXPORTER_PATH=~/.copilot/otel
+export COPILOT_OTEL_FILE_EXPORTER_PATH=~/.copilot/otel/usage.jsonl
 ```
 
-Data will be written to `~/.copilot/otel/`.
+`COPILOT_OTEL_FILE_EXPORTER_PATH` names a single file, not a directory.
 
 ## Dashboard shows no data / empty state
 
@@ -131,11 +149,10 @@ tokdash db sync
 **Fix:**
 ```bash
 # Check network
-pip install -U tokdash
-
-# Disable update checks
-export TOKDASH_UPDATE_CHECK=0
+tokdash update
 ```
+
+Update checks are opt-in and off by default. `TOKDASH_UPDATE_CHECK=0` only disables the automatic check — it does not affect `tokdash update`.
 
 ## See also
 
