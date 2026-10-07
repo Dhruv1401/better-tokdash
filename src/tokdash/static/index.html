@@ -3013,25 +3013,64 @@
       color: #4f46e5;
     }
 
-    /* Modal dialog for settings */
+    /* Modal dialog for settings.
+       This element is a <dialog>, so it is the document's modal root and not a
+       div that merely looks like one: three of its own rules have to answer for
+       the platform's. `max-width`/`max-height` are reset because the UA caps a
+       modal dialog at the viewport minus 2em, and `overflow` because it scrolls
+       one — both would shrink the scrim off the window's edges. `:not([open])`
+       is explicit because an author `display: flex` outranks the UA's
+       `dialog:not([open]) { display: none }`, which is all that keeps a closed
+       dialog closed. */
     .app-modal-backdrop {
       position: fixed;
       inset: 0;
       z-index: 150;
-      background: rgba(0, 0, 0, 0.65);
+      width: auto;
+      height: auto;
+      max-width: none;
+      max-height: none;
+      margin: 0;
+      padding: 1rem;
+      border: 0;
+      overflow: hidden;
+      /* A slate scrim from the shadow palette rather than flat black, so the
+         dimmed page keeps the theme's own colour under the blur. */
+      background: color-mix(in srgb, #0F172A 68%, transparent);
       backdrop-filter: blur(8px);
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 1rem;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     }
-    .app-modal-backdrop.open {
-      opacity: 1;
-      pointer-events: auto;
+    .app-modal-backdrop:not([open]),
+    .app-modal-backdrop[hidden] { display: none; }
+    .app-modal-backdrop[open] { animation: settings-dialog-scrim-in var(--t-fast) ease; }
+    .app-modal-backdrop[open] .settings-panel {
+      animation: settings-dialog-panel-in var(--t-med) cubic-bezier(0.16, 1, 0.3, 1);
     }
+    /* `translate`, not `transform`: the panel is scaled by nothing today, but the
+       popover layer places its own panels with an inline transform, and an
+       animation of the same property outranks it. */
+    @keyframes settings-dialog-scrim-in {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes settings-dialog-panel-in {
+      from { opacity: 0; translate: 0 8px; }
+      to { opacity: 1; translate: 0 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .app-modal-backdrop[open],
+      .app-modal-backdrop[open] .settings-panel { animation: none; }
+    }
+
+    /* While the dialog is up the document behind it must not scroll: the scrim is
+       fixed, so a scrollable page slides out from under a reader who is choosing a
+       setting, and the place they came from is somewhere else when they close. The
+       gutter the scrollbar was occupying is put back as body padding, so locking
+       the scroll does not reflow the topbar to the right by that width. */
+    html.settings-dialog-open { overflow: hidden; }
+    html.settings-dialog-open body { padding-right: var(--settings-dialog-gutter, 0px); }
     .app-modal-box {
       width: 100%;
       max-width: 540px;
@@ -3678,7 +3717,7 @@
               <!-- Mobile-only entry points: the sidebar (and with it Settings and
                    What's New) is display:none below 768px, so these mirror it in the
                    top action row. Hidden at md+ where the sidebar carries them. -->
-              <button id="mobileSettingsBtn" class="btn btn-ghost compact-control rounded-lg md:hidden" type="button" aria-label="Settings" title="Settings" data-i18n-title="settings" onclick="openSettingsModal()">
+              <button id="mobileSettingsBtn" class="btn btn-ghost compact-control rounded-lg md:hidden" type="button" aria-label="Settings" title="Settings" data-i18n-title="settings" aria-controls="settingsPanel" aria-expanded="false" onclick="openSettingsModal()">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-purple-400" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l-2.86 2.86A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1.4 1.6H9.55a1.7 1.7 0 0 0-1.08-1.66 1.7 1.7 0 0 0-1.88.34l-2.86-2.86A1.7 1.7 0 0 0 4.07 15a1.7 1.7 0 0 0-1.77-1.4V9.55a1.7 1.7 0 0 0 1.66-1.08 1.7 1.7 0 0 0-.34-1.88l2.86-2.86A1.7 1.7 0 0 0 8.36 4.07 1.7 1.7 0 0 0 9.76 2.3h4.05a1.7 1.7 0 0 0 1.08 1.66 1.7 1.7 0 0 0 1.88-.34l2.86 2.86a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.77 1.4v4.05A1.7 1.7 0 0 0 19.4 15Z"/></svg>
               </button>
               <button id="mobileReleaseNotesBtn" class="btn btn-ghost compact-control rounded-lg md:hidden" type="button" aria-label="What's New" title="What's New" data-i18n-title="whatsNew" onclick="openReleaseNotesModal()">
@@ -6408,12 +6447,16 @@
   <div id="profileActivityTooltip" class="profile-activity-tooltip" role="tooltip" hidden></div>
 
   <!-- Body-level: fixed overlays must not live under a .surface (themes set backdrop-filter, which turns any ancestor into the containing block for position:fixed). -->
-            <div id="settingsBackdrop" class="app-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settingsPanelTitle" hidden>
-              <section id="settingsPanel" class="settings-panel" aria-labelledby="settingsPanelTitle" hidden>
+            <!-- A real <dialog>, so the modality its aria-modal has always claimed is
+                 the platform's: while it is up the rest of the document is inert, focus
+                 cannot leave the panel, and Escape closes it. The app opens it with
+                 showModal() and never moves it out of the top layer. -->
+            <dialog id="settingsBackdrop" class="app-modal-backdrop" aria-modal="true" aria-labelledby="settingsPanelTitle" hidden>
+              <section id="settingsPanel" class="settings-panel" tabindex="-1">
                 <div class="settings-panel-head">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l-2.86 2.86A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1.4 1.6H9.55a1.7 1.7 0 0 0-1.08-1.66 1.7 1.7 0 0 0-1.88.34l-2.86-2.86A1.7 1.7 0 0 0 4.07 15a1.7 1.7 0 0 0-1.77-1.4V9.55a1.7 1.7 0 0 0 1.66-1.08 1.7 1.7 0 0 0-.34-1.88l2.86-2.86A1.7 1.7 0 0 0 8.36 4.07 1.7 1.7 0 0 0 9.76 2.3h4.05a1.7 1.7 0 0 0 1.08 1.66 1.7 1.7 0 0 0 1.88-.34l2.86 2.86a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.77 1.4v4.05A1.7 1.7 0 0 0 19.4 15Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                   <h2 id="settingsPanelTitle" data-i18n="settings">Settings</h2>
-                  <button type="button" class="settings-panel-close" onclick="setSettingsPanelOpen(false, true)" aria-label="Close settings">
+                  <button type="button" class="settings-panel-close" data-dialog-close onclick="setSettingsPanelOpen(false, true)" title="Close settings" data-i18n-title="closeSettings" aria-label="Close settings">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                   </button>
                 </div>
@@ -6542,7 +6585,7 @@
                   </button>
                 </div>
               </section>
-            </div>
+            </dialog>
   <script>document.write(`<script src="${window.tokdashPath('/static/theme-config.js')}"><\/script>`);</script>
   <script>
     const TOKDASH_BASE_PATH = window.TOKDASH_BASE_PATH || "";
@@ -7594,6 +7637,7 @@
         releaseNotesIntro: 'A concise record of what changed in each Tokdash release.',
         releaseNotesUnavailable: 'Release notes are unavailable right now.',
         closeReleaseNotes: 'Close release notes',
+        closeSettings: 'Close settings',
         viewFullChangelog: 'View full changelog',
         added: 'Added',
         changed: 'Changed',
@@ -8184,6 +8228,7 @@
         releaseNotesIntro: '简要记录每个 Tokdash 版本带来的变化。',
         releaseNotesUnavailable: '暂时无法加载更新日志。',
         closeReleaseNotes: '关闭更新日志',
+        closeSettings: '关闭设置',
         viewFullChangelog: '查看完整更新日志',
         added: '新增',
         changed: '调整',
@@ -8775,6 +8820,7 @@
         releaseNotesIntro: '各 Tokdash リリースの変更点を簡潔に記録しています。',
         releaseNotesUnavailable: 'リリースノートは一時的に表示できません。',
         closeReleaseNotes: 'リリースノートを閉じる',
+        closeSettings: '設定を閉じる',
         viewFullChangelog: '完全な変更履歴を表示',
         added: '追加',
         changed: '変更',
@@ -9366,6 +9412,7 @@
         releaseNotesIntro: '각 Tokdash 릴리스의 변경 사항을 간략히 기록합니다.',
         releaseNotesUnavailable: '현재 릴리스 노트를 사용할 수 없습니다.',
         closeReleaseNotes: '릴리스 노트 닫기',
+        closeSettings: '설정 닫기',
         viewFullChangelog: '전체 변경 기록 보기',
         added: '추가',
         changed: '변경',
@@ -9957,6 +10004,7 @@
         releaseNotesIntro: 'Un registro conciso de los cambios en cada versión de Tokdash.',
         releaseNotesUnavailable: 'Las notas de versión no están disponibles ahora mismo.',
         closeReleaseNotes: 'Cerrar notas de versión',
+        closeSettings: 'Cerrar ajustes',
         viewFullChangelog: 'Ver changelog completo',
         added: 'Añadido',
         changed: 'Cambiado',
@@ -10548,6 +10596,7 @@
         releaseNotesIntro: 'Um registro conciso das mudanças em cada versão do Tokdash.',
         releaseNotesUnavailable: 'As notas de versão não estão disponíveis no momento.',
         closeReleaseNotes: 'Fechar notas de versão',
+        closeSettings: 'Fechar configurações',
         viewFullChangelog: 'Ver changelog completo',
         added: 'Adicionado',
         changed: 'Alterado',
@@ -11218,19 +11267,80 @@
       rerenderTokenPresentation();
     }
 
+    // Both settings triggers call this one entry point, but only one of the two is
+    // ever on screen: below 768px the sidebar is display:none and the topbar mirror
+    // is the only one there is, so returning focus to the sidebar button would drop
+    // it on the document. Whichever control is standing in front of the user is the
+    // one that opened this, and the one the focus goes back to.
+    function settingsDialogOpener(panel) {
+      // Phone width answers with the mirror before any stale focus is believed:
+      // the sidebar is an off-canvas drawer there, so whatever the focus last sat
+      // on is either the mirror itself or an off-screen drawer item — and the one
+      // thing that can take the focus back on screen is the mirror.
+      if (window.innerWidth < 768) {
+        const mirror = document.getElementById('mobileSettingsBtn');
+        if (mirror) return mirror;
+      }
+      const active = document.activeElement;
+      if (active && active !== document.body && active !== document.documentElement
+        && !panel.contains(active) && typeof active.focus === 'function') return active;
+      // A click that came without keyboard focus carries no activeElement to name
+      // its opener, and phone users reach this through the topbar mirror while the
+      // sidebar stays off-canvas — so the fallback answers by layout width, the
+      // same 768px breakpoint the rest of the shell uses to show or hide that
+      // mirror. (Mirroring the mirror first handed desktop focus to a display:none
+      // button and dropped the restored focus on the document.)
+      const phone = document.getElementById('mobileSettingsBtn') || document.getElementById('sidebarSettingsBtn');
+      const desktop = document.getElementById('sidebarSettingsBtn') || document.getElementById('mobileSettingsBtn');
+      return window.innerWidth < 768 ? phone : desktop;
+    }
+
+    // The panel is a real modal <dialog>: the platform makes the page behind it
+    // inert, keeps focus inside it, and closes it on Escape. The animation bundle
+    // (js/animations/settings-dialog.js) is asked to drive it because it adds the
+    // three things the element cannot do alone — placing the focus inside on the
+    // way in, handing it back to the trigger that opened it, and holding the page
+    // still while it is up. Without the bundle this is still a working modal.
     function setSettingsPanelOpen(open, returnFocus = false) {
       const trigger = document.getElementById('sidebarSettingsBtn');
       const panel = document.getElementById('settingsPanel');
       const backdrop = document.getElementById('settingsBackdrop');
       if (!panel || !backdrop) return;
       const expanded = Boolean(open);
+      const animations = animationsApi();
+      if (panel.dataset.dialogMode === 'module'
+        && animations && typeof animations.settingsDialogState === 'function') {
+        if (expanded) animations.openSettingsDialog({ opener: settingsDialogOpener(panel) });
+        else animations.closeSettingsDialog({ restoreFocus: returnFocus });
+        return;
+      }
+      if (expanded) {
+        backdrop.removeAttribute('hidden');
+        if (typeof backdrop.showModal === 'function' && !backdrop.open) backdrop.showModal();
+      } else {
+        if (typeof backdrop.close === 'function' && backdrop.open) backdrop.close();
+        backdrop.setAttribute('hidden', '');
+      }
       panel.hidden = !expanded;
-      backdrop.hidden = !expanded;
-      if (expanded) requestAnimationFrame(() => backdrop.classList.add('open'));
-      else backdrop.classList.remove('open');
       if (trigger) trigger.setAttribute('aria-expanded', String(expanded));
       if (!expanded && returnFocus && trigger) trigger.focus();
     }
+
+    // Called once before the bundle is imported and never again: the plain platform
+    // path above is a complete dialog on its own, so there is no in-place stand-in
+    // to hand over from the way the date range picker has.
+    function initSettingsDialog() {
+      const backdrop = document.getElementById('settingsBackdrop');
+      const panel = document.getElementById('settingsPanel');
+      if (!backdrop || !panel) return;
+      const animations = animationsApi();
+      if (!animations || typeof animations.mountSettingsDialog !== 'function') return;
+      // Marks the dialog as the bundle's, so setSettingsPanelOpen delegates to it
+      // instead of driving the element itself.
+      panel.dataset.dialogMode = 'module';
+      animations.mountSettingsDialog(backdrop, panel);
+    }
+    window.tokdashInitSettingsDialog = initSettingsDialog;
 
     function syncThemeModeControl() {
       const label = document.getElementById('themeModeLabel');
@@ -13007,6 +13117,12 @@
       // hint for a pointer, not a name a reader should announce.
       const sessionSearchClear = document.getElementById('sessionSearchClear');
       if (sessionSearchClear) sessionSearchClear.setAttribute('aria-label', t('sessionsSearchClear'));
+      // The dialog's close control is icon-only, and the hint it carries is a
+      // `title` rather than the tooltip layer: that layer is a body-level element
+      // and this button lives in the top layer, so a bubble parked under the modal
+      // would be a hint nobody can see.
+      const settingsDialogClose = document.querySelector('[data-dialog-close]');
+      if (settingsDialogClose) settingsDialogClose.setAttribute('aria-label', t('closeSettings'));
       if (typeof releaseNotesPayload !== 'undefined' && releaseNotesPayload) {
         // Paint in whichever language is already in hand, then repaint once a translated
         // changelog arrives. Switching to Chinese with the dialog open swaps the entries;
@@ -24706,6 +24822,14 @@
           Animations.mountSearchFields(document);
         }
       } catch (_) { /* the box is still a working input without this */ }
+
+      try {
+        // The settings rail is a modal dialog, and the bundle is what puts the
+        // focus in it, hands it back to the trigger, and holds the page still.
+        if (typeof window.tokdashInitSettingsDialog === 'function') {
+          window.tokdashInitSettingsDialog();
+        }
+      } catch (_) { /* the app's own showModal path still opens a working modal */ }
 
       try {
         // The rail's calendar is the bundle's now, so the control upgrades from
