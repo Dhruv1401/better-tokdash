@@ -1910,11 +1910,7 @@ def _pricing_cache_key(base: str) -> str:
 
 @app.get("/api/pricing-db", tags=["Pricing"])
 def get_pricing_db() -> Dict[str, Any]:
-    """Get the current pricing database snapshot.
-
-    Returns:
-        Pricing database with model rates and metadata.
-    """
+    """Get the current pricing database snapshot."""
     if _dev_fixture_mode() == "dense":
         # The packaged baseline is part of the install, not user data, so the
         # editor still renders. The override under the data dir is neither read
@@ -2023,11 +2019,7 @@ def get_usage(
 
 @app.get("/api/openclaw", tags=["Usage"])
 def get_openclaw(period: str = "today") -> Dict[str, Any]:
-    """Get OpenClaw model breakdown.
-
-    Returns:
-        Per-model usage and cost for OpenClaw sessions.
-    """
+    """Get OpenClaw model breakdown."""
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_openclaw
 
@@ -2226,11 +2218,7 @@ def set_quota_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
 # config-write endpoints stay loopback-guarded.
 @app.get("/api/quota/refresh", tags=["Quota"])
 def refresh_quota() -> Dict[str, Any]:
-    """Run an immediate quota poll.
-
-    Returns:
-        Fresh quota data from enabled providers.
-    """
+    """Run an immediate quota poll."""
     if _dev_fixture_mode() == "dense":
         return {
             "snapshots": 14,
@@ -2273,11 +2261,7 @@ def refresh_quota() -> Dict[str, Any]:
 
 @app.get("/api/codex/sessions", tags=["Sessions"])
 def get_codex_sessions(period: str = "today", include_review_sessions: Optional[bool] = None) -> Dict[str, Any]:
-    """List Codex sessions.
-
-    Returns:
-        List of Codex sessions with metadata.
-    """
+    """List Codex sessions."""
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_sessions
 
@@ -2306,14 +2290,7 @@ def get_codex_sessions(period: str = "today", include_review_sessions: Optional[
 
 @app.get("/api/codex/session", tags=["Sessions"])
 def get_codex_session(session_id: str) -> Dict[str, Any]:
-    """Get a single Codex session.
-
-    Args:
-        session_id: The session identifier.
-
-    Returns:
-        Detailed session data including turns and usage.
-    """
+    """Get a single Codex session."""
     try:
         if _dev_fixture_mode() == "dense":
             from .dev_fixtures import dense_session_detail
@@ -2435,14 +2412,7 @@ def get_active_time(
 
 @app.get("/api/session", tags=["Sessions"])
 def get_session(tool: str, session_id: str) -> Dict[str, Any]:
-    """Get detailed turns for a single session.
-
-    Args:
-        session_id: The session identifier.
-
-    Returns:
-        Session details including all turns and usage.
-    """
+    """Get detailed turns for a single session."""
     try:
         if _dev_fixture_mode() == "dense":
             from .dev_fixtures import dense_session_detail
@@ -2526,14 +2496,7 @@ async def serve_service_worker(request: Request):
 
 @app.get("/api/stats", tags=["Usage"])
 def get_stats(year: Optional[int] = None) -> Dict[str, Any]:
-    """Get annual stats aggregation.
-
-    Args:
-        year: Optional year to filter by.
-
-    Returns:
-        Annual usage statistics.
-    """
+    """Get annual stats aggregation."""
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_stats
 
@@ -2622,14 +2585,7 @@ def get_insights(
 
 @app.get("/api/activity-insights", tags=["Usage"])
 def get_activity_insights(refresh: bool = False) -> dict[str, Any]:
-    """Get Codex activity insights.
-
-    Args:
-        refresh: Force a fresh computation.
-
-    Returns:
-        Activity insights including reasoning and tool usage.
-    """
+    """Get Codex activity insights."""
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_activity_insights
 
@@ -2809,11 +2765,7 @@ def _update_request_class(request: Request) -> str:
 # routes run in Starlette's threadpool instead.
 @app.get("/api/update/capability", tags=["Updater"])
 def update_capability(request: Request, want_csrf: bool = False) -> Dict[str, Any]:
-    """Get managed update capability.
-
-    Returns:
-        Whether updates are available and target version.
-    """
+    """Get managed update capability."""
     from .onboard import update_auth, update_control
 
     plane = _update_request_class(request)
@@ -2896,14 +2848,7 @@ def update_start(request: Request, payload: Dict[str, Any] = None) -> JSONRespon
 
 @app.get("/api/update/status", tags=["Updater"])
 def update_status(request: Request, job: Optional[str] = None) -> Dict[str, Any]:
-    """Get managed update status.
-
-    Args:
-        job: Optional job identifier.
-
-    Returns:
-        Update job progress and status.
-    """
+    """Get managed update status."""
     from .onboard import update_auth, update_jobs
 
     plane = _update_request_class(request)
