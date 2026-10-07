@@ -21,3 +21,4 @@ export * from './metric-card.js';
 export * from './slot-text.js';
 export * from './animated-counter.js';
 export * from './range-switcher.js';
+export * from './search-field.js';
