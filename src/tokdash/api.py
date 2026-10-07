@@ -1985,17 +1985,7 @@ def get_usage(
     date_to: Optional[str] = None,
     refresh: bool = False,
 ) -> Dict[str, Any]:
-    """Get aggregated token usage and cost.
-
-    Args:
-        period: Time period (today, week, month, year, all, or custom).
-        date_from: Start date (YYYY-MM-DD) for custom range.
-        date_to: End date (YYYY-MM-DD) for custom range.
-        refresh: Force a fresh computation.
-
-    Returns:
-        Usage totals, per-tool breakdown, and period comparison.
-    """
+    """Get aggregated token usage and cost."""
     _validate_date_params(date_from, date_to)
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_usage
@@ -2114,11 +2104,7 @@ def get_quota_history(
     end: Optional[int] = None,
     max_points: Optional[int] = 300,
 ) -> Dict[str, Any]:
-    """Get quota utilization and consumption history.
-
-    Returns:
-        Historical quota snapshots with usage percentages.
-    """
+    """Get quota utilization and consumption history."""
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_quota_history
 
@@ -2319,14 +2305,7 @@ def get_sessions(
     date_to: Optional[str] = None,
     include_review_sessions: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """List sessions for a tool.
-
-    Args:
-        tool: The tool name (claude, codex, etc.).
-
-    Returns:
-        List of sessions with metadata.
-    """
+    """List sessions for a tool."""
     _validate_date_params(date_from, date_to)
     try:
         if _dev_fixture_mode() == "dense":
