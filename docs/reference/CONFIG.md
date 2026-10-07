@@ -8,12 +8,12 @@ Tokdash is **localhost-only by default**.
 - `TOKDASH_HOST` (default: `127.0.0.1`)
 - `TOKDASH_PORT` (default: `55423`)
 - `TOKDASH_LOG_LEVEL` (default: `info`) — uvicorn log level for `tokdash serve`; also the default behind `--log-level` (any level uvicorn accepts: `critical`, `error`, `warning`, `info`, `debug`, `trace`)
-- `TOKDASH_PUBLIC_BASE_PATH` (unset) — public URL prefix for generated browser assets when Tokdash is served under a sub-path (e.g. Tailscale Serve `--set-path=/tokdash`); normalized to a leading `/` and no trailing `/`, and `/` or empty means no prefix. A request's `?base=` query and `X-Forwarded-Prefix`/`X-Script-Name` headers take precedence over the env var
+- `TOKDASH_PUBLIC_BASE_PATH` (unset) — override for generated asset URLs that only works behind a proxy that strips the prefix; normalized to a leading `/` and no trailing `/`, and `/` or empty means no prefix. A request's `?base=` query and `X-Forwarded-Prefix`/`X-Script-Name` headers take precedence over the env var
 - `TOKDASH_CACHE_TTL` (default: `600` seconds)
 - `TOKDASH_CACHE_MAX_ENTRIES` (default: `256`) — bound cached API responses and their idle per-key locks
-- `TOKDASH_COMPUTE_CONCURRENCY` (default: `2`) — cap on simultaneous heavy history reparses; excess cold requests return a fast `503` instead of saturating the server under load
+- `TOKDASH_COMPUTE_CONCURRENCY` (default: `max(2, min(8, cpus // 2))`) — cap on simultaneous heavy history reparses; excess cold requests return a fast `503` instead of saturating the server under load
 - `TOKDASH_COMPUTE_THREAD_BUDGET` (default: `32`) — total thread budget shared by computing requests and the ones parked waiting for a slot, kept below AnyIO's default 40-thread pool so `/health` and cache hits are never starved; positive integer
-- `TOKDASH_COMPUTE_MAX_WAITERS` (default: `TOKDASH_COMPUTE_THREAD_BUDGET - TOKDASH_COMPUTE_CONCURRENCY`, i.e. `30` at defaults) — how many requests may park waiting for a compute slot at once; non-negative integer, `0` restores the old instant-refuse behaviour, and a concurrency at or above the budget always yields `0`
+- `TOKDASH_COMPUTE_MAX_WAITERS` (default: `TOKDASH_COMPUTE_THREAD_BUDGET - TOKDASH_COMPUTE_CONCURRENCY`) — how many requests may park waiting for a compute slot at once; the default is thread budget minus concurrency (e.g. `30` when budget is `32` and concurrency is `2`); non-negative integer, `0` restores the old instant-refuse behaviour, and a concurrency at or above the budget always yields `0` — how many requests may park waiting for a compute slot at once; non-negative integer, `0` restores the old instant-refuse behaviour, and a concurrency at or above the budget always yields `0`
 - `TOKDASH_COMPUTE_WAIT_SECONDS` (default: `15` seconds, max `120`) — how long a cold request parks for a compute slot before returning `503`; positive finite float, clamped to 120s (bad or non-finite values fall back to the default)
 - `TOKDASH_FORCE_REFRESH_JOIN_SECONDS` (default: `60` seconds, max `300`) — how long a forced refresh (the Refresh button) waits for a fill already in flight for its key before falling back to the stale body; positive finite float, clamped to 300s
 - `TOKDASH_STARTUP_WARM_JOIN_SECONDS` (default: `30` seconds) — how long the first request for a key still being warmed at startup waits for that fill instead of returning `503`; at most one request per key waits
@@ -36,8 +36,8 @@ Warm-ups run in daemon threads when `tokdash serve` starts and on a daily timer.
 They are best-effort: a failure is logged and never crashes the server, and
 fixture mode (`--dev-fixture`) never starts them.
 
-- `TOKDASH_WARM_ON_START` (default: `1`) — set to `0` to skip the startup warm of the Overview, Stats, Sessions and Report cache keys (roughly a minute of background CPU against a year of history); without it the browser's first load may join the one fill already in progress for its key
-- `TOKDASH_DAILY_WARM` (default: `1`) — set to `0` to disable the daily warm that refreshes open windows and the previous day's closed windows after local midnight
+- `TOKDASH_WARM_ON_START` (default: `1`) — set to `0` to skip the startup warm of the Overview, Stats, Sessions and Report cache keys (roughly a minute of background CPU against a year of history); the startup warm is the fill a first load can join; without the warm there is nothing to join
+- `TOKDASH_DAILY_WARM` (default: `1`) — set to `0` to disable the daily warm that warms yesterday's closed day plus only the Report tab's week, month and year windows (skipping single-day ones) after local midnight
 - `TOKDASH_DAILY_WARM_MINUTE` (default: `5`) — minutes past local midnight at which the daily warm fires; non-negative integer, `0` is valid (warm exactly at midnight), and any value outside a day (≥ 1440) falls back to `5` rather than wrapping
 - `TOKDASH_DAILY_WARM_JOIN_SECONDS` (default: `10` seconds) — how long a foreground request waits for a daily-warm fill for its key instead of returning `503`; deliberately shorter than `TOKDASH_STARTUP_WARM_JOIN_SECONDS` because the daily warm runs on a live server; positive integer
 
@@ -68,8 +68,6 @@ time.
 - `TOKDASH_SESSION_CACHE_TURNS` (default: `500000`) — turns the merged-session assembly cache may hold; budgeted in turns rather than sessions because one long session can outweigh a thousand short ones. Non-negative integer, `0` empties the cache and keeps it empty; empty or invalid values fall back to the default
 - `TOKDASH_SIG_TTL` (default: `5.0` seconds) — TTL of the source file-signature cache that avoids repeated glob/stat work when several requests arrive in a short window; float seconds, `0` disables the cache. The value must parse as a float — a non-numeric value fails at import
 - `TOKDASH_INCLUDE_CODEX_GUARDIAN` (default: off) — default for the `include_review_sessions` API parameter when a request omits it; set to `1`, `true`, `yes`, or `on` to include Codex guardian/review subagent sessions in Codex session listings instead of hiding them. An explicit `include_review_sessions` query parameter always wins
-- `TOKDASH_CLAUDE_PROFILES` (unset → scan `~/.claude*`) — path-separated (OS `pathsep`, e.g. `:` / `;`) list of Claude Code config directories to use instead of the home-directory `~/.claude*` scan, for installs living outside the home directory. The directory's name becomes the profile name shown for quota; duplicates of the default dir and of each other (following symlinks) are dropped so one subscription never shows up twice
-
 ## Persistent usage DB (default on)
 
 Tokdash maintains a local SQLite index at `~/.tokdash/usage.sqlite3` by default.
@@ -115,8 +113,9 @@ TOKDASH_DATA_DIR=output/dev-data PYTHONPATH=src python3 main.py
 Quota snapshots live in the usage DB and feed the history charts; boundary
 polling samples just before and after each fixed-reset window's reset so the
 running-high consumption model sees the true pre-reset peak and post-reset
-baseline.
+baseline. See [`QUOTA.md`](QUOTA.md) for the full quota polling design.
 
+- `TOKDASH_CLAUDE_PROFILES` (unset → scan `~/.claude*`) — path-separated (OS `pathsep`, e.g. `:` / `;`) list of Claude Code config directories to use instead of the home-directory `~/.claude*` scan, for installs living outside the home directory. The directory's name becomes the profile name shown for quota; duplicates of the default dir and of each other (following symlinks) are dropped so one subscription never shows up twice
 - `TOKDASH_QUOTA_POLL` (unset → config `quota.enabled`, default on) — hard kill switch: `0`, `false`, `no`, or `off` disables all quota work (session scan, network polls, DB writes) and overrides the persisted preference; any other value leaves the config switch in charge
 - `TOKDASH_QUOTA_POLL_INTERVAL` (unset → config `quota.poll_interval_minutes`, else `1800` seconds) — poll interval in seconds; must parse to a positive integer and is floored at `300` seconds. Precedence: env > `config.json` > default
 - `TOKDASH_QUOTA_BOUNDARY_POLL` (default: enabled) — set to `0`, `false`, `no`, or `off` to turn off boundary polling entirely (both the pre-reset and post-reset samples)
