@@ -668,11 +668,17 @@ async def _lifespan(app: "FastAPI"):
             app.state.identity_warm.cancel()
 
 
+# No Swagger UI or ReDoc pages. FastAPI loads both from cdn.jsdelivr.net (pinned to a
+# major version only, no integrity check), and a script served on this origin can read
+# the write token from /api/csrf-token like the dashboard does. /openapi.json stays: it
+# is plain JSON with no third-party code, and API.md is the human-readable reference.
 app = FastAPI(
     title="Tokdash",
     description="Local token & cost dashboard for AI coding tools",
     version=__version__,
     lifespan=_lifespan,
+    docs_url=None,
+    redoc_url=None,
     contact={"name": "Jingbiao Mei"},
     license_info={"name": "MIT"},
     openapi_tags=[
