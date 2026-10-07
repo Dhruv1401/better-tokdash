@@ -24,5 +24,5 @@
 
 ## Checklist
 
-- [ ] Localized READMEs updated if the change affects user-facing text
+- [ ] If `README.md` changed, all five translated READMEs are updated in this PR
 - [ ] No new dependencies added (or justified in description)
