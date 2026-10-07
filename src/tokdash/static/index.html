@@ -1450,11 +1450,24 @@
     .settings-panel .btn { border-color: transparent !important; }
     .settings-panel .btn-ghost { background: color-mix(in srgb, var(--color-text) 6%, transparent) !important; }
     .settings-panel .btn-ghost:hover { background: color-mix(in srgb, var(--color-text) 11%, transparent) !important; }
-    .overview-readable-tokens-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 5px 8px; border-radius: 8px; cursor: pointer; font-size: 10px; font-weight: 750; }
+    .overview-readable-tokens-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 5px 8px; border-radius: 8px; cursor: pointer; font-size: 10px; font-weight: 750; --switch-inset: 2px; --switch-thumb-size: 12px; }
+    .overview-readable-tokens-toggle:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
     .overview-readable-tokens-track { position: relative; flex: 0 0 auto; width: 28px; height: 16px; border-radius: 999px; background: var(--color-border); transition: background var(--t-fast) ease; }
-    .overview-readable-tokens-track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--color-bg); box-shadow: 0 1px 4px rgba(15, 23, 42, .22); transition: transform var(--t-fast) ease; }
+    .overview-readable-tokens-track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--color-bg); box-shadow: 0 1px 4px rgba(15, 23, 42, .22); transition: transform var(--t-fast) ease, translate var(--t-fast) ease; }
     .overview-readable-tokens-toggle[aria-checked="true"] .overview-readable-tokens-track { background: var(--color-primary); }
     .overview-readable-tokens-toggle[aria-checked="true"] .overview-readable-tokens-track::after { transform: translateX(12px); }
+    /* The drag's own drawing: the thumb leaves its transition and follows the
+       pointer to the offset the module measures. translate never fights the
+       transform the checked-state template uses — one property for the state,
+       one live channel for the finger. */
+    .overview-readable-tokens-toggle[data-switch-drag="true"] .overview-readable-tokens-track::after { transition: none; translate: var(--switch-drag-x, 0px) 0; }
+    .overview-readable-tokens-toggle[data-switch-drag="true"] { touch-action: none; }
+    @media (prefers-reduced-motion: reduce) {
+      .overview-readable-tokens-track,
+      .overview-readable-tokens-track::after {
+        transition: none;
+      }
+    }
     .overview-token-value-wrap { position: relative; width: max-content; max-width: 100%; }
     .overview-token-exact-tooltip { position: absolute; z-index: 70; left: 0; bottom: calc(100% + 8px); padding: 6px 8px; border-radius: 7px; background: var(--color-text); color: var(--color-bg); font-size: 10px; font-weight: 750; line-height: 1.2; white-space: nowrap; opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(3px); transition: opacity var(--t-fast) ease, transform var(--t-fast) ease, visibility var(--t-fast) ease; box-shadow: 0 8px 22px rgba(15, 23, 42, .22); }
     .overview-token-exact-tooltip::after { content: ""; position: absolute; left: 18px; top: 100%; border: 4px solid transparent; border-top-color: var(--color-text); }
@@ -24822,6 +24835,15 @@
           Animations.mountSearchFields(document);
         }
       } catch (_) { /* the box is still a working input without this */ }
+
+      try {
+        // The settings dialog's switch is clickable without the bundle; the
+        // bundle gives the thumb its drag. The app's own click handler is never
+        // touched: a tap still commits exactly as before.
+        if (typeof Animations.mountSwitches === 'function') {
+          Animations.mountSwitches(document);
+        }
+      } catch (_) { /* the switch stays a working click toggle */ }
 
       try {
         // The settings rail is a modal dialog, and the bundle is what puts the
