@@ -37,6 +37,7 @@ jobs:
           python -m pip install -U pip
           python -m pip install -e .
           python -m pip install -r requirements-dev.txt
+          python -m pip install pytest
 
       - name: Compile
         run: python -m compileall -q src/tokdash main.py docs/guides/agents/openclaw_reporting/openclaw_cron_job.py
