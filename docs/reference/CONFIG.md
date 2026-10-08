@@ -127,7 +127,7 @@ polling samples just before and after each fixed-reset window's reset so the
 running-high consumption model sees the true pre-reset peak and post-reset
 baseline. See [`QUOTA.md`](QUOTA.md) for the full quota polling design.
 
-- `TOKDASH_CLAUDE_PROFILES` — path-separated list of Claude Code config directories for quota; default `~/.claude` (or `$CLAUDE_CONFIG_DIR`) is always included and this only replaces the sibling `~/.claude*` scan (only read by quota, not usage/session parsing, so listed directories do not appear in usage); see [`QUOTA.md`](QUOTA.md) for details
+- `TOKDASH_CLAUDE_PROFILES` — path-separated list of Claude Code config directories for quota; default `~/.claude` (or `$CLAUDE_CONFIG_DIR`) is always included and this only replaces the sibling `~/.claude*` scan (only quota reads it; usage and session parsing always scan `~/.claude*/projects`, so listing a directory does not add its usage); see [`QUOTA.md`](QUOTA.md) for details
 - `TOKDASH_QUOTA_POLL` — master kill switch (`0`) to disable all quota polling, scans, and writes; see [`QUOTA.md`](QUOTA.md) for details
 - `TOKDASH_QUOTA_POLL_INTERVAL` — background quota poll interval in seconds (floor `300`); see [`QUOTA.md`](QUOTA.md) for details
 - `TOKDASH_QUOTA_BOUNDARY_POLL` — toggle for sampling around quota reset boundaries (`0` to disable); see [`QUOTA.md`](QUOTA.md) for details
