@@ -112,7 +112,7 @@ flowchart TB
     Kill["TOKDASH_QUOTA_POLL=0<br/>(env kill switch)"]
     Master["quota.enabled<br/>(config.json, default on)"]
     CredScan["quota.credential_scan<br/>(gates credential file reads)"]
-    Provider["quota.<provider>_api<br/>(gates network requests)"]
+    Provider["quota.&lt;provider&gt;_api<br/>(gates network requests)"]
 
     Kill -->|"off"| Disabled["Quota tracking disabled"]
     Master -->|"off"| Disabled
