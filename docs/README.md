@@ -12,7 +12,7 @@
 - [Statusline templates](guides/statusline/README.md) — ready-made Claude Code statusline scripts (bash + PowerShell) that read local Tokdash totals.
 - [Background service & agents](guides/agents/systemd/BACKGROUND_RUN.md) — run Tokdash as a systemd/launchd service, the health-probe auto-restart, and the OpenClaw reporting cron.
 
-## reference/ — lookup material
+## Reference/ — lookup material
 
 - [API reference](reference/API.md) — the local HTTP API (FastAPI) for token usage, costs, and session data.
 - [Configuration](reference/CONFIG.md) — environment variables, active-time estimation, and usage-DB semantics.
@@ -21,16 +21,23 @@
 - [History retention](reference/HISTORY_RETENTION.md) — why Tokdash's past months can shrink, and how to prevent it.
 - [Day boundaries](reference/DAY_BOUNDARIES.md) — Tokdash buckets by your local day; why a provider's own usage page shows a different number.
 
-## development/ — maintainer workflows, release history, and design notes
+## Development/ — maintainer workflows, release history, and design notes
 
+- [Architecture](development/ARCHITECTURE.md) — system architecture, data flow, and architectural invariants.
 - [Changelog](development/CHANGELOG.md) — notable changes to the project, release by release.
 - [更新日志](development/CHANGELOG_CN.md) — 简体中文更新日志，由 `scripts/changelog_cn.py` 从应用内条目生成。
 - [Releasing](development/RELEASING.md) — checklist for manual PyPI/Git tag/GitHub Releases publishing.
 - [Roadmap](development/ROADMAP.md) — notes on planned and deferred work.
 - [Companion release guide](../companion/docs/RELEASE.md) — tagging the menu-bar/tray app, the unsigned GitHub binaries, and the Microsoft Store (MSIX) track.
 
-### development/technical-notes/ — public technical notes and research
+### Development/technical-notes/ — architecture and public technical notes
 
+- [Data Flow](development/technical-notes/DATA_FLOW.md) — core usage data flow, source-native paths, OpenClaw, live-parser fallback.
+- [Usage Accounting](development/technical-notes/USAGE_ACCOUNTING.md) — cost provenance, pricing model, billing provenance.
+- [Quota Architecture](development/technical-notes/QUOTA_ARCHITECTURE.md) — quota subsystem, scheduler, consent gates, provider collectors.
+- [Session Architecture](development/technical-notes/SESSION_ARCHITECTURE.md) — session assembly, deduplication, active-time.
+- [Onboarding Architecture](development/technical-notes/ONBOARDING_ARCHITECTURE.md) — service lifecycle, updates, manifest.
+- [Source Parser Matrix](development/technical-notes/SOURCE_PARSER_MATRIX.md) — source/parser reference for all 28 parsers.
 - [Usage-cache identity](development/technical-notes/USAGE_CACHE_IDENTITY.md) — how the persistent usage cache separates parse identity, billing provenance and pricing identity, and what each kind of change costs.
 - [Codex usage counting](development/technical-notes/CODEX_USAGE_COUNTING.md) — how Tokdash avoids double-counting Codex usage from MultiAgent V2 subagent replay.
 - [Windows support plan](development/technical-notes/WINDOWS_SUPPORT_PLAN.md) — status and design of native Windows support.
