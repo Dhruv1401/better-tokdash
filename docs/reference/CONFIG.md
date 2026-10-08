@@ -11,9 +11,9 @@ Tokdash is **localhost-only by default**.
 - `TOKDASH_PUBLIC_BASE_PATH` (unset) — override for generated asset URLs that only works behind a proxy that strips the prefix; normalized to a leading `/` and no trailing `/`, and `/` or empty means no prefix. A request's `?base=` query and `X-Forwarded-Prefix`/`X-Script-Name` headers take precedence over the env var
 - `TOKDASH_CACHE_TTL` (default: `600` seconds)
 - `TOKDASH_CACHE_MAX_ENTRIES` (default: `256`) — bound cached API responses and their idle per-key locks
-- `TOKDASH_COMPUTE_CONCURRENCY` (default: `max(2, min(8, cpus // 2))`) — cap on simultaneous heavy history reparses; excess cold requests return a fast `503` instead of saturating the server under load
+- `TOKDASH_COMPUTE_CONCURRENCY` (default: `max(2, min(8, cpus // 2))`) — cap on simultaneous heavy history reparses; excess cold requests park waiting for a slot (up to `TOKDASH_COMPUTE_WAIT_SECONDS`) and return `503` only when the wait times out or the waiter cap is full, instead of saturating the server under load
 - `TOKDASH_COMPUTE_THREAD_BUDGET` (default: `32`) — total thread budget shared by computing requests and the ones parked waiting for a slot, kept below AnyIO's default 40-thread pool so `/health` and cache hits are never starved; positive integer
-- `TOKDASH_COMPUTE_MAX_WAITERS` (default: `TOKDASH_COMPUTE_THREAD_BUDGET - TOKDASH_COMPUTE_CONCURRENCY`) — how many requests may park waiting for a compute slot at once; the default is thread budget minus concurrency (e.g. `30` when budget is `32` and concurrency is `2`); non-negative integer, `0` restores the old instant-refuse behaviour, and a concurrency at or above the budget always yields `0` — how many requests may park waiting for a compute slot at once; non-negative integer, `0` restores the old instant-refuse behaviour, and a concurrency at or above the budget always yields `0`
+- `TOKDASH_COMPUTE_MAX_WAITERS` (default: `TOKDASH_COMPUTE_THREAD_BUDGET - TOKDASH_COMPUTE_CONCURRENCY`) — how many requests may park waiting for a compute slot at once; the default is thread budget minus concurrency, floored at `0` (e.g. `30` when budget is `32` and concurrency is `2`); non-negative integer, `0` restores the old instant-refuse behaviour
 - `TOKDASH_COMPUTE_WAIT_SECONDS` (default: `15` seconds, max `120`) — how long a cold request parks for a compute slot before returning `503`; positive finite float, clamped to 120s (bad or non-finite values fall back to the default)
 - `TOKDASH_FORCE_REFRESH_JOIN_SECONDS` (default: `60` seconds, max `300`) — how long a forced refresh (the Refresh button) waits for a fill already in flight for its key before falling back to the stale body; positive finite float, clamped to 300s
 - `TOKDASH_STARTUP_WARM_JOIN_SECONDS` (default: `30` seconds) — how long the first request for a key still being warmed at startup waits for that fill instead of returning `503`; at most one request per key waits
@@ -68,6 +68,7 @@ time.
 - `TOKDASH_SESSION_CACHE_TURNS` (default: `500000`) — turns the merged-session assembly cache may hold; budgeted in turns rather than sessions because one long session can outweigh a thousand short ones. Non-negative integer, `0` empties the cache and keeps it empty; empty or invalid values fall back to the default
 - `TOKDASH_SIG_TTL` (default: `5.0` seconds) — TTL of the source file-signature cache that avoids repeated glob/stat work when several requests arrive in a short window; float seconds, `0` disables the cache. The value must parse as a float — a non-numeric value fails at import
 - `TOKDASH_INCLUDE_CODEX_GUARDIAN` (default: off) — default for the `include_review_sessions` API parameter when a request omits it; set to `1`, `true`, `yes`, or `on` to include Codex guardian/review subagent sessions in Codex session listings instead of hiding them. An explicit `include_review_sessions` query parameter always wins
+
 ## Persistent usage DB (default on)
 
 Tokdash maintains a local SQLite index at `~/.tokdash/usage.sqlite3` by default.
@@ -108,22 +109,6 @@ TOKDASH_DATA_DIR=output/dev-data PYTHONPATH=src python3 main.py
 - `TOKDASH_USAGE_DB_WATCH` (default: `0`) — set to `1` to run a background sync loop inside `tokdash serve`
 - `TOKDASH_USAGE_DB_WATCH_INTERVAL` (default: `30` seconds) — sync interval for `tokdash db watch` and the serve-time watch loop
 
-## Quota polling
-
-Quota snapshots live in the usage DB and feed the history charts; boundary
-polling samples just before and after each fixed-reset window's reset so the
-running-high consumption model sees the true pre-reset peak and post-reset
-baseline. See [`QUOTA.md`](QUOTA.md) for the full quota polling design.
-
-- `TOKDASH_CLAUDE_PROFILES` (unset → scan `~/.claude*`) — path-separated (OS `pathsep`, e.g. `:` / `;`) list of Claude Code config directories to use instead of the home-directory `~/.claude*` scan, for installs living outside the home directory. The directory's name becomes the profile name shown for quota; duplicates of the default dir and of each other (following symlinks) are dropped so one subscription never shows up twice
-- `TOKDASH_QUOTA_POLL` (unset → config `quota.enabled`, default on) — hard kill switch: `0`, `false`, `no`, or `off` disables all quota work (session scan, network polls, DB writes) and overrides the persisted preference; any other value leaves the config switch in charge
-- `TOKDASH_QUOTA_POLL_INTERVAL` (unset → config `quota.poll_interval_minutes`, else `1800` seconds) — poll interval in seconds; must parse to a positive integer and is floored at `300` seconds. Precedence: env > `config.json` > default
-- `TOKDASH_QUOTA_BOUNDARY_POLL` (default: enabled) — set to `0`, `false`, `no`, or `off` to turn off boundary polling entirely (both the pre-reset and post-reset samples)
-- `TOKDASH_QUOTA_BOUNDARY_POST` (default: enabled) — set to `0`, `false`, `no`, or `off` to disable only the post-reset sample while keeping the pre-reset one
-- `TOKDASH_QUOTA_BOUNDARY_PRE_SECONDS` (default: `120` seconds) — how far ahead of a reset boundary the pre-reset sample fires; positive integer, empty or invalid values fall back to the default
-- `TOKDASH_QUOTA_BOUNDARY_POST_SECONDS` (default: `120` seconds) — how long after a reset the post-reset sample fires; positive integer, empty or invalid values fall back to the default
-- `TOKDASH_QUOTA_RETENTION_DAYS` (default: `0`, retention off) — days of `quota_snapshots` rows to keep; `0`, a negative value, or an unparseable value keeps all history (rows are small and the charts are the feature), a positive integer prunes older rows on every insert
-
 ## DB maintenance commands
 
 ```bash
@@ -135,7 +120,23 @@ tokdash db resync --pretty
 tokdash db watch --pretty
 ```
 
+## Quota polling
+
+Quota snapshots live in the usage DB and feed the history charts; boundary
+polling samples just before and after each fixed-reset window's reset so the
+running-high consumption model sees the true pre-reset peak and post-reset
+baseline. See [`QUOTA.md`](QUOTA.md) for the full quota polling design.
+
+- `TOKDASH_CLAUDE_PROFILES` — path-separated list of Claude Code config directories for quota; default `~/.claude` (or `$CLAUDE_CONFIG_DIR`) is always included and this only replaces the sibling `~/.claude*` scan (only read by quota, not usage/session parsing, so listed directories do not appear in usage); see [`QUOTA.md`](QUOTA.md) for details
+- `TOKDASH_QUOTA_POLL` — master kill switch (`0`) to disable all quota polling, scans, and writes; see [`QUOTA.md`](QUOTA.md) for details
+- `TOKDASH_QUOTA_POLL_INTERVAL` — background quota poll interval in seconds (floor `300`); see [`QUOTA.md`](QUOTA.md) for details
+- `TOKDASH_QUOTA_BOUNDARY_POLL` — toggle for sampling around quota reset boundaries (`0` to disable); see [`QUOTA.md`](QUOTA.md) for details
+- `TOKDASH_QUOTA_BOUNDARY_POST` — disable only the post-reset boundary sample (`0`); see [`QUOTA.md`](QUOTA.md) for details
+- `TOKDASH_QUOTA_BOUNDARY_PRE_SECONDS` — lead time in seconds before a reset boundary to sample quota; see [`QUOTA.md`](QUOTA.md) for details
+- `TOKDASH_QUOTA_BOUNDARY_POST_SECONDS` — delay in seconds after a reset boundary to sample quota; see [`QUOTA.md`](QUOTA.md) for details
+- `TOKDASH_QUOTA_RETENTION_DAYS` — days of quota history to keep before pruning (`0` keeps indefinitely); see [`QUOTA.md`](QUOTA.md) for details
+
 ## TUI & update checks
 
 - `TOKDASH_TUI_NO_REMOTE` (unset) — set to any non-empty value and `tokdash tui` never probes the local server for a same-version `tokdash serve` to delegate read-only GETs to; every fetch then answers exactly as the in-process path does (fail-closed to in-process on any doubt regardless)
-- `TOKDASH_UPDATE_CHECK` (unset → `config.json` `update_check` consent) — `1`, `true`, `yes`, or `on` enables the opt-in PyPI update check; `0`, `false`, `no`, or `off` is a hard kill switch that overrides persisted consent and also suppresses the setup step offering it. The check is one read-only cached PyPI GET (6-hour TTL) and never auto-upgrades
+- `TOKDASH_UPDATE_CHECK` — opt-in switch (`1`) or hard disable (`0`) for PyPI update checks; see [`ONBOARDING.md`](../guides/ONBOARDING.md) for details
