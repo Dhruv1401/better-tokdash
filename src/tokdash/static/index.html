@@ -2212,6 +2212,43 @@
     html.dark .hover\:bg-slate-50:hover { background-color: rgba(51, 65, 85, 0.3); }
     html.dark .border-b { border-color: #334155; }
 
+    /* Text reveal & morph: the topbar status unveiling on the first load resolve
+       and cross-fading on later changes. Same committed tokens; the reveal writes
+       the very characters as inline spans, so the line never shifts. */
+    .tokdash-reveal-char {
+      display: inline-block;
+      opacity: 0;
+      transform: translateY(0.35em);
+      animation: tokdash-reveal-char var(--rc-dur, 340ms) cubic-bezier(.16, 1, .3, 1) forwards;
+      animation-delay: var(--rd, 0ms);
+    }
+    @keyframes tokdash-reveal-char {
+      to { opacity: 1; transform: none; }
+    }
+    .tokdash-morph { position: relative; }
+    .tokdash-morph-out {
+      position: absolute;
+      inset: 0;
+      white-space: nowrap;
+      pointer-events: none;
+      animation: tokdash-morph-out var(--mc-dur, 300ms) cubic-bezier(.4, 0, .2, 1) forwards;
+    }
+    .tokdash-morph.is-morphing {
+      animation: tokdash-morph-in var(--mc-dur, 300ms) cubic-bezier(.16, 1, .3, 1);
+    }
+    @keyframes tokdash-morph-out {
+      to { opacity: 0; transform: translateY(-0.35em); }
+    }
+    @keyframes tokdash-morph-in {
+      from { opacity: 0; transform: translateY(0.35em); }
+      to { opacity: 1; transform: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .tokdash-reveal-char { animation: none; opacity: 1; transform: none; }
+      .tokdash-morph-out { animation: none; }
+      .tokdash-morph.is-morphing { animation: none; }
+    }
+
     /* Announcement bar: a top-of-surface strip for a real update arrival. Painted
        from the same tokens as the toasts and popovers (--color-surface-glass, a
        primary-tinted border, the shared radius and motion scale) so it blends with
@@ -25023,6 +25060,14 @@
           Animations.mountAnnouncementBar(document);
         }
       } catch (_) { /* the settings update badge still works without the bar */ }
+
+      try {
+        // The topbar status reveals on its first load resolve and morphs on later
+        // changes; the app's own writers still set the value, this only animates it.
+        if (typeof Animations.mountTextReveal === 'function') {
+          Animations.mountTextReveal();
+        }
+      } catch (_) { /* the status still shows plain text without the bundle */ }
 
       // Start hero loader with --rate 0.8 on initial boot, dismiss after exactly 254ms
       Animations.showLoader({ initialRate: 0.8 });
