@@ -25,3 +25,4 @@ export * from './search-field.js';
 export * from './date-range-picker.js';
 export * from './settings-dialog.js';
 export * from './switch.js';
+export * from './announcement-bar.js';
