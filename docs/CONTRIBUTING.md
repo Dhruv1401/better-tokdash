@@ -66,6 +66,26 @@ pytest tests/test_pricing_normalization.py -k lookup   # one file, filtered by t
 The suite points `TOKDASH_DATA_DIR` at a temporary directory itself, so it never touches
 your real data.
 
+## Chinese, Japanese and Korean text
+
+Fira Sans and Fira Code carry no Han glyph, so both font stacks end in the CJK face each
+operating system already ships: PingFang SC on macOS, Microsoft YaHei on Windows, Noto
+Sans SC on Linux. A machine with no CJK font of its own, or one that cannot reach
+`fonts.googleapis.com`, has neither, and Chinese then falls to whatever the browser
+substitutes, usually a serif face nothing else on the page uses. For those:
+
+```bash
+scripts/vendor_cjk_fonts.sh
+```
+
+It fetches Noto Sans SC into `static/vendor/fonts/`, which is gitignored, and the
+dashboard serves it from the next restart. Downloads are staged with their license;
+a failed download preserves the installed copy. `TOKDASH_CJK_WEIGHTS` selects the
+weights (default `400;500;700`). Keep the same weights when repairing an installed
+upstream version, because its stylesheet URL is cached as immutable. This script
+affects a source-tree run; it does not modify an installed pipx service.
+The optional font directory is also excluded from wheels and source archives.
+
 ## Releases
 
 For the manual release checklist, see [RELEASING.md](development/RELEASING.md).
