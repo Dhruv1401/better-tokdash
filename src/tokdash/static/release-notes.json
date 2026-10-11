@@ -1,6 +1,31 @@
 {
-  "current": "2.6.14",
+  "current": "2.6.15",
   "releases": [
+    {
+      "version": "2.6.15",
+      "date": "2026-10-11",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "If your machine has no Chinese font installed, an optional new script can fetch one for you. It installs Noto Sans SC together with its license into a local folder that never gets committed, keeps whatever you already have if a download fails, and leaves the dashboard's stylesheet alone unless you agree to the change. Font files never become part of the download or the installed package, so this is for running Tokdash from source."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Chinese, Japanese and Korean now use font stacks the dashboard chooses instead of whatever the browser guessed, and translated headings no longer inherit the spacing and weight of Latin type. Charts and report canvases follow the same choice, so switching language updates the lettering without a reload.",
+            "Opening a session no longer drops a fixed blue panel on top of your theme. Its tabs, charts, token bars and chat cards read your colours in both light and dark, and a session left open redraws itself if you change theme or language while you are looking at it. The wording inside is translated into all six dashboard languages, and text contrast was measured in every theme and mode combination so none of it is hard to read."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Codex sessions hold on to their output-speed figures. Codex records time in whole milliseconds and often logs a quick command as starting and finishing on the same one, which used to be read as a broken clock that discarded the timing of every response in that turn. A command that fast is now taken at face value, so many more sessions show measured tok/s instead of an empty panel."
+          ]
+        }
+      ]
+    },
     {
       "version": "2.6.14",
       "date": "2026-10-10",
