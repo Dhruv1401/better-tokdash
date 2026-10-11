@@ -1,6 +1,25 @@
 {
-  "current": "2.6.15",
+  "current": "2.6.16",
   "releases": [
+    {
+      "version": "2.6.16",
+      "date": "2026-10-11",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Speed gained a trend view for longer stretches, grouping the same figures into hour, day, week, month or quarter buckets. The page asks which sizes fit the window you picked, so a range never offers a grouping it has no data for."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "The Model output speed page now leads with combined throughput: what your machine actually produced, counting responses that ran at the same time once each rather than only as fast as the fastest single stream. Per stream stays right beside it as a lens, and the gap between the two is shown as how many ran in parallel, so fanning out subagents no longer reads as a slower machine than it was.",
+            "The page is built around one chart now. Pick up to six rows from the table underneath and walk the window by day, week, month, quarter or year; a model you drive from several tools counts as a single line. The first time you open it after upgrading, the timing cache rebuilds itself once while the last good figures stay readable."
+          ]
+        }
+      ]
+    },
     {
       "version": "2.6.15",
       "date": "2026-10-11",

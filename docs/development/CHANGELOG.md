@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 2.6.16 - 2026-10-11
+
+### Added
+
+- Speed now has a trend. `view=trend` lays every comparison key and every merged model over hour, day, week, month or quarter buckets, plus the 24 local hours, from one read, and each across-models row carries `busy_ms`, `combined_tok_per_s`, `parallelism` and `peak_in_flight` beside one merged `models` entry per normalised model rather than one row per harness. The server decides which bucket sizes a window offers and which one Auto picks, so the page carries no second copy of that ladder and a window cannot offer a bucket it has no data for. `docs/reference/API.md` documents the fields and the view, and `docs/development/ARCHITECTURE.md` describes the Combined rate. (#218)
+
+### Changed
+
+- The output speed page reports what the machine actually produced instead of how fast one stream ran. Its single number was per-stream speed -- each response's own tokens over its own duration -- so responses running at the same time never added up, and someone fanning out subagents read that as their throughput when the combined rate was often over twice it; the old wording ("Aggregated across sessions", "N tok/s across sessions") encouraged the misreading. The page now opens on Combined, which divides the same matched output tokens by the union of busy time so overlapping time counts once and concurrent responses add up, with Per stream kept beside it as a lens and the ratio of the two stated as parallelism. One SVG chart replaces the old panels and plots up to six rows chosen from the comparison table underneath, each holding its colour while it stays selected; a period control walks day, week, month, quarter and year; and in Combined a model driven from several harnesses is one merged row rather than several half-truths. Busy intervals come from the stored timestamp and duration, and because the OpenCode family stores the start of its window while the file readers store the end, a test pins the anchor for every supported reader rather than leaving it to inference. `SPEED_CACHE_CONTRACT_VERSION` moves to 7, so the disposable speed cache rebuilds once, and the quick ranges step aside on the speed tab while the report's period windows gain quarters. (#218)
+
 ## 2.6.15 - 2026-10-11
 
 ### Added
