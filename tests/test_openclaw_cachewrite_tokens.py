@@ -1,6 +1,7 @@
-"""Tests for OpenClaw cacheWrite token handling.
+"""Tests for OpenClaw session usage parsing and token accounting.
 
-Covers that cacheWrite is counted as input tokens in OpenClaw sessions.
+Covers cacheWrite token handling, session file discovery and archive filtering,
+message ID deduplication, inner timestamp date filtering, and zero-token rows.
 """
 import json
 from datetime import datetime, timezone

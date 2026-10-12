@@ -1,6 +1,7 @@
-"""Tests for quota credential sources.
+"""Tests for quota credential source discovery.
 
-Covers discovery of credential files for all supported providers.
+Covers finding external provider credentials in OpenCode, CC-Switch, Claude settings,
+and Command Code auth without exposing secret values.
 """
 from __future__ import annotations
 

@@ -1,6 +1,7 @@
-"""Tests for CommandCode quota collection.
+"""Tests for CommandCode quota collection logic.
 
-Covers API endpoints for whoami, credits, and subscriptions.
+Covers collector logic, credit and subscription parsing, window limit
+calculations, error recovery, and snapshot emission using mocked endpoints.
 """
 from __future__ import annotations
 

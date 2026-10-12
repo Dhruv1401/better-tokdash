@@ -1,6 +1,7 @@
-"""Tests for quota storage in the usage store.
+"""Tests for quota snapshot storage and history derivation.
 
-Covers quota snapshot persistence, retrieval, and repair operations.
+Covers snapshot persistence, schema repairs, and quota-history derivation,
+including consumption deltas, window resets, and time-series downsampling.
 """
 from __future__ import annotations
 

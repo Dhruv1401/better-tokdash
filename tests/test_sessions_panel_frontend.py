@@ -1,6 +1,7 @@
 """Tests for the sessions panel frontend.
 
-Covers the session list and detail views for all supported tools.
+Covers per-tool collapsible session panels: open/collapse rules, markup and ARIA,
+i18n keys, tool brand logos, and hiding empty panels.
 """
 from __future__ import annotations
 

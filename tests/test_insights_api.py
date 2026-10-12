@@ -1,6 +1,7 @@
-"""Tests for the insights module.
+"""Tests for the insights module and API contracts.
 
-Covers period resolution, aliases, and the observable range block.
+Covers period resolution, contribution streaks and intensity, temporal folds
+(hourly, weekday, heatmap, daily), facet selection, and synthetic dev fixtures.
 """
 from __future__ import annotations
 

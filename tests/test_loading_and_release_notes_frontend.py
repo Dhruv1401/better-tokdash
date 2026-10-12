@@ -1,6 +1,7 @@
-"""Tests for the loading and release notes frontend.
+"""Tests for page background, loading placeholders, and release notes frontend.
 
-Covers the loading spinner and release notes panel in the dashboard.
+Covers full-page themed background styling, shimmer loading placeholders,
+release-notes version matching, and accessible dialog drawer interactions.
 """
 from __future__ import annotations
 

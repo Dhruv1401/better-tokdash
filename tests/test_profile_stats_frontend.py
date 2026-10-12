@@ -1,6 +1,7 @@
-"""Tests for the profile stats frontend.
+"""Tests for the profile stats and activity heatmap frontend.
 
-Covers the profile statistics panel in the dashboard.
+Covers activity heatmap rendering, daily/weekly/monthly aggregation, intensity
+levels, theme palettes, milestone tiers, and contribution reconciliation.
 """
 from __future__ import annotations
 

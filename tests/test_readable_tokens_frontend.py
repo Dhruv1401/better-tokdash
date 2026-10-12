@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-import tokdash
+import tokdash  # type: ignore[import-untyped]
 
 INDEX_HTML = Path(tokdash.__file__).parent / "static" / "index.html"
 

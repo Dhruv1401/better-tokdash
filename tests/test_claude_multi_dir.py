@@ -1,6 +1,7 @@
-"""Tests for Claude Code multi-directory session parsing.
+"""Tests for Claude Code session discovery and message deduplication.
 
-Covers session discovery across multiple Claude config directories.
+Covers multi-directory session discovery and duplicate message ID resolution,
+including placeholder deduplication, streaming snapshots, and cache reclassification.
 """
 from pathlib import Path
 

@@ -1,6 +1,7 @@
-"""Tests for period semantics in session data.
+"""Tests for period semantics and range conversions.
 
-Covers month vs numeric days period handling.
+Covers named and numeric period mapping, date-range arguments, previous-period
+windows, and agreement between sessions and compute.
 """
 from __future__ import annotations
 

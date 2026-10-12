@@ -1,6 +1,7 @@
-"""Tests for the multi-server frontend.
+"""Tests for multi-server dashboard merging, route failover, and server selection.
 
-Covers the multi-server dashboard view and server selection UI.
+Covers cross-server usage and quota merging, per-host quota visibility, route
+health probing and ranking, failover handling, and registry migrations.
 """
 from __future__ import annotations
 

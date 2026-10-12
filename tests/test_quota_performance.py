@@ -1,6 +1,6 @@
-"""Tests for quota polling performance.
+"""Performance guards for quota reads over 100k stored snapshots.
 
-Covers timing and efficiency of bulk quota snapshot operations.
+Covers timing and bounded execution for /api/quota/history and quota_state().
 """
 from __future__ import annotations
 

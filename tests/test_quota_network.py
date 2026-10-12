@@ -1,6 +1,7 @@
-"""Tests for quota network requests.
+"""Tests for quota network requests and provider API collectors.
 
-Covers HTTP error handling, retries, and response parsing for all providers.
+Covers HTTP error handling, retries, and response parsing for Antigravity,
+Claude, Codex, Grok, Kimi, MiniMax, and ZAI quota APIs.
 """
 from __future__ import annotations
 
