@@ -21,6 +21,9 @@ systemctl --user stop tokdash
 
 # macOS
 launchctl unload ~/Library/LaunchAgents/com.tokdash.tokdash.plist
+
+# Windows (Task Scheduler)
+schtasks /End /TN Tokdash
 ```
 
 To remove the managed service entirely, run `tokdash uninstall`.
@@ -93,7 +96,7 @@ These consent commands save to `config.json` and apply immediately to the runnin
 **Cause:** Localhost forwarding from Windows to WSL2 is disabled (for example, `localhostForwarding=false` in `%USERPROFILE%\.wslconfig`).
 
 **Fix:**
-Windows' localhost forwarding reaches a WSL2 loopback bind by default, so `tokdash serve`'s default `127.0.0.1` bind works directly from Windows. Ensure `localhostForwarding=true` (or unset, the default) in `.wslconfig`.
+Windows' localhost forwarding reaches a WSL2 loopback bind by default, so `tokdash serve`'s default `127.0.0.1` bind works directly from Windows. Ensure `localhostForwarding=true` (or unset, the default) in `%USERPROFILE%\.wslconfig` on the Windows host (not in the WSL home directory). `.wslconfig` changes only take effect after the WSL VM restarts — run `wsl --shutdown` from Windows, then reopen your distro.
 
 Do **not** use `--bind 0.0.0.0` — binding to non-loopback disables writes entirely (see [SECURITY.md](../SECURITY.md)).
 
@@ -138,17 +141,19 @@ tokdash db sync
 
 ## Update check fails
 
-**Symptom:** `tokdash update` or the dashboard update check fails.
+**Symptom:** The update check in `tokdash doctor` or the dashboard reports an error or no result.
 
-**Cause:** No network connectivity, or PyPI is unreachable.
+**Cause:** No network connectivity to PyPI, or the opt-in update check is disabled.
 
 **Fix:**
 ```bash
-# Check network without changing anything
+# See what an upgrade would run, without changing anything
 tokdash update --dry-run
 ```
 
-Update checks are opt-in and off by default. The check runs only when requested (`tokdash doctor` or the dashboard's check) and only when enabled. `TOKDASH_UPDATE_CHECK=0` turns that opt-in check off — it does not affect manual upgrades via `tokdash update`.
+The update check is opt-in and off by default. It runs only when requested (`tokdash doctor` or the dashboard's check) and only when enabled. `TOKDASH_UPDATE_CHECK=0` turns that opt-in check off — it does not affect manual upgrades via `tokdash update`.
+
+If the check reports a network error, confirm the machine can reach PyPI. `tokdash update --dry-run` does not itself contact PyPI; it only prints the command an upgrade would run.
 
 ## See also
 
