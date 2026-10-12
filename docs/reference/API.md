@@ -41,9 +41,9 @@ per-session token); see [`docs/SECURITY.md`](../SECURITY.md) and `PUT /api/prici
 | `GET` | `/api/openclaw` | OpenClaw model breakdown |
 | `GET` | `/api/stats` | Annual stats aggregation |
 | `GET` | `/api/insights` | Fine-grained analytics (hour-of-day, weekday, heatmap, projects, streaks) |
-| `GET` | `/api/activity-insights` | Codex activity insights |
 | `GET` | `/api/pricing-db` | Current pricing database snapshot |
 | `PUT` | `/api/pricing-db` | Update the pricing database (write-gated, requires token) |
+| `GET` | `/api/activity-insights` | Codex activity insights |
 | `GET` | `/manifest.webmanifest` | PWA web manifest |
 | `GET` | `/sw.js` | Service worker JavaScript |
 | `GET` | `/` | Web dashboard (HTML) |
@@ -1017,7 +1017,7 @@ Returns the PWA web manifest for installing Tokdash as a progressive web app.
 }
 ```
 
-Note: `start_url` and `scope` are rewritten to the public base path (e.g. `/tokdash/`) when Tokdash is served behind a proxy that strips the prefix.
+Note: `start_url`, `scope`, and icon `src` paths are rewritten to the public base path (e.g. `/tokdash/`) when Tokdash is served behind a proxy that strips the prefix.
 
 ---
 
