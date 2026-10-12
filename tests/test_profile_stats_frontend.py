@@ -1,6 +1,6 @@
 """Tests for the profile stats and activity heatmap frontend.
 
-Covers activity heatmap rendering, daily/weekly/monthly aggregation, intensity
+Covers activity heatmap rendering, daily/weekly/cumulative aggregation, intensity
 levels, theme palettes, milestone tiers, and contribution reconciliation.
 """
 from __future__ import annotations

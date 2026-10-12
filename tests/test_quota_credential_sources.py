@@ -1,7 +1,8 @@
 """Tests for quota credential source discovery.
 
-Covers finding external provider credentials in OpenCode, CC-Switch, Claude settings,
-and Command Code auth without exposing secret values.
+Covers Antigravity native CLI token discovery, finding external provider
+credentials in OpenCode, CC-Switch, Claude settings, and Command Code auth
+without exposing secret values.
 """
 from __future__ import annotations
 
