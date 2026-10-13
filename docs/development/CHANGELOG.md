@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 2.6.17 - 2026-10-13
+
+### Added
+
+- Claude Code output speed is now measured from its transcripts. Each API request is timed once, from the first output token when a thinking block records its own duration and from the request's sender otherwise, and interrupted, retried, ambiguous and clock-broken requests are excluded rather than guessed. (#221)
+- Each per-stream speed line in the trend is shaded with its duration-weighted p10 to p90 spread, so a steady model and one that swings by half its rate no longer look alike. Buckets with fewer than 30 responses carry no spread, and Combined and merged rows have none. (#230)
+- The hourly cache-rate sparkline bridges one or two known zero-prompt hours between measured hours with a dashed curve instead of breaking into pieces. Measured rates and the headline are unchanged, and the tooltip explains the dashes in all six languages. (#223)
+
+### Changed
+
+- The output speed page builds incrementally. Each timed input records the usage-store state it was read against, a model build reads only changed inputs and is one job for every date range, live logs settle for a short window before being timed, and a build with nothing to read keeps the publication revision. Cached reports stay valid, and the page stops showing Loading on nearly every visit. (#224)
+- Codex responses the response marker cannot time are now timed from rollout line clocks, which covers responses that end in a tool call and every response before Codex 0.153. Tool intervals are no longer subtracted from a response window, and the four newer client tool items no longer void the response around them. On the maintainer's machine, replayed against an oracle, the proxy agrees to 0.998. (#226)
+- The session detail modal's follow-ups from #217 are closed. Its speed chart follows the theme for ticks, titles, gridlines and legend and repaints when the theme changes with the modal open, the load-failure message is translated, script-written labels get the CJK font and tracking rules, token-share bars take the dark-mode series colours, and the empty-transcript note uses its intended line height. (#229)
+- Documented that Claude Code subagent output is a lower bound: Claude Code writes most subagent requests before they finish and never rewrites them with final usage, an open upstream bug (anthropics/claude-code#84223). Billed numbers do not change and nothing is estimated. (#234, refs #227)
+
+### Fixed
+
+- Codex remote compaction requests that no `token_count` carries are now billed once as their own rows, shared by the usage and Sessions parsers so Overview and Sessions agree. Compactions a `token_count` already carries are still billed by it, and resumed-history copies and fork replays collapse against the original. Stored Codex rollouts are re-read once. (#233, closes #222)
+- OpenClaw deleted-session archives ending in `.zst` are decoded instead of being opened as UTF-8 text, so one such archive no longer blocks a fresh database from ingesting any OpenClaw history. Decoding is one zstd block at a time, every frame must finish so truncated archives publish no partial rows, and sidecars and backups stay excluded. (#225, closes #219)
+- A speed input whose file vanished, for example a Codex rollout moved to `archived_sessions/`, settles with its last read instead of staying pending forever, and a source is pending only for inputs with responses in the requested range. The page groups tools without speed measurements by reason again. (#220)
+- A same-size ZCode database rewrite within one clock tick is now detected by file identity (inode, and ctime outside Windows) instead of `(mtime, size)` alone, so the old snapshot is no longer kept. Two single-flight tests also stopped racing on wall time. (#232, closes #228)
+
 ## 2.6.16 - 2026-10-11
 
 ### Added

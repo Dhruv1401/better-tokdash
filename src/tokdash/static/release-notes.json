@@ -1,6 +1,38 @@
 {
-  "current": "2.6.16",
+  "current": "2.6.17",
   "releases": [
+    {
+      "version": "2.6.17",
+      "date": "2026-10-13",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "Claude Code output speed is now measured from its transcripts, so it no longer sits under tools without speed measurements. Interrupted and retried requests are left out rather than guessed.",
+            "The per-stream speed trend now shades how much individual responses vary around each model's line. Buckets with too few responses show no shading instead of a guess.",
+            "The hourly cache-rate sparkline now bridges short idle gaps with a dashed line instead of breaking apart; the measured rates and the headline are unchanged."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "The output speed page no longer rebuilds on nearly every visit. Only changed inputs are re-read, switching date ranges reuses the same build, and logs still being written settle before they are timed.",
+            "Codex output speed now covers responses that end in a tool call and sessions from before Codex 0.153, so most of an agentic session is timed instead of about one response in eight.",
+            "The session detail modal now follows the theme and language everywhere, including its speed chart, its load-failure message and its token-share bars in dark mode.",
+            "Documented that Claude Code subagent output tokens are under-reported because of an upstream bug. Nothing is estimated and billed numbers do not change."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Codex remote compaction requests that were never billed are now counted, in both Overview and Sessions.",
+            "OpenClaw session archives compressed as `.zst` are now read, so one no longer blocks all OpenClaw history from being ingested.",
+            "Codex no longer shows as waiting for speed timing forever when its rollouts were archived, and tools without speed measurements are grouped by reason again.",
+            "ZCode no longer misses a database rewrite that keeps the same size within one clock tick."
+          ]
+        }
+      ]
+    },
     {
       "version": "2.6.16",
       "date": "2026-10-11",
