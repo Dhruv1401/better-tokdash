@@ -115,6 +115,88 @@
       white-space: nowrap;
     }
 
+    /* ---------------------------------------------------------------------
+       Resizable Sessions Explorer columns
+       These tables are `table-layout: fixed` with their widths declared in a
+       real <colgroup>, so the split this UI actually has is the gap between two
+       adjacent columns: drag it and only those two columns move, while every
+       other column keeps the width it declared (the pair's total is preserved
+       exactly, so a neighbour cannot shift by a pixel).
+
+       The divider is a real focusable button parked in the table's own
+       .overflow-x-auto wrapper rather than inside a <th> — applyI18n() assigns
+       textContent to every [data-i18n] element on a language change and would
+       drop it, and a non-row child of a <table> would generate an anonymous cell
+       and shift the row. Being outside the table also keeps it clear of the
+       header's sort handlers entirely.
+
+       `left` is a percentage — the same unit the columns are written in — so the
+       grip tracks its boundary with no measurement, no observer, and no reflow
+       bookkeeping; only its height and the ARIA pixel values are measured, and
+       only while the panel that owns it is open.
+       --------------------------------------------------------------------- */
+    .tokdash-col-wrap { position: relative; }
+    .tokdash-col-divider {
+      position: absolute;
+      top: 0;
+      z-index: 3;
+      width: 12px;
+      height: 44px;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      cursor: col-resize;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      /* Centre the grip on the boundary it controls. Never transitioned: it has
+         to sit under the pointer on the very frame the drag starts. */
+      transform: translateX(-50%);
+      transition: background var(--t-fast) ease;
+    }
+    .tokdash-col-divider::after {
+      content: '';
+      position: absolute;
+      top: 26%;
+      bottom: 26%;
+      left: 50%;
+      width: 2px;
+      border-radius: 2px;
+      background: color-mix(in srgb, var(--color-text) 22%, transparent);
+      transform: translateX(-50%);
+      transition: top var(--t-fast) ease, bottom var(--t-fast) ease,
+                  background var(--t-fast) ease, box-shadow var(--t-fast) ease;
+    }
+    .tokdash-col-divider:hover {
+      background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+    }
+    /* The grip is a token-blue accent on hover, on keyboard focus and while
+       dragging, so it reads as part of the committed palette rather than as a
+       grey hairline dropped onto the table. */
+    .tokdash-col-divider:hover::after,
+    .tokdash-col-divider:focus-visible::after,
+    .tokdash-col-divider[data-dragging="true"]::after {
+      top: 12%;
+      bottom: 12%;
+      background: color-mix(in srgb, var(--color-primary) 82%, var(--color-text));
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 34%, transparent),
+                  0 0 10px color-mix(in srgb, var(--color-primary) 46%, transparent);
+    }
+    .tokdash-col-divider:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--color-primary) 72%, transparent);
+      outline-offset: 2px;
+      background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+    }
+    .tokdash-col-divider[data-dragging="true"] {
+      background: color-mix(in srgb, var(--color-primary) 16%, transparent);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .tokdash-col-divider,
+      .tokdash-col-divider::after { transition: none; }
+    }
+
     .tool-identity {
       display: inline-flex;
       align-items: center;
@@ -25068,6 +25150,12 @@
           Animations.mountTextReveal();
         }
       } catch (_) { /* the status still shows plain text without the bundle */ }
+
+      try {
+        if (typeof Animations.mountResizablePanels === 'function') {
+          Animations.mountResizablePanels(document);
+        }
+      } catch (_) { /* the plain session tables still work without the bundle */ }
 
       // Start hero loader with --rate 0.8 on initial boot, dismiss after exactly 254ms
       Animations.showLoader({ initialRate: 0.8 });

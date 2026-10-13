@@ -27,3 +27,4 @@ export * from './settings-dialog.js';
 export * from './switch.js';
 export * from './announcement-bar.js';
 export * from './text-reveal.js';
+export * from './resizable-panels.js';
