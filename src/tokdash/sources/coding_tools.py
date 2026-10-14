@@ -133,13 +133,24 @@ def _iter_jsonl_lines(path: Path) -> Iterator[str]:
 
 
 def _timed_sigs(cache_key: str, scan_fn) -> tuple:
-    """Return file signatures from *scan_fn*, reusing a cached value within TTL."""
+    """Return file signatures from *scan_fn*, reusing a cached value within TTL.
+
+    Records the timestamp AFTER the scan completes, and keeps the result for
+    max(TTL, 2 * scan_time) capped at 4 * TTL when the scan itself is slow.
+    A scan that takes longer than TTL would otherwise expire before the next
+    caller can use it, causing repeated full walks of the tree.
+    """
     now = _time.monotonic()
     cached = _sig_cache.get(cache_key)
-    if cached and (now - cached[0]) < _SIG_TTL:
-        return cached[1]
+    if cached:
+        age = now - cached[0]
+        if age < cached[2]:  # cached[2] is the dynamic TTL
+            return cached[1]
+    start = _time.monotonic()
     result = scan_fn()
-    _sig_cache[cache_key] = (now, result)
+    scan_time = _time.monotonic() - start
+    ttl = min(max(_SIG_TTL, 2 * scan_time), 4 * _SIG_TTL)
+    _sig_cache[cache_key] = (now, result, ttl)
     return result
 
 
