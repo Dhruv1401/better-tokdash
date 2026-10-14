@@ -35,6 +35,10 @@ def _source() -> str:
     return INDEX_HTML.read_text(encoding="utf-8")
 
 
+def _module() -> str:
+    return DIALOG_JS.read_text(encoding="utf-8")
+
+
 # A DOM stub with only what the dialog module touches: a dialog element that can
 # be shown and closed and that reports its own `close` event, an opener per
 # settings trigger, a document element with a class list and a style object, and a
@@ -98,7 +102,8 @@ function makeEl(tag) {
 doc = {
   activeElement: null,
   createElement: (tag) => makeEl(tag),
-  addEventListener() {},
+  listeners: {},
+  addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
   removeEventListener() {},
   getElementById() { return null; },
 };
@@ -213,6 +218,30 @@ sidebarTrigger.focus();
 openSettingsDialog();
 report.fromActiveElement = settingsDialogState().opener;
 
+// A press that began inside the panel is not a scrim click, however the release
+// ends. The browser dispatches `click` at the nearest common ancestor of the press
+// and the release, so a release that drifts past the panel's edge — a couple of
+// pixels while the button is held, a wheel notch under the pointer, content moved
+// by a re-render — is a click on the backdrop, and the app's scrim handler closes
+// the dialog on it. The guard sees it first, in the document's capture phase.
+const scrimClick = (target) => {
+  const event = { target, stopped: false, stopPropagation() { this.stopped = true; } };
+  (doc.listeners['click'] || []).forEach((fn) => fn(event));
+  return event;
+};
+const pressOn = (target) => {
+  (backdrop.listeners['pointerdown'] || []).forEach((fn) => fn({ target }));
+};
+pressOn(panel);
+report.pressInsidePanelReleaseOnScrim = scrimClick(backdrop).stopped;
+pressOn(panel);
+report.pressInsidePanelReleaseInside = scrimClick(panel).stopped;
+pressOn(backdrop);
+report.pressOnScrimReleaseOnScrim = scrimClick(backdrop).stopped;
+// The record is one press deep: the click after the guarded one is nobody's
+// prisoner, even though it lands on the scrim too.
+report.afterGuardedClick = scrimClick(backdrop).stopped;
+
 report.unmounted = unmountSettingsDialog();
 report.afterUnmount = {
   state: settingsDialogState(),
@@ -300,11 +329,40 @@ def test_settings_dialog_focus_and_scroll_contract(tmp_path: Path) -> None:
     # gets it back.
     assert report["fromActiveElement"] == "sidebarSettingsBtn"
 
+    # Only a click that started on the scrim closes the dialog. A press that went
+    # down inside the panel and ended on the scrim is stopped before the app's own
+    # scrim and "clicked outside" handlers ever see it, so a drifting pointer can
+    # no longer take the settings surface away mid-choice; a click that stayed in
+    # the panel, and one that began on the scrim, are left alone.
+    assert report["pressInsidePanelReleaseOnScrim"] is True, report
+    assert report["pressInsidePanelReleaseInside"] is False, report
+    assert report["pressOnScrimReleaseOnScrim"] is False, report
+    assert report["afterGuardedClick"] is False, report
+
     # Unmounting releases everything it was holding.
     assert report["unmounted"] is None
     assert report["afterUnmount"]["state"] is None
     assert report["afterUnmount"]["scrollLocked"] is False
     assert report["afterUnmount"]["gutterCleared"] is True
+
+
+def test_only_a_click_that_started_on_the_scrim_closes_the_dialog() -> None:
+    """The press origin decides; the release point cannot take the panel away."""
+    source = _module()
+    assert "pressedInsidePanel = Boolean(event.target && state.panel.contains(event.target));" in source
+    # Recorded from either kind of press event, on the backdrop itself.
+    assert "backdrop.addEventListener('pointerdown', rememberPressOrigin, true);" in source
+    assert "backdrop.addEventListener('mousedown', rememberPressOrigin, true);" in source
+    # Stopped in the document's capture phase, ahead of the app's own bubble
+    # handlers on the backdrop and the document.
+    assert "document.addEventListener('click', guardScrimPress, true);" in source
+    guard = source.split("function guardScrimPress", 1)[1].split("function syncOpener", 1)[0]
+    assert "if (!pressedInsidePanel) return;" in guard
+    assert "if (event.target && state.panel.contains(event.target)) return;" in guard
+    assert "event.stopPropagation();" in guard
+    # A fresh open starts with no remembered press, and a close forgets one.
+    assert "pressedInsidePanel = false;" in source.split("export function openSettingsDialog", 1)[1]
+    assert "pressedInsidePanel = false;" in source.split("function settleClosed", 1)[1]
 
 
 def test_settings_dialog_is_a_real_modal_element() -> None:

@@ -155,8 +155,9 @@ function focusTile(tile) {
  */
 function commit(theme, { focus = false } = {}) {
   if (!state) return;
-  const tile = state.tiles.find((each) => each.dataset.theme === theme);
-  if (!tile) return;
+  const tile = state.tiles.find((each) => each.dataset.theme === theme) || null;
+  // A tile that is no longer mounted cannot take the focus; the choice still
+  // commits, because the select is the value carrier either way.
   if (focus) focusTile(tile);
   if (state.select.value !== theme) {
     state.select.value = theme;
@@ -164,6 +165,39 @@ function commit(theme, { focus = false } = {}) {
   } else {
     syncThemeSwitcher(theme);
   }
+}
+
+/**
+ * Remember the tile a press went down on.
+ *
+ * A click only means the tile under the pointer if the pointer stayed on it. The
+ * tiles shrink by 3% while pressed and sit in a panel that scrolls, so a release
+ * a couple of pixels off the tile is a click on the grid, the panel or the scrim —
+ * the browser dispatches `click` at the nearest common ancestor of the press and
+ * the release — and the choice was dropped, or (on the scrim) the dialog was taken
+ * away. Tracking the pressed tile makes the press the choice; the release only
+ * finishes it.
+ */
+function rememberPressedTile(event) {
+  if (!state) return;
+  const tile = event.target.closest?.('.theme-swatch') || null;
+  state.pressedTheme = tile ? tile.dataset.theme : null;
+}
+
+function forgetPressedTile() {
+  if (state) state.pressedTheme = null;
+}
+
+// A click that never left its tile is the grid listener's business below. This
+// one answers only for a release that landed elsewhere, and it runs in the
+// document's capture phase so it still sees a click the dialog's scrim guard is
+// about to swallow.
+function completePressedTile(event) {
+  if (!state || !state.pressedTheme) return;
+  const theme = state.pressedTheme;
+  state.pressedTheme = null;
+  if (event.target.closest?.('.theme-swatch')) return;
+  commit(theme);
 }
 
 function onKeydown(event) {
@@ -243,12 +277,16 @@ export function mountThemeSwitcher(root, { select = null } = {}) {
   });
   tiles.forEach((tile) => root.appendChild(tile));
 
-  state = { root, select: selectEl, tiles, indicator, theme: null };
+  state = { root, select: selectEl, tiles, indicator, theme: null, pressedTheme: null };
   root.addEventListener('keydown', onKeydown);
   root.addEventListener('click', (event) => {
     const tile = event.target.closest?.('.theme-swatch');
     if (tile) commit(tile.dataset.theme);
   });
+  root.addEventListener('pointerdown', rememberPressedTile, true);
+  root.addEventListener('mousedown', rememberPressedTile, true);
+  root.addEventListener('pointercancel', forgetPressedTile, true);
+  document.addEventListener('click', completePressedTile, true);
 
   // The panel is hidden on first paint, so every tile measures zero. Placement
   // on open is the revealer's call (see `placeThemeSwitcher`); a ResizeObserver
@@ -269,6 +307,7 @@ export function unmountThemeSwitcher() {
   if (!state) return;
   state.observer?.disconnect();
   state.root.removeEventListener('keydown', onKeydown);
+  if (typeof document !== 'undefined') document.removeEventListener('click', completePressedTile, true);
   state = null;
 }
 

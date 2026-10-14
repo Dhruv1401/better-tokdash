@@ -14,6 +14,13 @@ painting it never arrives.
 (`dark` / `light` / `auto`) are one preference under one JSON key. The legacy
 `tokdash-style-theme` pair is read once, folded in, and removed, so an existing
 install keeps the exact look it had.
+
+*The press decides.* A browser dispatches `click` at the nearest common ancestor
+of the press and the release, so a press on a tile that ends a couple of pixels
+off it is a click on the grid, the panel or the scrim — the choice used to be
+dropped, and on the scrim the dialog closed under it. The tile the press started
+on is remembered and committed when the click lands elsewhere; the dialog, for its
+part, only reads a scrim click that began on the scrim.
 """
 
 from __future__ import annotations
@@ -109,6 +116,29 @@ def test_auto_mode_still_follows_the_system():
     assert src.count("if (!themeModeIsAuto()) return;") == 2
 
 
+def test_a_press_that_leaves_its_tile_still_counts_as_choosing_it():
+    """The press owns the choice; the release only finishes it."""
+    switcher = _module(SWITCHER_JS)
+    assert "state.pressedTheme = tile ? tile.dataset.theme : null;" in switcher
+    # Recorded in the capture phase on the grid, so a press is seen before any
+    # control inside a tile can act on it.
+    assert "root.addEventListener('pointerdown', rememberPressedTile, true);" in switcher
+    assert "root.addEventListener('mousedown', rememberPressedTile, true);" in switcher
+    # Completed in the document's capture phase: a click whose target is the grid,
+    # the panel or the scrim never reaches the grid's own listener.
+    assert "document.addEventListener('click', completePressedTile, true);" in switcher
+    assert "if (event.target.closest?.('.theme-swatch')) return;" in switcher
+    assert "commit(theme);" in switcher.split("function completePressedTile", 1)[1].split(
+        "function onKeydown", 1
+    )[0]
+    # A tile that is gone cannot take focus, but the choice still commits.
+    commit_body = switcher.split("function commit(", 1)[1].split("function rememberPressedTile", 1)[0]
+    assert "if (focus) focusTile(tile);" in commit_body
+    assert "if (!tile) return;" not in commit_body
+    # The listener is dropped with the mount, so a rebuild cannot stack them.
+    assert "document.removeEventListener('click', completePressedTile, true)" in switcher
+
+
 # --- Behaviour (real module, stub DOM) -------------------------------------
 
 _HARNESS = r"""
@@ -141,7 +171,14 @@ function makeEl(tag) {
   el.getAttribute = (k) => (k in el.attributes ? el.attributes[k] : null);
   el.removeAttribute = (k) => { delete el.attributes[k]; };
   el.addEventListener = (type, fn) => { (el.listeners[type] = el.listeners[type] || []).push(fn); };
-  el.removeEventListener = () => {};
+  el.removeEventListener = (type, fn) => {
+    el.listeners[type] = (el.listeners[type] || []).filter((each) => each !== fn);
+  };
+  el.dispatchEvent = (event) => {
+    (el.dispatched = el.dispatched || []).push(event);
+    (el.listeners[event.type] || []).forEach((fn) => fn(event));
+    return true;
+  };
   el.appendChild = (node) => { el.children.push(node); node.parentNode = el; return node; };
   el.append = (...nodes) => { nodes.forEach((node) => el.appendChild(node)); };
   el.focus = () => {};
@@ -158,14 +195,20 @@ class ResizeObserverStub {
 
 const html = makeEl('html');
 html.classList = { contains: (name) => name === 'dark' };
+defineGlobal('Event', class Event {
+  constructor(type, options = {}) { this.type = type; this.bubbles = Boolean(options.bubbles); }
+});
+const documentListeners = {};
 defineGlobal('document', {
   documentElement: html,
   createElement: (tag) => makeEl(tag),
   getElementById: () => null,
   querySelector: () => null,
   querySelectorAll: () => [],
-  addEventListener() {},
-  removeEventListener() {},
+  addEventListener(type, fn) { (documentListeners[type] = documentListeners[type] || []).push(fn); },
+  removeEventListener(type, fn) {
+    documentListeners[type] = (documentListeners[type] || []).filter((each) => each !== fn);
+  },
 });
 defineGlobal('window', {
   matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
@@ -178,6 +221,8 @@ defineGlobal('getComputedStyle', () => ({ getPropertyValue: () => '' }));
 const m = await import(MODULE_URI);
 
 const root = makeEl('div');
+const scrim = makeEl('dialog');
+scrim.id = 'settingsBackdrop';
 const select = makeEl('select');
 const VALUES = ['classic', 'elevated', 'paper'];
 select.options = VALUES.map((value) => ({
@@ -212,6 +257,65 @@ report.height = indicator.style.height;
 report.transform = indicator.style.transform;
 report.transitionAfter = indicator.style.transition;
 report.expectedTransform = `translate3d(${checked.offsetLeft}px, ${checked.offsetTop}px, 0)`;
+
+// The press is the choice. A browser dispatches `click` at the nearest common
+// ancestor of the press and the release, so these are the two shapes a release
+// that left its tile can take: one landing on the grid (a two-pixel drift) and
+// one landing on the scrim (the panel moved under the pointer), which the dialog's
+// own guard swallows before the app's scrim handler sees it. The click target is
+// the only thing that differs, and both must still commit the pressed tile.
+const applied = [];
+select.addEventListener('change', () => { applied.push(select.value); });
+
+const pressOn = (target) => {
+  (root.listeners['pointerdown'] || []).forEach((fn) => fn({ target }));
+};
+const captureClickOn = (target) => {
+  const event = { target, stopped: false, stopPropagation() { this.stopped = true; } };
+  (documentListeners['click'] || []).forEach((fn) => fn(event));
+  return event;
+};
+const bubbleClickOn = (target) => {
+  (root.listeners['click'] || []).forEach((fn) => fn({ target }));
+};
+
+const tileFor = (theme) => state.tiles.find((tile) => tile.dataset.theme === theme);
+
+// The stub DOM has no tree walk, so teach the tiles and their parts what a real
+// `closest('.theme-swatch')` would answer.
+state.tiles.forEach((tile) => {
+  tile.closest = (selector) => (selector === '.theme-swatch' ? tile : null);
+  tile.children.forEach((child) => {
+    child.closest = (selector) => (selector === '.theme-swatch' ? tile : null);
+  });
+});
+
+// Two pixels off the classic tile: the click is dispatched on the grid.
+pressOn(tileFor('classic'));
+report.driftClick = captureClickOn(root).stopped;
+report.afterDrift = { value: select.value, applied: applied.slice() };
+
+// A wheel notch under the pointer: the click is dispatched on the scrim.
+pressOn(tileFor('paper'));
+report.scrimClick = captureClickOn(scrim).stopped;
+report.afterScrim = { value: select.value, applied: applied.slice() };
+
+// A press on the scrim that is released on the scrim is left to the dialog.
+pressOn(scrim);
+report.scrimOnly = captureClickOn(scrim).stopped;
+report.afterScrimOnly = { value: select.value, applied: applied.slice() };
+
+// The ordinary click: the release never left its tile, so the grid's own listener
+// owns it — and the document hook must not commit it a second time.
+pressOn(tileFor('elevated'));
+report.ordinaryCapture = captureClickOn(tileFor('elevated').children[0]).stopped;
+bubbleClickOn(tileFor('elevated').children[0]);
+report.afterOrdinary = { value: select.value, applied: applied.slice() };
+
+// A click that never had a press (an assistive technology, a script) commits
+// nothing here on its own.
+report.bareClick = captureClickOn(root).stopped;
+report.afterBare = { value: select.value, applied: applied.slice() };
 console.log(JSON.stringify(report));
 """
 
@@ -246,3 +350,33 @@ def test_ring_lands_on_the_checked_tile_when_the_panel_opens(tmp_path: Path):
     assert report["transform"] == report["expectedTransform"], report
     # The adoption suppressed the transition and then handed it back.
     assert report["transitionAfter"] == "", report
+
+
+@needs_node
+def test_a_release_that_left_its_tile_still_applies_it(tmp_path: Path):
+    report = _run(tmp_path)
+
+    # Pressed the classic tile, released two pixels off it: the browser dispatches
+    # the click on the grid, and the choice still commits through the select.
+    assert report["afterDrift"]["value"] == "classic", report
+    assert report["afterDrift"]["applied"] == ["classic"], report
+
+    # Released on the scrim instead — the panel moved under the pointer. The
+    # choice commits, and the click is left for the dialog's scrim guard.
+    assert report["scrimClick"] is False, report
+    assert report["afterScrim"]["value"] == "paper", report
+    assert report["afterScrim"]["applied"] == ["classic", "paper"], report
+
+    # A press that began on the scrim commits nothing: that click is the dialog's
+    # close, and the grid has no opinion about it.
+    assert report["afterScrimOnly"]["value"] == "paper", report
+    assert report["afterScrimOnly"]["applied"] == ["classic", "paper"], report
+
+    # An unbroken click is committed exactly once — by the grid's own listener,
+    # not a second time by the document hook.
+    assert report["ordinaryCapture"] is False, report
+    assert report["afterOrdinary"]["value"] == "elevated", report
+    assert report["afterOrdinary"]["applied"] == ["classic", "paper", "elevated"], report
+
+    # And a click with no press behind it changes nothing.
+    assert report["afterBare"]["applied"] == ["classic", "paper", "elevated"], report

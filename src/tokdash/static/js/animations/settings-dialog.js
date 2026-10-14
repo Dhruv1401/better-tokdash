@@ -28,6 +28,42 @@ const SCROLL_LOCK_CLASS = 'settings-dialog-open';
 const GUTTER_PROPERTY = '--settings-dialog-gutter';
 
 let state = null;
+// Where the pointer went down, relative to the panel. See `guardScrimPress`.
+let pressedInsidePanel = false;
+
+/**
+ * A press that began inside the panel is not a scrim click, however it ends.
+ *
+ * The scrim covers the window, and the browser dispatches `click` at the nearest
+ * common ancestor of the press and the release. So a press that goes down on a
+ * control in the panel and comes up past its edge — a two-pixel drift while the
+ * button is held, a wheel notch under the pointer, content moved by a re-render —
+ * is a click on the `<dialog>`, and the app's scrim handler read that as "clicked
+ * outside" and took the settings surface away mid-choice. Remembering where the
+ * press started separates a scrim click from a press that merely ended on the
+ * scrim; only the first one closes.
+ */
+function rememberPressOrigin(event) {
+  if (!state || !state.backdrop.open) {
+    pressedInsidePanel = false;
+    return;
+  }
+  pressedInsidePanel = Boolean(event.target && state.panel.contains(event.target));
+}
+
+// Runs in the document's capture phase, ahead of the app's own scrim and
+// "clicked outside" handlers, so a stray release never reaches them.
+function guardScrimPress(event) {
+  if (!state || !state.backdrop.open) {
+    pressedInsidePanel = false;
+    return;
+  }
+  if (!pressedInsidePanel) return;
+  pressedInsidePanel = false;
+  // Still inside the panel: the panel's own controls own this click.
+  if (event.target && state.panel.contains(event.target)) return;
+  event.stopPropagation();
+}
 
 function syncOpener(open) {
   const opener = state && state.opener;
@@ -72,6 +108,7 @@ function unlockPage() {
 function settleClosed() {
   if (!state || state.closed) return;
   state.closed = true;
+  pressedInsidePanel = false;
   unlockPage();
   syncOpener(false);
   if (state.focusOnClose !== false) {
@@ -111,6 +148,11 @@ export function mountSettingsDialog(backdrop, panel, options = {}) {
   panel.setAttribute('tabindex', '-1');
 
   backdrop.addEventListener('close', () => { settleClosed(); });
+  // Press origin, recorded from either kind of press event: a pointer platform
+  // reports `pointerdown` and the mouse fallback covers the ones that do not.
+  backdrop.addEventListener('pointerdown', rememberPressOrigin, true);
+  backdrop.addEventListener('mousedown', rememberPressOrigin, true);
+  document.addEventListener('click', guardScrimPress, true);
   return 1;
 }
 
@@ -149,6 +191,7 @@ export function openSettingsDialog({ opener = null } = {}) {
     || (active && active !== document.body && active !== document.documentElement ? active : null);
   state.closed = false;
   state.focusOnClose = true;
+  pressedInsidePanel = false;
 
   if (!backdrop.open) {
     backdrop.removeAttribute('hidden');
