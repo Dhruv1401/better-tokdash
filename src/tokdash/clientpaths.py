@@ -1138,10 +1138,12 @@ def _roo_task_dirs() -> List[Path]:
     out: List[Path] = []
     for root in roo_storage_roots():
         try:
-            found = sorted(p for p in (root / "tasks").glob("*") if p.is_dir())
+            tasks_dir = root / "tasks"
+            with os.scandir(tasks_dir) as it:
+                found = [tasks_dir / e.name for e in it if e.is_dir()]
         except OSError:
             continue
-        for task in found:
+        for task in sorted(found):
             if task not in out:
                 out.append(task)
     return out
