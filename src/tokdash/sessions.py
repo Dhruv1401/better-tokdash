@@ -3371,8 +3371,12 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                             m_entry["cache_write"] += _to_int(u_cw)
                             m_entry.setdefault("has_fixed_cost", False)
                             m_entry["reasoning"] += _to_int(u_reason)
-                            u_act_f = float(u_act or 0.0)
-                            u_est_f = float(u_est or 0.0)
+                            try:
+                                u_act_f = float(u_act or 0.0)
+                                u_est_f = float(u_est or 0.0)
+                            except (ValueError, TypeError):
+                                u_act_f = 0.0
+                                u_est_f = 0.0
                             if u_act_f > 0:
                                 m_entry["cost"] = m_entry.get("cost", 0.0) + u_act_f
                                 m_entry["has_fixed_cost"] = True
@@ -3386,9 +3390,9 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                                 u_cw_v = _to_int(u_cw)
                                 u_provider = HermesParser._infer_provider(u_model)
                                 u_pm = f"{u_provider}/{u_model}" if u_provider else u_model
-                                rc = _pricing_db.get_cost(u_pm, u_in_v, u_out_v, u_cr_v, u_cw_v)
+                                rc = _PRICING_DB.get_cost(u_pm, u_in_v, u_out_v, u_cr_v, u_cw_v)
                                 if rc == 0.0 and u_provider:
-                                    rc = _pricing_db.get_cost(u_model, u_in_v, u_out_v, u_cr_v, u_cw_v)
+                                    rc = _PRICING_DB.get_cost(u_model, u_in_v, u_out_v, u_cr_v, u_cw_v)
                                 m_entry["cost"] = m_entry.get("cost", 0.0) + rc
                             fs = float(u_first) if u_first is not None else None
                             if fs is not None:
@@ -3506,7 +3510,7 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                             ):
                                 continue
 
-                            model = str(model)
+                            model = str(model or "unknown")
                             provider = (
                                 str(billing_provider or "").strip()
                                 or HermesParser._infer_provider(model)
