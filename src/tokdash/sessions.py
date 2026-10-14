@@ -174,7 +174,7 @@ class _SessionFileUnavailable(Exception):
     """
 
 
-def _cached_session_parser(maxsize: int = 512):
+def _cached_session_parser(maxsize: int = 8192):
     """``lru_cache`` for a session-file parser, minus transient-failure caching.
 
     Identical to ``lru_cache(maxsize)`` except that a :class:`_SessionFileUnavailable`
