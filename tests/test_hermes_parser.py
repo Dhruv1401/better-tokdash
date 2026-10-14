@@ -579,3 +579,38 @@ def test_hermes_parser_multi_model_cost_precedence(monkeypatch, tmp_path):
     # Model 3: pricing DB used when both actual and estimated are 0
     assert by_model["kimi-k2.5"]["cost"] > 0
 
+
+def test_hermes_parser_multi_model_mixed_cost_aggregation(monkeypatch, tmp_path):
+    """One row with actual_cost > 0 and another with actual_cost = 0 for the
+    same model: the unpriced tokens must be priced, not swallowed."""
+    hermes_dir = tmp_path / ".hermes"
+    hermes_dir.mkdir()
+    sess_row = _default_row(row_id="sess-mixed", model="kimi-k2.5", message_count=3)
+    usage_rows = [
+        _default_usage_row(
+            session_id="sess-mixed", model="kimi-k2.5", task="main",
+            input_tokens=100, output_tokens=10,
+            actual_cost_usd=0.005, estimated_cost_usd=0.004,
+        ),
+        _default_usage_row(
+            session_id="sess-mixed", model="kimi-k2.5", task="background_review",
+            input_tokens=1000, output_tokens=100,
+            actual_cost_usd=0.0, estimated_cost_usd=0.0,
+        ),
+    ]
+    _create_hermes_db(hermes_dir / "state.db", [sess_row], usage_rows)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+    _sig_cache.clear()
+    BaseParser._entry_cache.clear()
+
+    parser = HermesParser(PricingDatabase())
+    entries = parser.collect(None, None)
+
+    assert len(entries) == 1
+    e = entries[0]
+    # Cost = 0.005 (fixed) + priced(1000, 100) > 0.005
+    assert e["cost"] > 0.005
+    # Tokens are summed
+    assert e["input"] == 1100
+    assert e["output"] == 110
+
