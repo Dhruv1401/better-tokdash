@@ -3640,7 +3640,8 @@ class HermesParser(BaseParser):
                             SELECT session_id, model,
                                    input_tokens, output_tokens,
                                    cache_read_tokens, cache_write_tokens,
-                                   reasoning_tokens, estimated_cost_usd, actual_cost_usd
+                                   reasoning_tokens, estimated_cost_usd, actual_cost_usd,
+                                   first_seen
                             FROM session_model_usage
                             WHERE model IS NOT NULL AND TRIM(model) != ''
                             """
@@ -3651,7 +3652,7 @@ class HermesParser(BaseParser):
                             (
                                 u_sid, u_model, u_in, u_out,
                                 u_cr, u_cw, u_reason,
-                                u_est, u_act,
+                                u_est, u_act, u_first,
                             ) = urow
                             u_sid = str(u_sid)
                             u_model = str(u_model)
@@ -3665,6 +3666,7 @@ class HermesParser(BaseParser):
                                     "reasoning": 0,
                                     "estimated_cost": 0.0,
                                     "actual_cost": 0.0,
+                                    "first_seen": None,
                                 }
                             m_entry = m_dict[u_model]
                             m_entry["input"] += self._i(u_in)
@@ -3674,6 +3676,11 @@ class HermesParser(BaseParser):
                             m_entry["reasoning"] += self._i(u_reason)
                             m_entry["estimated_cost"] += float(u_est or 0.0)
                             m_entry["actual_cost"] += float(u_act or 0.0)
+                            # Track earliest first_seen for chronological ordering
+                            fs = float(u_first) if u_first is not None else None
+                            if fs is not None:
+                                if m_entry["first_seen"] is None or fs < m_entry["first_seen"]:
+                                    m_entry["first_seen"] = fs
                 except Exception:
                     usage_by_session = None
 
@@ -3703,7 +3710,12 @@ class HermesParser(BaseParser):
                         ts_ms = int(sa * 1000) if sa < 1e12 else int(sa)
 
                         if usage_by_session is not None and str(row_id) in usage_by_session:
-                            for model_name, m_data in usage_by_session[str(row_id)].items():
+                            # Sort models by earliest first_seen for chronological ordering
+                            sorted_models = sorted(
+                                usage_by_session[str(row_id)].items(),
+                                key=lambda kv: (kv[1].get("first_seen") is None, kv[1].get("first_seen") or 0),
+                            )
+                            for model_idx, (model_name, m_data) in enumerate(sorted_models):
                                 m_input = m_data["input"]
                                 m_output = m_data["output"]
                                 m_cache_r = m_data["cache_read"]
@@ -3748,7 +3760,7 @@ class HermesParser(BaseParser):
                                     "reasoning": m_reasoning,
                                     "cost": cost,
                                     "timestamp": ts_ms,
-                                    "messageCount": msg_count_val,
+                                    "messageCount": msg_count_val if model_idx == 0 else 0,
                                     "entry_id": f"hermes:{row_id}:{model_name}",
                                     "_billing": billing,
                                 })

@@ -3336,7 +3336,8 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                             SELECT session_id, model,
                                    input_tokens, output_tokens,
                                    cache_read_tokens, cache_write_tokens,
-                                   reasoning_tokens, estimated_cost_usd, actual_cost_usd
+                                   reasoning_tokens, estimated_cost_usd, actual_cost_usd,
+                                   first_seen
                             FROM session_model_usage
                             WHERE model IS NOT NULL AND TRIM(model) != ''
                             """
@@ -3347,7 +3348,7 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                             (
                                 u_sid, u_model, u_in, u_out,
                                 u_cr, u_cw, u_reason,
-                                u_est, u_act,
+                                u_est, u_act, u_first,
                             ) = urow
                             u_sid = str(u_sid)
                             u_model = str(u_model)
@@ -3361,6 +3362,7 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                                     "reasoning": 0,
                                     "estimated_cost": 0.0,
                                     "actual_cost": 0.0,
+                                    "first_seen": None,
                                 }
                             m_entry = m_dict[u_model]
                             m_entry["input"] += _to_int(u_in)
@@ -3370,6 +3372,10 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                             m_entry["reasoning"] += _to_int(u_reason)
                             m_entry["estimated_cost"] += float(u_est or 0.0)
                             m_entry["actual_cost"] += float(u_act or 0.0)
+                            fs = float(u_first) if u_first is not None else None
+                            if fs is not None:
+                                if m_entry["first_seen"] is None or fs < m_entry["first_seen"]:
+                                    m_entry["first_seen"] = fs
                     except (OSError, sqlite3.Error):
                         usage_by_session = None
             except (OSError, sqlite3.Error):
@@ -3403,7 +3409,11 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                         if usage_by_session is not None and sid in usage_by_session:
                             turns = []
                             turn_idx = 1
-                            for model_name, m_data in usage_by_session[sid].items():
+                            sorted_models = sorted(
+                                usage_by_session[sid].items(),
+                                key=lambda kv: (kv[1].get("first_seen") is None, kv[1].get("first_seen") or 0),
+                            )
+                            for model_name, m_data in sorted_models:
                                 m_in = m_data["input"]
                                 m_out = m_data["output"]
                                 m_cr = m_data["cache_read"]

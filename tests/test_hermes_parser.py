@@ -379,6 +379,7 @@ def test_hermes_parser_multi_model_session(monkeypatch, tmp_path):
             cache_write_tokens=50,
             reasoning_tokens=20,
             actual_cost_usd=0.015,
+            first_seen=1779395293.0,
         ),
         _default_usage_row(
             session_id="sess-multi",
@@ -390,6 +391,7 @@ def test_hermes_parser_multi_model_session(monkeypatch, tmp_path):
             cache_write_tokens=25,
             reasoning_tokens=10,
             actual_cost_usd=0.010,
+            first_seen=1779395300.0,
         ),
     ]
     _create_hermes_db(hermes_dir / "state.db", [sess_row], usage_rows)
@@ -427,7 +429,7 @@ def test_hermes_parser_multi_model_session(monkeypatch, tmp_path):
     assert g["cacheWrite"] == 25
     assert g["reasoning"] == 10
     assert abs(g["cost"] - 0.010) < 1e-9
-    assert g["messageCount"] == 7
+    assert g["messageCount"] == 0  # Only first model gets session-level count
     assert g["entry_id"] == "hermes:sess-multi:gpt-4o"
 
 

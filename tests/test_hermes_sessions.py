@@ -544,9 +544,11 @@ def test_hermes_sessions_multi_model(monkeypatch, tmp_path):
                     3000, 300, 0, 0, title="Multi Model Session", msg_count=5)
     usage = [
         _usage_row("s-multi", "claude-3-5-sonnet", "anthropic",
-                   input_tokens=1000, output_tokens=100, actual_cost_usd=0.005),
+                   input_tokens=1000, output_tokens=100, actual_cost_usd=0.005,
+                   first_seen=1779395293.0),
         _usage_row("s-multi", "gpt-4o", "openai",
-                   input_tokens=2000, output_tokens=200, actual_cost_usd=0.010),
+                   input_tokens=2000, output_tokens=200, actual_cost_usd=0.010,
+                   first_seen=1779395300.0),
     ]
     _write_db(home, [sess_row], usage_rows=usage)
     _patch_env(monkeypatch, home)
