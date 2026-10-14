@@ -122,10 +122,42 @@ def test_divider_css_is_present_and_on_palette():
     assert ".tokdash-col-divider:focus-visible" in css
     assert "outline: 2px solid color-mix(in srgb, var(--color-primary)" in css
     assert "cursor: col-resize" in css
+    # The handle follows the app's 8px small-control radius (date-range-nav,
+    # toast-close), not the old 7px one.
+    block = css.split(".tokdash-col-divider {", 1)[1].split("}", 1)[0]
+    assert "border-radius: 8px" in block, block
     # The grip is held still for reduced motion, and the module's own drag/keyboard
     # transitions are the ones gated at runtime.
     guard = css.index("@media (prefers-reduced-motion: reduce) {\n      .tokdash-col-divider")
     assert "transition: none" in css[guard:guard + 200]
+
+
+def test_mounting_is_lazy_per_open_panel():
+    """A closed panel must carry no handles: one idempotent build path serves
+    both init and the panel-open hook, and a release path empties the panel
+    again on close. The old eager per-table claim flag is gone — the map is
+    the claim."""
+    src = _module()
+    assert "details[data-panel-details]" in src
+    assert "'toggle'" in src
+    assert "ensureMounted" in src
+    assert "releasePanel" in src
+    assert "mounted.has(" in src
+    assert "rpMounted" not in src
+
+
+def test_handle_declares_the_shared_tooltip_and_releases_it():
+    """The hint an icon-less 12px grip cannot carry any other way, declared the
+    way the donut wedges declare a dynamically built trigger — the three data
+    attributes, then the shared tooltip primitive. Releasing a panel must detach
+    it too: the primitive keeps a `window` scroll listener per trigger, which
+    would otherwise outlive every close/open cycle."""
+    src = _module()
+    assert "divider.dataset.tooltip = ''" in src
+    assert "divider.dataset.tooltipPlacement = 'top'" in src
+    assert "divider.dataset.tooltipText = 'Drag to resize columns'" in src
+    assert "attachTooltip(divider, { placement: 'top' })" in src
+    assert "detachTooltip(st.divider)" in src
 
 
 # --- Behaviour (real module, stub DOM) -------------------------------------
@@ -150,6 +182,7 @@ function makeEl(tag) {
     attributes: {},
     style: { width: '', transition: '', left: '', height: '' },
     children: [],
+    parentNode: null,
     textContent: '',
     listeners: {},
     tabIndex: 0,
@@ -162,6 +195,16 @@ function makeEl(tag) {
   el.focus = () => {};
   el.setPointerCapture = () => {};
   el.releasePointerCapture = () => {};
+  // Mirrors Element.remove(): detach from the parent's children, so a panel
+  // releasing its handles is observable here exactly as it is in a real DOM.
+  el.remove = () => {
+    const parent = el.parentNode;
+    if (parent && Array.isArray(parent.children)) {
+      const at = parent.children.indexOf(el);
+      if (at >= 0) parent.children.splice(at, 1);
+    }
+    el.parentNode = null;
+  };
   el.getBoundingClientRect = () => ({ width: 0, height: 0, left: 0, right: 0, top: 0, bottom: 0 });
   el.classList = {
     set: new Set(),
@@ -177,9 +220,15 @@ function makeEl(tag) {
 }
 
 defineGlobal('document', { createElement: (tag) => makeEl(tag) });
+// The shared tooltip primitive keeps one `scroll` listener on `window` per
+// attached trigger, so counting adds/removes here is how the harness observes
+// that releasing a panel really detaches its hints.
+const WINDOW_SCROLL = { added: 0, removed: 0 };
 defineGlobal('window', {
   PointerEvent: function PointerEvent() {},
   matchMedia: () => ({ matches: REDUCE }),
+  addEventListener: (type) => { if (type === 'scroll') WINDOW_SCROLL.added += 1; },
+  removeEventListener: (type) => { if (type === 'scroll') WINDOW_SCROLL.removed += 1; },
 });
 defineGlobal('localStorage', {
   getItem: (k) => (k in STORAGE.data ? STORAGE.data[k] : null),
@@ -194,6 +243,13 @@ function fire(el, type, event) {
   event.currentTarget = el;
   event.target = el;
   (el.listeners[type] || []).forEach((fn) => fn(event));
+}
+
+// The real DOM fires `toggle` only after `open` has already changed; mirror
+// that ordering so the hook reads the value a user would see.
+function togglePanel(details, open) {
+  details.open = open;
+  fire(details, 'toggle', {});
 }
 
 function makeCol(pctValue) { const c = makeEl('col'); c.style.width = pctValue + '%'; return c; }
@@ -224,11 +280,17 @@ function makeTable(panel, pcts, width) {
     if (sel === ':scope > thead') return table._thead;
     return null;
   };
-  table.closest = (sel) => (sel === '.overflow-x-auto' ? table._wrap : null);
+  // The panel wrapper, when this table lives inside one (lazy-mount mode).
+  table._details = null;
+  table.closest = (sel) => {
+    if (sel === '.overflow-x-auto') return table._wrap;
+    if (sel === 'details[data-panel-details]') return table._details || null;
+    return null;
+  };
   const wrap = makeEl('div');
   wrap.classList.add('overflow-x-auto');
   wrap.children = [table];
-  wrap.appendChild = (n) => { wrap.children.push(n); return n; };
+  wrap.appendChild = (n) => { wrap.children.push(n); n.parentNode = wrap; return n; };
   table._wrap = wrap;
   return table;
 }
@@ -344,6 +406,60 @@ if (MODE === 'write') {
   // Mount is idempotent: a second pass claims nothing and duplicates nothing.
   report.remount = m.mountResizablePanels(root);
   report.dividerCount = dividersOf(codex).length;
+} else if (MODE === 'lazy') {
+  const codex = makeTable('codex', CODEX, 1000);
+  const panel = makeEl('details');
+  panel.open = false;
+  codex._details = panel;
+  root.tables = [codex];
+
+  // Closed at init: the hook is claimed, but nothing is built.
+  report.mount = m.mountResizablePanels(root);
+  report.closedHandles = dividersOf(codex).length;
+
+  // First open builds one set, boundary-aligned and measured on screen.
+  togglePanel(panel, true);
+  report.openHandles = dividersOf(codex).length;
+  const d0 = dividersOf(codex)[0];
+  report.firstOpen = {
+    left: d0.style.left,
+    height: d0.style.height,
+    label: d0.getAttribute('aria-label'),
+  };
+  report.tooltip = {
+    flag: d0.dataset.tooltip,
+    placement: d0.dataset.tooltipPlacement,
+    text: d0.dataset.tooltipText,
+    enterBound: (d0.listeners.pointerenter || []).length,
+  };
+  report.scrollAfterOpen = WINDOW_SCROLL.added - WINDOW_SCROLL.removed;
+
+  // A real drag on the freshly built handle still moves and persists the pair.
+  pointer(d0, 'pointerdown', 200, 3);
+  pointer(d0, 'pointermove', 226, 3);
+  pointer(d0, 'pointerup', 226, 3);
+  report.splitAfterDrag = widths(codex).slice(0, 2);
+
+  // Close: release everything — no handles, no state, nothing in the wrapper.
+  togglePanel(panel, false);
+  report.releasedHandles = dividersOf(codex).length;
+  report.scrollAfterRelease = WINDOW_SCROLL.added - WINDOW_SCROLL.removed;
+
+  // Reopen: exactly one fresh set, and the stored split back on the columns.
+  togglePanel(panel, true);
+  report.reopenedHandles = dividersOf(codex).length;
+  report.restoredWidths = widths(codex).slice(0, 2);
+
+  // Repeated close/open never accumulates, and a second mount claims nothing.
+  for (let i = 0; i < 5; i += 1) {
+    togglePanel(panel, false);
+    togglePanel(panel, true);
+  }
+  report.stableHandles = dividersOf(codex).length;
+  report.remount = m.mountResizablePanels(root);
+  report.finalHandles = dividersOf(codex).length;
+  report.reopenedTooltipBound = (dividersOf(codex)[0].listeners.pointerenter || []).length > 0;
+  report.scrollAfterCycles = WINDOW_SCROLL.added - WINDOW_SCROLL.removed;
 } else {
   const codex = makeTable('codex', CODEX, 1000);
   root.tables = [codex];
@@ -465,3 +581,53 @@ def test_stored_split_survives_a_reload(tmp_path: Path):
     assert pct(reloaded["storedWidths"][1]) == pytest.approx(7.4, abs=0.05)
     assert pct(reloaded["storedLeft"]) == pytest.approx(18.6, abs=0.05)
     assert reloaded["storedValuenow"] is not None
+
+
+@needs_node
+def test_closed_panels_carry_nothing_and_open_builds_once(tmp_path: Path):
+    """The lazy contract: closed builds nothing, open builds one boundary-
+    aligned set, close releases it, and repeated cycles never accumulate."""
+    report = _run(tmp_path, "lazy")
+
+    # Closed at init: the hook is claimed but no handle exists yet.
+    assert report["mount"] == 0, report
+    assert report["closedHandles"] == 0, report
+
+    # First open builds nine, parked on their boundaries and re-measured.
+    assert report["openHandles"] == 9, report
+    assert report["firstOpen"]["left"] == "16%", report
+    assert report["firstOpen"]["height"] == "44px", report
+    assert "Session" in report["firstOpen"]["label"], report
+
+    # The hint is declared like the donut wedges and attached through the shared
+    # primitive: the harness sees the primitive's own pointerenter listener.
+    assert report["tooltip"]["flag"] == "", report
+    assert report["tooltip"]["placement"] == "top", report
+    assert report["tooltip"]["text"] == "Drag to resize columns", report
+    assert report["tooltip"]["enterBound"] >= 1, report
+    # One window scroll listener per live handle, and none once it is gone.
+    assert report["scrollAfterOpen"] == 9, report
+
+    # The drag on the fresh handle moved the pair as before.
+    assert pct(report["splitAfterDrag"][0]) == pytest.approx(18.6, abs=0.01), report
+    assert pct(report["splitAfterDrag"][1]) == pytest.approx(7.4, abs=0.01), report
+
+    # Close: zero handles left anywhere — and the tooltip detachments came with
+    # them, so no window listener survives the panel.
+    assert report["releasedHandles"] == 0, report
+    assert report["scrollAfterRelease"] == 0, report
+
+    # Reopen: one fresh set with the stored split reapplied to the columns.
+    assert report["reopenedHandles"] == 9, report
+    assert pct(report["restoredWidths"][0]) == pytest.approx(18.6, abs=0.01), report
+    assert pct(report["restoredWidths"][1]) == pytest.approx(7.4, abs=0.01), report
+
+    # Five more close/open cycles accumulate nothing, and a second mount call
+    # still wires no second hook and builds no second set.
+    assert report["stableHandles"] == 9, report
+    assert report["remount"] == 0, report
+    assert report["finalHandles"] == 9, report
+    # The reopened handle is hint-wired again, and six open passes left exactly
+    # nine listeners alive — one per handle, never nine per cycle.
+    assert report["reopenedTooltipBound"] is True, report
+    assert report["scrollAfterCycles"] == 9, report

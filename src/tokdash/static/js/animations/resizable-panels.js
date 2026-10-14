@@ -21,14 +21,29 @@
  * Why widths are percentages and not pixels: the pair's declared total is
  * constant, so writing `left + right = pair` back leaves every other column
  * byte-identical — neighbors cannot move — and the values survive a window
- * resize and a hidden (collapsed `<details>`) mount without measuring anything.
- * The divider's own `left` is a percentage of that same width, so positioning
- * needs no measurement either; only its height and the ARIA pixel values are
- * measured, and only while the panel is actually on screen.
+ * resize without measuring anything. The divider's own `left` is a percentage
+ * of that same width, so positioning needs no measurement either; only its
+ * height and the ARIA pixel values are measured, and only while the panel is
+ * actually on screen.
+ *
+ * When handles exist — one path, not two: Sessions Explorer stacks 21 collapsed
+ * tables behind 21 `<details>` handles, and only the open panel is ever visible
+ * or in the tab order, so nothing is built eagerly. `mountResizablePanels`
+ * claims each table's `<details>` with the open/close hook and mounts only the
+ * panels that are on screen; every other panel gets its handles the moment it
+ * opens, through the same idempotent `ensureMounted`, and loses them when it
+ * closes. The `mounted` map is the single owner of live handle state: a table
+ * that is not in the map has no handles, no listeners and no residue in the
+ * DOM, and repeated open/close builds exactly one set. The handle also carries
+ * the "Drag to resize columns" hint through the shared tooltip primitive, and
+ * is detached from it on release — a closed panel has no tooltip attachment
+ * either.
  *
  * Without PointerEvents, or with fewer than two columns, the module binds
  * nothing and the table is exactly what the app already renders.
  */
+
+import { attachTooltip, detachTooltip } from './tooltip.js';
 
 const STORAGE_KEY = 'tokdash-sessions-split';
 const WRAP_CLASS = 'tokdash-col-wrap';
@@ -40,8 +55,14 @@ const KEY_STEP_PX = 12;
 const DRAG_TRANSITION = 'none';
 const KEY_TRANSITION = 'width var(--t-med) cubic-bezier(.16, 1, .3, 1)';
 
-/** All live dividers, so a panel opening can re-measure the ones it owns. */
-const states = [];
+/**
+ * The one owner of live handle state: table -> the divider states it owns.
+ * Absent from this map means "closed panel": nothing mounted, nothing listening.
+ * `watched` only remembers whose `<details>` already carries the open/close
+ * hook so mounting twice never wires it twice; it holds no handle state.
+ */
+const mounted = new Map();
+const watched = new WeakSet();
 
 function prefersReducedMotion() {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
@@ -330,12 +351,13 @@ function onDoubleClick(event) {
 }
 
 // --- Measured-only upkeep --------------------------------------------------
-// `left` is a percentage and needs no measurement, so a collapsed panel can take
-// its stored split at mount. Height and the ARIA pixel values do need a box, so
-// they are refreshed whenever the owning <details> opens.
+// `left` is a percentage and needs no measurement, so a freshly built divider
+// takes its stored split even before the panel has painted. Height and the ARIA
+// pixel values do need a box, so they are measured once the panel that owns
+// them is on screen.
 
 function reposition(table) {
-  const owned = states.filter((st) => st.table === table);
+  const owned = mounted.get(table) || [];
   owned.forEach((st) => {
     const rect = typeof st.th.getBoundingClientRect === 'function'
       ? st.th.getBoundingClientRect() : null;
@@ -348,15 +370,17 @@ function reposition(table) {
   });
 }
 
-function watchPanel(table) {
-  if (typeof table.closest !== 'function') return;
-  const details = table.closest('details[data-panel-details]');
-  if (!details || typeof details.addEventListener !== 'function') return;
-  if (details.dataset.rpWatched === '1') return;
-  details.dataset.rpWatched = '1';
-  details.addEventListener('toggle', () => {
-    if (details.open) reposition(table);
-  });
+/** The `<details>` that collapses this table, or null when it has none. */
+function panelOf(table) {
+  return typeof table.closest === 'function'
+    ? table.closest('details[data-panel-details]')
+    : null;
+}
+
+/** Visible right now: no `<details>` wrapper to wait on, or an open one. */
+function panelOpen(table) {
+  const details = panelOf(table);
+  return !details || !!details.open;
 }
 
 // --- Mount -----------------------------------------------------------------
@@ -390,11 +414,153 @@ function wire(st) {
 }
 
 /**
- * Mount a column divider between every adjacent pair of each session table in
- * `root`. Idempotent per table: a table already claimed is skipped, so a second
- * call never duplicates a divider.
+ * Declare the handle's hint the way the donut wedges declare a dynamically
+ * built trigger — the three data attributes, then the shared primitive — and
+ * attach it *after* the drag listeners, so the primitive's own
+ * press-to-dismiss runs after `onPointerDown`'s `focus()` and a drag never
+ * leaves the bubble hanging over the columns.
+ */
+function wireTooltip(st) {
+  const divider = st.divider;
+  divider.dataset.tooltip = '';
+  divider.dataset.tooltipPlacement = 'top';
+  divider.dataset.tooltipText = 'Drag to resize columns';
+  try { attachTooltip(divider, { placement: 'top' }); } catch (_) { /* the aria-label still names the pair */ }
+}
+
+/**
+ * Build this table's handles if it does not have them yet — the one path both
+ * the init mount and the panel-open hook go through. Idempotent via the
+ * `mounted` map, so mounting twice (or a double `toggle`) duplicates nothing.
  *
- * Returns how many dividers are now live.
+ * Scope to this table's OWN `<colgroup>`/`<thead>`: a session table renders its
+ * project groups as nested tables inside body cells, and each of those carries
+ * a `<colgroup>` too, so a subtree-wide query counts seven column groups
+ * against one header row and the pairing below would never line up. A table
+ * whose widths are not percentages is left completely alone: the pair
+ * arithmetic would silently change its layout.
+ *
+ * Returns how many handles this call built (0 when already mounted or invalid).
+ */
+function ensureMounted(table) {
+  if (!table || !table.dataset || mounted.has(table)) return 0;
+
+  const colgroup = table.querySelector(':scope > colgroup');
+  const thead = table.querySelector(':scope > thead');
+  if (!colgroup || !thead) return 0;
+
+  const cols = Array.from(colgroup.querySelectorAll('col'));
+  if (cols.length < 2) return 0;
+
+  const pct = cols.map(readPct);
+  if (pct.some((value) => value === null)) return 0;
+
+  const ths = Array.from(thead.querySelectorAll('th'));
+  if (ths.length < cols.length) return 0;
+
+  const host = (typeof table.closest === 'function' && table.closest('.overflow-x-auto'))
+    || table.parentNode;
+  if (!host || typeof host.appendChild !== 'function') return 0;
+  if (host.classList && host.classList.add) host.classList.add(WRAP_CLASS);
+
+  const owned = [];
+  // Claim before building: the map is the single owner of this table's state
+  // from here on, and a table in the map is never built a second time.
+  mounted.set(table, owned);
+
+  let base = 0;
+  for (let index = 0; index < cols.length - 1; index += 1) {
+    const st = {
+      table,
+      host,
+      th: ths[index],
+      leftTh: ths[index],
+      rightTh: ths[index + 1],
+      left: cols[index],
+      right: cols[index + 1],
+      panel: table.dataset.panel,
+      index,
+      pairPct: pct[index] + pct[index + 1],
+      basePct: base,
+      declaredLeft: pct[index],
+      declaredRight: pct[index + 1],
+      ratio: null,
+      drag: null,
+      divider: null,
+    };
+    base += pct[index];
+
+    st.divider = buildDivider(st);
+    host.appendChild(st.divider);
+    wire(st);
+    wireTooltip(st);
+    owned.push(st);
+
+    const stored = readStored(st.panel, index);
+    st.ratio = stored == null ? declaredRatio(st) : stored;
+    if (stored != null) {
+      applyRatio(st, stored);
+    } else {
+      positionDivider(st);
+      syncAria(st);
+    }
+  }
+
+  reposition(table);
+  return owned.length;
+}
+
+/**
+ * A closed panel must carry nothing: drop its handles from the map, disconnect
+ * their state from their listeners, and take the elements out of the DOM — the
+ * element's own listeners go with it. The columns keep the width they had; the
+ * stored split puts the same widths back on the next open, so a close/open
+ * cycle is invisible except for the handles coming and going.
+ *
+ * Returns how many handles this call removed (0 when nothing was mounted).
+ */
+function releasePanel(table) {
+  const owned = mounted.get(table);
+  if (!owned || !owned.length) return 0;
+  mounted.delete(table);
+  owned.forEach((st) => {
+    if (!st.divider) return;
+    st.divider.__rp = null;
+    // The primitive keeps its own scroll listener on `window`, so releasing the
+    // handle has to detach it too — otherwise every close/open cycle would leave
+    // nine dead listeners behind for the life of the page.
+    try { detachTooltip(st.divider); } catch (_) { /* the element is leaving anyway */ }
+    st.divider.remove();
+  });
+  return owned.length;
+}
+
+/**
+ * Claim this table's `<details>` and install its open/close hook exactly once:
+ * opening builds through `ensureMounted`, closing releases through
+ * `releasePanel`. A table with no `<details>` ancestor needs no hook — it is
+ * always visible and was mounted by the init pass.
+ */
+function watchPanel(table) {
+  if (watched.has(table)) return;
+  watched.add(table);
+  if (typeof table.closest !== 'function') return;
+  const details = panelOf(table);
+  if (!details || typeof details.addEventListener !== 'function') return;
+  details.addEventListener('toggle', () => {
+    if (details.open) ensureMounted(table);
+    else releasePanel(table);
+  });
+}
+
+/**
+ * Claim every session table under `root`: install the panel hook, and build
+ * handles for the panels that are on screen right now. Idempotent per table —
+ * a second call wires no hook twice and builds nothing twice, because both
+ * steps key off `watched` / `mounted` rather than a one-shot flag.
+ *
+ * Returns how many dividers this call built (0 when all panels are closed or
+ * everything was already mounted).
  */
 export function mountResizablePanels(root = document) {
   if (!root || typeof root.querySelectorAll !== 'function') return 0;
@@ -406,74 +572,10 @@ export function mountResizablePanels(root = document) {
 
   let count = 0;
   tables.forEach((table) => {
-    if (!table.dataset || table.dataset.rpMounted === '1') return;
-
-    // Scope to this table's OWN <colgroup>/<thead>. A session table renders its
-    // project groups as nested tables inside body cells, and each of those
-    // carries a <colgroup> too, so a subtree-wide query counts seven column
-    // groups against one header row and the pairing below would never line up.
-    const colgroup = table.querySelector(':scope > colgroup');
-    const thead = table.querySelector(':scope > thead');
-    if (!colgroup || !thead) return;
-
-    const cols = Array.from(colgroup.querySelectorAll('col'));
-    if (cols.length < 2) return;
-
-    const pct = cols.map(readPct);
-    // A table whose widths are not percentages is left completely alone: the
-    // pair arithmetic below would silently change its layout.
-    if (pct.some((value) => value === null)) return;
-
-    const ths = Array.from(thead.querySelectorAll('th'));
-    if (ths.length < cols.length) return;
-
-    const host = (typeof table.closest === 'function' && table.closest('.overflow-x-auto'))
-      || table.parentNode;
-    if (!host || typeof host.appendChild !== 'function') return;
-
-    if (host.classList && host.classList.add) host.classList.add(WRAP_CLASS);
-    table.dataset.rpMounted = '1';
-
-    let base = 0;
-    for (let index = 0; index < cols.length - 1; index += 1) {
-      const st = {
-        table,
-        host,
-        th: ths[index],
-        leftTh: ths[index],
-        rightTh: ths[index + 1],
-        left: cols[index],
-        right: cols[index + 1],
-        panel: table.dataset.panel,
-        index,
-        pairPct: pct[index] + pct[index + 1],
-        basePct: base,
-        declaredLeft: pct[index],
-        declaredRight: pct[index + 1],
-        ratio: null,
-        drag: null,
-        divider: null,
-      };
-      base += pct[index];
-
-      st.divider = buildDivider(st);
-      host.appendChild(st.divider);
-      wire(st);
-      states.push(st);
-
-      const stored = readStored(st.panel, index);
-      st.ratio = stored == null ? declaredRatio(st) : stored;
-      if (stored != null) {
-        applyRatio(st, stored);
-      } else {
-        positionDivider(st);
-        syncAria(st);
-      }
-      count += 1;
-    }
-
     watchPanel(table);
-    reposition(table);
+    // Visibility decides, not eagerness: a panel open at init gets its handles
+    // now; a collapsed one waits for its <details> to fire `toggle`.
+    if (panelOpen(table)) count += ensureMounted(table);
   });
 
   return count;
