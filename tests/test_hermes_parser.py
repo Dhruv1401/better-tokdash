@@ -373,19 +373,8 @@ def test_hermes_parser_multi_model_session(monkeypatch, tmp_path):
         output_tokens=400,
         actual_cost=0.025,
     )
+    # Insert in reverse chronological order to verify first_seen sorting
     usage_rows = [
-        _default_usage_row(
-            session_id="sess-multi",
-            model="claude-3-5-sonnet",
-            billing_provider="anthropic",
-            input_tokens=3000,
-            output_tokens=250,
-            cache_read_tokens=100,
-            cache_write_tokens=50,
-            reasoning_tokens=20,
-            actual_cost_usd=0.015,
-            first_seen=1779395293.0,
-        ),
         _default_usage_row(
             session_id="sess-multi",
             model="gpt-4o",
@@ -397,6 +386,18 @@ def test_hermes_parser_multi_model_session(monkeypatch, tmp_path):
             reasoning_tokens=10,
             actual_cost_usd=0.010,
             first_seen=1779395300.0,
+        ),
+        _default_usage_row(
+            session_id="sess-multi",
+            model="claude-3-5-sonnet",
+            billing_provider="anthropic",
+            input_tokens=3000,
+            output_tokens=250,
+            cache_read_tokens=100,
+            cache_write_tokens=50,
+            reasoning_tokens=20,
+            actual_cost_usd=0.015,
+            first_seen=1779395293.0,
         ),
     ]
     _create_hermes_db(hermes_dir / "state.db", [sess_row], usage_rows)
