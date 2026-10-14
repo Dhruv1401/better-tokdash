@@ -19,15 +19,23 @@ Thanks for considering a contribution!
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate.bat (cmd) or .venv\Scripts\Activate.ps1 (PowerShell)
 pip install -U pip
 pip install -e .
-pip install pytest
+pip install -r requirements-dev.txt
 ```
 
-Run from source:
+`requirements-dev.txt` adds what the tests need beyond the runtime: `pytest`, `httpx` for
+FastAPI's test client and `build` for the packaging tests. Some frontend tests also run
+`node` and are skipped when it is not installed.
+
+Run from source with its own data directory. A source checkout can be ahead of the Tokdash
+you have installed, and opening the usage database migrates it to the newer schema, which
+the installed version then refuses to read. A separate `TOKDASH_DATA_DIR` keeps the two
+apart (`output/` is gitignored):
 ```bash
-python3 main.py
+TOKDASH_DATA_DIR=output/dev-data python3 main.py
+# PowerShell: $env:TOKDASH_DATA_DIR = "output/dev-data"; python main.py
 ```
 
 For UI work, start the real dashboard against a dense synthetic dataset:
@@ -52,7 +60,31 @@ without ever reading your history.
 Run tests:
 ```bash
 pytest -q
+pytest tests/test_pricing_normalization.py -k lookup   # one file, filtered by test name
 ```
+
+The suite points `TOKDASH_DATA_DIR` at a temporary directory itself, so it never touches
+your real data.
+
+## Chinese, Japanese and Korean text
+
+Fira Sans and Fira Code carry no Han glyph, so both font stacks end in the CJK face each
+operating system already ships: PingFang SC on macOS, Microsoft YaHei on Windows, Noto
+Sans SC on Linux. A machine with no CJK font of its own, or one that cannot reach
+`fonts.googleapis.com`, has neither, and Chinese then falls to whatever the browser
+substitutes, usually a serif face nothing else on the page uses. For those:
+
+```bash
+scripts/vendor_cjk_fonts.sh
+```
+
+It fetches Noto Sans SC into `static/vendor/fonts/`, which is gitignored, and the
+dashboard serves it from the next restart. Downloads are staged with their license;
+a failed download preserves the installed copy. `TOKDASH_CJK_WEIGHTS` selects the
+weights (default `400;500;700`). Keep the same weights when repairing an installed
+upstream version, because its stylesheet URL is cached as immutable. This script
+affects a source-tree run; it does not modify an installed pipx service.
+The optional font directory is also excluded from wheels and source archives.
 
 ## Releases
 

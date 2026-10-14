@@ -27,11 +27,24 @@ from .activity_insights import (
     record_structured_tool_call,
 )
 from .compute import cache_hit_rate, pct_change, period_to_days, previous_period_range
+from .output_speed import (
+    STATUS_INCOMPLETE,
+    KimiStepAssociation,
+    kimi_usage_record_key,
+    omp_message_timing,
+    public_turn_speed,
+    turn_measurement_summary,
+    unmeasured,
+)
+from .output_speed_readers import CodexResponseAssociation, request_window_timing, native_message_timing
+from .speed_mode import timing_enabled, collect_timings
 from .dateutil import local_midnight, parse_date_range
+from .usage_buckets import bucket_granularity, merged_interval_buckets, local_hour_keys
 from .pricing import PricingDatabase
 from .sources.coding_tools import (
     CODEX_DEFAULT_MODEL,
     AntigravityCLIParser,
+    CodexCompactionTracker,
     HermesParser,
     KimiParser,
     QoderIdeParser,
@@ -42,6 +55,7 @@ from .sources.coding_tools import (
     antigravity_db_signatures,
     claude_usage_supersedes,
     cline_message_file_signatures,
+    codex_compaction_event_key,
     codex_fork_ancestry,
     codex_replay_key_session_id,
     codex_token_event_key,
@@ -73,6 +87,7 @@ from .store_logging import log_store_failure
 from .usage_store import (
     UsageDatabaseSchemaTooNewError,
     UsageEntryStore,
+    _entry_key,
     parser_code_signature,
     persistent_usage_db_enabled,
     raise_if_usage_db_incompatible,
@@ -115,15 +130,20 @@ _SESSION_FILE_PARSER_VERSIONS = {
     # 2: thread_spawn replay turns are keyed to the parent session (incl. the 0.146+
     #    single-meta fork shape) and raws carry _subagent_parent_id for cross-session
     #    replay dedup; stored v1 keys/rows predate both.
-    "_parse_codex_session_file": 2,
+    # 3: response-owned speed measurements from the shared usage reader.
+    # 4: a compaction request no token_count carries is its own turn (issue #222).
+    "_parse_codex_session_file": 4,
     # 2: turns carry _stream_id so subagents are timed separately from the main agent.
     # 3: streaming snapshots collapse per claude_usage_supersedes rather than
     #    keeping the first write, for role-bearing rows too; stored v2 turns
     #    kept the partial, and its cache split.
     "_parse_claude_session_file": 3,
     # 2: turns carry _stream_id so concurrent agents are timed separately.
-    "_parse_kimi_session_file": 2,
-    "_parse_dsh_session_file": 1,
+    # 3: usage.record turns carry _speed, the paired step.end decode window, so
+    #    stored turns can answer Output tok/s without re-reading the log.
+    "_parse_kimi_session_file": 3,
+    # 2: clean-stream speed measurements from the shared usage fold.
+    "_parse_dsh_session_file": 2,
     # 4: turns carry _work_ms, so active time is the measured step duration
     #    rather than the capped gap to the next turn. 3 moved the timestamp to
     #    the end of that work; 2 stamped its start. None shipped; rows rebuild.
@@ -157,12 +177,19 @@ def _cached_session_parser(maxsize: int = 512):
     """
 
     def decorate(func):
-        cached = lru_cache(maxsize=maxsize)(func)
+        @lru_cache(maxsize=maxsize)
+        def cached(enabled, *args, **kwargs):
+            with collect_timings(enabled):
+                return func(*args, **kwargs)
+
+        @wraps(func)
+        def raising(*args, **kwargs):
+            return cached(timing_enabled(), *args, **kwargs)
 
         @wraps(func)
         def wrapper(*args, **kwargs):
             try:
-                return cached(*args, **kwargs)
+                return raising(*args, **kwargs)
             except _SessionFileUnavailable:
                 return None
 
@@ -172,7 +199,7 @@ def _cached_session_parser(maxsize: int = 512):
         # flattening it to None. Aggregate loaders call this so they can tell a
         # transient miss apart from a file that genuinely parsed to nothing; every
         # other caller wants the plain None.
-        wrapper.raising = cached
+        wrapper.raising = raising
         return wrapper
 
     return decorate
@@ -228,12 +255,19 @@ def _cached_session_aggregate(maxsize: int = 8):
     """
 
     def decorate(func):
-        cached = lru_cache(maxsize=maxsize)(func)
+        @lru_cache(maxsize=maxsize)
+        def cached(enabled, *args, **kwargs):
+            with collect_timings(enabled):
+                return func(*args, **kwargs)
+
+        @wraps(func)
+        def raising(*args, **kwargs):
+            return cached(timing_enabled(), *args, **kwargs)
 
         @wraps(func)
         def wrapper(*args, **kwargs):
             try:
-                return cached(*args, **kwargs)
+                return raising(*args, **kwargs)
             except _PartialSessionView as partial:
                 return partial.value
 
@@ -700,11 +734,13 @@ def _clip_intervals(
 ) -> list[tuple[int, int]]:
     """Trim intervals to the window, dropping the ones left empty."""
     clipped: list[tuple[int, int]] = []
+    since_ms = int(since_ms) if since_ms is not None else None
+    until_ms = int(until_ms) if until_ms is not None else None
     for start, end in intervals:
-        if since_ms is not None:
-            start = max(start, int(since_ms))
-        if until_ms is not None:
-            end = min(end, int(until_ms))
+        if since_ms is not None and start < since_ms:
+            start = since_ms
+        if until_ms is not None and end > until_ms:
+            end = until_ms
         if end > start:
             clipped.append((start, end))
     return clipped
@@ -776,22 +812,21 @@ def _session_active_intervals(
     return _clip_intervals(intervals, since_ms, until_ms)
 
 
-def _merged_interval_ms(intervals: Iterable[tuple[int, int]]) -> int:
+def _merged_interval_ms(intervals: Iterable[tuple[int, int]], *, presorted: bool = False) -> int:
     """Wall-clock covered by the intervals, counting overlap once."""
+    ordered = iter(intervals if presorted else sorted(intervals))
+    first = next(ordered, None)
+    if first is None:
+        return 0
+    start, end = first
     total = 0
-    start: Optional[int] = None
-    end = 0
-    for interval_start, interval_end in sorted(intervals):
-        if start is None:
-            start, end = interval_start, interval_end
-        elif interval_start > end:
+    for interval_start, interval_end in ordered:
+        if interval_start > end:
             total += end - start
             start, end = interval_start, interval_end
         elif interval_end > end:
             end = interval_end
-    if start is not None:
-        total += end - start
-    return total
+    return total + end - start
 
 
 # How each source's raw token counts map onto PricingDatabase.get_cost. Kept as
@@ -1063,11 +1098,21 @@ def _public_turns(turns: Iterable[Dict[str, Any]]) -> list[Dict[str, Any]]:
     result = []
     for turn in turns:
         row = dict(turn)
-        row.pop("_event_key", None)
-        row.pop("_stream_id", None)
+        speed = row.pop("_speed", None)
+        event_key = row.pop("_event_key", None)
+        if event_key:
+            from .speed_mode import canonical_turn_key
+            key = canonical_turn_key(str(row.get('_tool') or ''),str(event_key))
+            # The source-specific normalization is applied in get_session_detail.
+            row['turn_key'] = key if '/' not in key and '\\' not in key else None
+        row["stream_id"] = row.pop("_stream_id", "main")
+        row.pop("_tool", None)
         row.pop("_bill", None)
         row.pop("_bills", None)
         row["timestamp"] = _ms_to_iso(int(row.pop("timestamp_ms", 0) or 0))
+        # None, not an empty object: an unmeasured turn has no rate, and a
+        # zero-valued one would read as a measurement of zero.
+        row["output_speed"] = public_turn_speed(speed) if isinstance(speed, dict) else None
         result.append(row)
     return result
 
@@ -1667,10 +1712,13 @@ def _parse_codex_session_file(path_str: str, _mtime_ns: int, _size: int, _pricin
     thread_name = ""
     is_review_session = False
     turns = []
+    association = CodexResponseAssociation() if timing_enabled() else None
+    pending_speed = []
     turn_index = 0
     seen_event_keys: set[str] = set()
     saw_session_meta = False
     saw_turn_context = False
+    compactions = CodexCompactionTracker()
     activity = new_activity_record(is_primary=True, has_explicit_session_id=False)
 
     try:
@@ -1682,15 +1730,34 @@ def _parse_codex_session_file(path_str: str, _mtime_ns: int, _size: int, _pricin
         # not cached against a signature that will never change again.
         raise _SessionFileUnavailable(path_str) from exc
     with handle:
-        for line in handle:
+        for line_no, line in enumerate(handle, start=1):
             try:
                 obj = json.loads(line)
             except Exception:
                 continue
 
+            if association is not None:
+                association.observe(obj)
+            if association is not None and obj.get("type") == "event_msg" and (obj.get("payload") or {}).get("type") == "token_count":
+                association.register(str(line_no), (obj.get("payload") or {}).get("info") or {})
             payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
             obj_type = obj.get("type")
             payload_type = payload.get("type")
+
+            compaction = compactions.observe(obj)
+            if compaction is not None:
+                # Whether it bills is only known at EOF, but the key scope and
+                # model are those of the line it was logged on.
+                compaction["key_scope"] = codex_replay_key_session_id(
+                    is_subagent_file or subagent_parent_id is not None,
+                    own_session_id,
+                    session_id,
+                    subagent_parent_id,
+                    saw_turn_context,
+                )
+                compaction["model"] = compaction["model"] or current_model
+                compaction["provider"] = current_provider
+                compaction["line_no"] = line_no
 
             if obj_type == "session_meta":
                 meta_id = payload.get("id")
@@ -1858,9 +1925,66 @@ def _parse_codex_session_file(path_str: str, _mtime_ns: int, _size: int, _pricin
                 # Placeholder, not an explicit gpt-5.3-codex selection — only
                 # these rows may be backfilled to the file's first real model.
                 turn["_model_placeholder"] = True
-            if event_key:
-                turn["_event_key"] = event_key
+            turn["_event_key"] = event_key or f"{session_path}:{line_no}"
             turns.append(turn)
+            if association is not None:
+                pending_speed.append((turn, str(line_no)))
+
+    timings = association.resolve() if association is not None else {}
+    for turn, identity in pending_speed:
+        turn["_speed"] = timings[identity]
+
+    added_compaction = False
+    for compaction in compactions.uncarried():
+        # No token_count billed this request (issue #222), so it is a turn of
+        # its own, keyed like CodexParser's row so Overview and Sessions agree.
+        record = compaction["record"]
+        key_session_id, replay_fallback = compaction["key_scope"]
+        event_key = codex_compaction_event_key(key_session_id, record)
+        if replay_fallback and event_key is None:
+            continue
+        if event_key and event_key in seen_event_keys:
+            continue
+        if event_key:
+            seen_event_keys.add(event_key)
+        usage = record["usage"]
+        cache_read = int(usage.get("cached_input_tokens", 0) or 0)
+        input_tokens = max(0, int(usage.get("input_tokens", 0) or 0) - cache_read)
+        output_tokens = int(usage.get("output_tokens", 0) or 0)
+        reasoning_tokens = int(usage.get("reasoning_output_tokens", 0) or 0)
+        if input_tokens + cache_read + output_tokens + reasoning_tokens == 0:
+            continue
+        turn_model = compaction["model"] or CODEX_DEFAULT_MODEL
+        turn_index += 1
+        turn = _build_turn(
+            turn_index=turn_index,
+            timestamp_ms=compaction["timestamp"],
+            model=turn_model,
+            tokens_in=input_tokens,
+            tokens_cache=cache_read,
+            tokens_out=output_tokens,
+            tokens_reasoning=reasoning_tokens,
+            bill=_billing_record(
+                f"{compaction['provider']}/{turn_model}" if compaction["provider"] else turn_model,
+                "fresh-input",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_read=cache_read,
+            ),
+        )
+        if compaction["model"] is None:
+            turn["_model_placeholder"] = True
+        turn["_event_key"] = event_key or f"{session_path}:{compaction['line_no']}"
+        if association is not None:
+            # Compaction is incomplete to the speed reader, never measured.
+            turn["_speed"] = unmeasured(STATUS_INCOMPLETE)
+        turns.append(turn)
+        added_compaction = True
+    if added_compaction:
+        # Back to log order: the request sits where Codex wrote it.
+        turns.sort(key=lambda t: t["timestamp_ms"])
+        for index, turn in enumerate(turns, start=1):
+            turn["turn_index"] = index
 
     if not turns and not activity["is_primary"]:
         return None
@@ -2522,6 +2646,8 @@ def _append_opencode_turn(
     slug: Any = "",
     recorded_cost: Any = None,
     billing_rule: str = "input-plus-cache-write",
+    speed: Optional[dict] = None,
+    message_id: Any = None,
 ) -> None:
     fresh_input = int(fresh_input or 0)
     cache_write = int(cache_write or 0)
@@ -2584,6 +2710,11 @@ def _append_opencode_turn(
         )
     )
 
+    if message_id is not None:
+        raw["turns"][-1]["_event_key"] = str(message_id)
+    if speed is not None:
+        raw["turns"][-1]["_speed"] = speed
+
 
 def _load_opencode_sessions_scalar(
     db_path: Path,
@@ -2610,6 +2741,7 @@ def _load_opencode_sessions_scalar(
         cur.execute(
             f"""
             SELECT
+              m.id,
               COALESCE(s.id, m.session_id),
               COALESCE(s.directory, ''),
               {title_expr},
@@ -2625,7 +2757,11 @@ def _load_opencode_sessions_scalar(
               {_OPENCODE_PROVIDER_EXPR},
               json_extract(m.data, '$.path.cwd'),
               json_extract(m.data, '$.path.root'),
-              json_extract(m.data, '$.cost')
+              json_extract(m.data, '$.cost'),
+              {"json_extract(m.data, '$.time.created')" if timing_enabled() else 'NULL'},
+              {"json_extract(m.data, '$.time.completed')" if timing_enabled() else 'NULL'},
+              {"json_extract(m.data, '$.error')" if timing_enabled() else 'NULL'},
+              {"json_extract(m.data, '$.finish')" if timing_enabled() else 'NULL'}
             FROM {message_table} m
             LEFT JOIN {session_table} s ON m.session_id = s.id
             LEFT JOIN project p ON s.project_id = p.id
@@ -2639,6 +2775,7 @@ def _load_opencode_sessions_scalar(
         # docs/local/20260825_sessions_logging_harness/SPEC_kilocode.md).
         turn_index_by_session: Dict[str, int] = {}
         for (
+            message_id,
             session_id,
             directory,
             title,
@@ -2655,12 +2792,14 @@ def _load_opencode_sessions_scalar(
             cwd,
             root,
             recorded_cost,
+            request_created, request_completed, request_error, request_finish,
         ) in cur.fetchall():
             _append_opencode_turn(
                 sessions,
                 turn_index_by_session,
                 tool=tool,
                 session_id=session_id,
+                message_id=message_id,
                 directory=directory,
                 worktree=worktree,
                 created_ms=created_ms,
@@ -2675,6 +2814,7 @@ def _load_opencode_sessions_scalar(
                 root=root,
                 title=title,
                 slug=slug,
+                speed=request_window_timing(output_tokens, reasoning_tokens, request_created, request_completed, request_error, request_finish) if timing_enabled() else None,
                 recorded_cost=recorded_cost if use_recorded_cost else None,
                 billing_rule=billing_rule,
             )
@@ -2717,6 +2857,7 @@ def _load_opencode_sessions_raw_json(
         cur.execute(
             f"""
             SELECT
+              m.id,
               COALESCE(s.id, m.session_id),
               COALESCE(s.directory, ''),
               {title_expr},
@@ -2733,7 +2874,7 @@ def _load_opencode_sessions_raw_json(
             args,
         )
         turn_index_by_session: Dict[str, int] = {}
-        for session_id, directory, title, slug, worktree, created_ms, data_json in cur.fetchall():
+        for message_id, session_id, directory, title, slug, worktree, created_ms, data_json in cur.fetchall():
             try:
                 data = json.loads(data_json)
             except Exception:
@@ -2758,6 +2899,7 @@ def _load_opencode_sessions_raw_json(
                 turn_index_by_session,
                 tool=tool,
                 session_id=session_id,
+                message_id=message_id,
                 directory=directory,
                 worktree=worktree,
                 created_ms=created_ms,
@@ -2772,6 +2914,7 @@ def _load_opencode_sessions_raw_json(
                 root=path_info.get("root"),
                 title=title,
                 slug=slug,
+                speed=native_message_timing(data) if timing_enabled() else None,
                 recorded_cost=data.get("cost") if use_recorded_cost else None,
                 billing_rule=billing_rule,
             )
@@ -2965,6 +3108,18 @@ def _parse_pi_family_session_file(
             # corroborated event identities for its fork-family assembly pass.
             if entry_id and tool == "omp":
                 turn["_event_key"] = f"omp:{session_id}:{entry_id}"
+                # Same record, so no association is inferred. pi_agent shares this
+                # parser but writes no duration, and inherits nothing.
+                if timing_enabled():
+                    turn["_speed"] = omp_message_timing(message)
+            elif tool == "omp":
+                # Same accounting record; reuse the primary deterministic key for
+                # legacy records without an outer ID, never timestamp matching.
+                turn['_event_key'] = _entry_key(dict(source=tool,model=model,provider=provider,
+                    timestamp=timestamp_ms,input=fresh_input,output=output_tokens,
+                    cacheRead=cache_read,cacheWrite=cache_write,reasoning=0))
+                if timing_enabled():
+                    turn['_speed'] = omp_message_timing(message)
             elif tool == "pi_agent":
                 turn["_event_key"] = pi_forks.event_identity(obj)
             turns.append(turn)
@@ -3650,23 +3805,9 @@ def _apply_kimi_workspace_projects(
 
 
 def _kimi_usage_record_key(path_str: str, ts_ms: int, model: str, usage: Dict[str, Any]) -> str:
-    # Must stay identical to KimiParser._entry_from_usage_record's dedup hash:
-    # usage.record rows carry no message id, and including the path keeps
-    # identical rows from sibling agent files countable after the merge.
-    return hashlib.sha1(
-        json.dumps(
-            [
-                path_str,
-                ts_ms,
-                model,
-                usage.get("inputOther"),
-                usage.get("output"),
-                usage.get("inputCacheRead"),
-                usage.get("inputCacheCreation"),
-            ],
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
+    # One shared key with KimiParser._entry_from_usage_record and the timing
+    # reader, so usage rows, session turns and their durations agree on identity.
+    return kimi_usage_record_key(path_str, ts_ms, model, usage)
 
 
 @_cached_session_parser()
@@ -3677,6 +3818,9 @@ def _parse_kimi_session_file(path_str: str, _mtime_ns: int, _size: int, _pricing
 
     session_id = _kimi_session_id_from_path(session_path)
     stream_id = _kimi_stream_id_from_path(session_path)
+    # Built from the whole file before the row loop: a usage.record and its
+    # step.end are two records, so the association cannot be streamed. Keys are
+    # the same _event_key the rows below are deduped by.
     cwd = ""
     first_user_preview = ""
     turns: list[Dict[str, Any]] = []
@@ -3692,6 +3836,14 @@ def _parse_kimi_session_file(path_str: str, _mtime_ns: int, _size: int, _pricing
         # not cached against a signature that will never change again.
         raise _SessionFileUnavailable(path_str) from exc
     with handle:
+        # The step brackets are collected in the pass that builds the turns, not in
+        # a second pass over the same file: a usage.record and the step.end that
+        # closes it are two records, so the association is decided after the loop,
+        # but nothing about it needs the file read twice. The rows are registered
+        # under the same key the turns below are deduped by, so a duration can only
+        # land on the row that billed the tokens.
+        association = KimiStepAssociation() if timing_enabled() else None
+        pending_speed: list[tuple[Dict[str, Any], str]] = []
         for line in handle:
             line = line.strip()
             if not line:
@@ -3702,6 +3854,8 @@ def _parse_kimi_session_file(path_str: str, _mtime_ns: int, _size: int, _pricing
                 continue
             if not isinstance(obj, dict):
                 continue
+            if association is not None:
+                association.observe(obj)
 
             # Kimi Code records the workspace cwd on config.update rows only.
             if not cwd and obj.get("cwd"):
@@ -3726,6 +3880,11 @@ def _parse_kimi_session_file(path_str: str, _mtime_ns: int, _size: int, _pricing
                 if event_key in seen_keys:
                     continue
                 seen_keys.add(event_key)
+                if association is not None:
+                    association.register_usage(
+                        agent=obj.get("agentId"), timestamp_ms=timestamp_ms,
+                        usage=usage, identity=event_key,
+                    )
                 fresh_input = _to_int(usage.get("inputOther"))
                 output_tokens = _to_int(usage.get("output"))
                 cache_read = _to_int(usage.get("inputCacheRead"))
@@ -3783,11 +3942,25 @@ def _parse_kimi_session_file(path_str: str, _mtime_ns: int, _size: int, _pricing
                 ),
             )
             turn["_event_key"] = event_key
+            # Legacy StatusUpdate rows have no duration at all; they are never
+            # registered above, so they find no entry and simply stay unmeasured.
+            if association is not None:
+                pending_speed.append((turn, event_key))
             # Agents inside one session run concurrently, so their events are
             # separate streams: merging them into one timeline would read a
             # subagent's event as the end of the main agent's work.
             turn["_stream_id"] = stream_id
             turns.append(turn)
+
+        # Resolved once the whole file has been seen, then hung on the turns that
+        # were built on the way through.
+        step_timings = association.resolve() if association is not None else {}
+        for turn, event_key in pending_speed:
+            speed = step_timings.get(event_key)
+            if speed is not None:
+                # Not copied: the verdict is immutable, so turns that share a
+                # status share one dict instead of minting their own.
+                turn["_speed"] = speed
 
     if not turns:
         return None
@@ -3909,6 +4082,7 @@ def _load_mimo_sessions_scalar(
         cur.execute(
             f"""
             SELECT
+              m.id,
               COALESCE(s.id, m.session_id),
               COALESCE(s.directory, ''),
               {title_expr},
@@ -3924,7 +4098,13 @@ def _load_mimo_sessions_scalar(
               json_extract(m.data, '$.providerID'),
               json_extract(m.data, '$.path.cwd'),
               json_extract(m.data, '$.path.root'),
-              json_extract(m.data, '$.cost')
+              json_extract(m.data, '$.cost'),
+              {"json_extract(m.data, '$.time.created')" if timing_enabled() else 'NULL'},
+              {"json_extract(m.data, '$.time.completed')" if timing_enabled() else 'NULL'},
+              {"json_extract(m.data, '$.error')" if timing_enabled() else 'NULL'},
+              {"json_extract(m.data, '$.finish')" if timing_enabled() else 'NULL'},
+              {"json_extract(m.data, '$.agent')" if timing_enabled() else 'NULL'},
+              {"json_extract(m.data, '$.mode')" if timing_enabled() else 'NULL'}
             FROM message m
             LEFT JOIN session s ON m.session_id = s.id
             LEFT JOIN project p ON s.project_id = p.id
@@ -3938,6 +4118,7 @@ def _load_mimo_sessions_scalar(
         # docs/local/20260825_sessions_logging_harness/SPEC_kilocode.md).
         turn_index_by_session: Dict[str, int] = {}
         for (
+            message_id,
             session_id,
             directory,
             title,
@@ -3954,12 +4135,14 @@ def _load_mimo_sessions_scalar(
             cwd,
             root,
             recorded_cost,
+            request_created, request_completed, request_error, request_finish, request_agent, request_mode,
         ) in cur.fetchall():
             _append_opencode_turn(
                 sessions,
                 turn_index_by_session,
                 tool="mimo",
                 session_id=session_id,
+                message_id=message_id,
                 directory=directory,
                 worktree=worktree,
                 created_ms=created_ms,
@@ -3974,6 +4157,8 @@ def _load_mimo_sessions_scalar(
                 root=root,
                 title=title,
                 slug=slug,
+                speed=request_window_timing(output_tokens, reasoning_tokens, request_created, request_completed, request_error, request_finish,
+                    ensemble=request_agent == 'max' or request_mode == 'max') if timing_enabled() else None,
                 recorded_cost=recorded_cost,
             )
         _attach_window_context(conn, sessions, since_ms, until_ms, role_filtered=True, extra_clause=import_clause)
@@ -4006,14 +4191,14 @@ def _load_mimo_sessions_raw_json(
         cur.execute(
             f"""
             SELECT
+              m.id,
               COALESCE(s.id, m.session_id),
               COALESCE(s.directory, ''),
               {title_expr},
               {slug_expr},
               COALESCE(p.worktree, ''),
               m.time_created,
-              m.data,
-              m.id
+              m.data
             FROM message m
             LEFT JOIN session s ON m.session_id = s.id
             LEFT JOIN project p ON s.project_id = p.id
@@ -4026,7 +4211,7 @@ def _load_mimo_sessions_raw_json(
         # still produce a turn (the token parser bills it — parity, rule 3 of
         # docs/local/20260825_sessions_logging_harness/SPEC_kilocode.md).
         turn_index_by_session: Dict[str, int] = {}
-        for session_id, directory, title, slug, worktree, created_ms, data_json, message_id in cur.fetchall():
+        for message_id, session_id, directory, title, slug, worktree, created_ms, data_json in cur.fetchall():
             if imported_ids and str(message_id) in imported_ids:
                 continue
             try:
@@ -4048,6 +4233,7 @@ def _load_mimo_sessions_raw_json(
                 turn_index_by_session,
                 tool="mimo",
                 session_id=session_id,
+                message_id=message_id,
                 directory=directory,
                 worktree=worktree,
                 created_ms=created_ms,
@@ -4062,6 +4248,7 @@ def _load_mimo_sessions_raw_json(
                 root=path_info.get("root"),
                 title=title,
                 slug=slug,
+                speed=native_message_timing(data, source="mimo") if timing_enabled() else None,
                 recorded_cost=data.get("cost"),
             )
         _attach_window_context(
@@ -4237,6 +4424,8 @@ def _parse_dsh_session_file(path_str: str, _mtime_ns: int, _size: int, _pricing_
             bill=bill,
         )
         turn["_event_key"] = dsh_sample_entry_id(session_id, sample)
+        if "_speed" in sample:
+            turn["_speed"] = sample["_speed"]
         turns.append(turn)
 
     if not turns:
@@ -4809,8 +4998,9 @@ def _parse_qwen_code_session_file(
                 cache_write=0,
             ),
         )
-        if entry_id:
-            turn["_event_key"] = entry_id
+        if "_speed" in row:
+            turn["_speed"] = row["_speed"]
+        turn['_event_key'] = entry_id or _entry_key(dict(row,source='qwen_code'))
         turns.append(turn)
     return turns, meta
 
@@ -6738,16 +6928,32 @@ def get_active_time_data(
     include_codex_review = _include_codex_review_sessions(include_review_sessions)
     cap_ms = active_gap_cap_ms()
 
+    since_ms, until_ms = _window_bounds(period, date_from, date_to)
     by_tool, unavailable, all_intervals = _active_time_window(
-        *_window_bounds(period, date_from, date_to), include_codex_review=include_codex_review
+        since_ms, until_ms, include_codex_review=include_codex_review
     )
-    active_ms = _merged_interval_ms(all_intervals)
+    granularity = bucket_granularity(
+        datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=since_ms) if since_ms is not None else None,
+        datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=until_ms) if until_ms is not None else None,
+    )
+    ordered = sorted(all_intervals)
+    if granularity:
+        active_ms, sparkline = merged_interval_buckets(ordered, granularity, (since_ms, until_ms))
+    else:
+        active_ms, sparkline = _merged_interval_ms(ordered, presorted=True), None
     active_ms_sum = sum(int(row["active_ms_sum"]) for row in by_tool.values())
+    if granularity == "hour":
+        sparkline["keys"] = local_hour_keys(datetime.fromtimestamp(since_ms / 1000).astimezone())
+
+    # The previous window allocates its own clipped intervals. Release the
+    # current window first to reduce the live heap and GC work on annual ranges.
+    del ordered, all_intervals
 
     return {
         "period": period,
         "active_ms": active_ms,
         "active_ms_sum": active_ms_sum,
+        "sparkline": sparkline,
         "comparison": _active_time_comparison(
             period,
             date_from,
@@ -6992,6 +7198,189 @@ def _antigravity_rich_session_detail(session_id: str, raw: Dict[str, Any], sessi
     return detail_data
 
 
+def _opencode_rich_session_detail(session_id: str, raw: Dict[str, Any], session: Dict[str, Any]) -> Dict[str, Any]:
+    """Return privacy-filtered message/tool metadata from OpenCode's local DB."""
+    def valid_ms(value: Any) -> Optional[str]:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if (isinstance(value, float) and (not math.isfinite(value) or not value.is_integer())) or value < 0:
+            return None
+        try:
+            return _ms_to_iso(int(value))
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    def text_length(value: Any) -> int:
+        return len(value) if isinstance(value, str) else 0
+
+    def safe_string(value: Any) -> Optional[str]:
+        return value if isinstance(value, str) else None
+
+    def token_value(value: Any) -> int:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 0
+        if (isinstance(value, float) and (not math.isfinite(value) or not value.is_integer())) or value < 0:
+            return 0
+        return int(value)
+
+    # Do not use connect_sqlite_readonly here: its RW fallback can create a missing DB.
+    db_path = clientpaths.opencode_db_path()
+    conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        conn.execute("BEGIN")
+        table = _opencode_message_table(conn)
+        if table == "session_message":
+            rows = conn.execute(
+                "SELECT id,type,seq,time_created,data FROM session_message "
+                "WHERE session_id=? AND type IN ('user','assistant','system') ORDER BY seq,id",
+                (session_id,),
+            ).fetchall()
+            parsed = []
+            for row in rows:
+                mid, role, _seq, created, encoded = row
+                try:
+                    data = json.loads(encoded) if isinstance(encoded, str) else encoded
+                    if not isinstance(data, dict):
+                        raise ValueError
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    logger.warning("OpenCode detail: malformed message row id=%s", mid)
+                    continue
+                parsed.append((mid, role, created, data))
+        else:
+            rows = conn.execute(
+                "SELECT id,time_created,data FROM message WHERE session_id=? ORDER BY time_created,id",
+                (session_id,),
+            ).fetchall()
+            parsed = []
+            for row in rows:
+                mid, created, encoded = row
+                try:
+                    data = json.loads(encoded) if isinstance(encoded, str) else encoded
+                    if not isinstance(data, dict):
+                        raise ValueError
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    logger.warning("OpenCode detail: malformed message row id=%s", mid)
+                    continue
+                role = data.get("role")
+                if role in ("user", "assistant", "system"):
+                    parsed.append((mid, role, created, data))
+
+        needs_parts = any(
+            (role == "assistant" and not isinstance(data.get("content"), list))
+            or (role in ("user", "system") and not isinstance(data.get("text"), str))
+            for _mid, role, _created, data in parsed
+        )
+        parts_by_message: Dict[Any, list] = {}
+        if needs_parts:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if "part" in tables:
+                for part_id, message_id, part_created, encoded in conn.execute(
+                    "SELECT id,message_id,time_created,data FROM part WHERE session_id=? ORDER BY time_created,id",
+                    (session_id,),
+                ).fetchall():
+                    try:
+                        part_data = json.loads(encoded) if isinstance(encoded, str) else encoded
+                        if not isinstance(part_data, dict):
+                            raise ValueError
+                    except (ValueError, TypeError, json.JSONDecodeError):
+                        logger.warning("OpenCode detail: malformed part row id=%s", part_id)
+                        continue
+                    parts_by_message.setdefault(message_id, []).append((part_id, part_created, part_data))
+
+        messages = []
+        tool_calls = []
+        for mid, role, created, data in parsed:
+            message_id = safe_string(mid)
+            if message_id is None:
+                logger.warning("OpenCode detail: malformed message row id=%s", mid)
+                continue
+            row_timestamp = valid_ms(created)
+            item = {
+                "id": message_id,
+                "role": role,
+                "content_chars": 0,
+                "has_reasoning": False,
+                "has_tool_calls": False,
+            }
+            if row_timestamp is not None:
+                item["timestamp"] = row_timestamp
+            source = []
+            inline = data.get("content")
+            if role == "assistant" and isinstance(inline, list):
+                source = [(entry, None, None, index) for index, entry in enumerate(inline) if isinstance(entry, dict)]
+            elif role == "assistant":
+                source = [(part, part_id, part_created, index) for index, (part_id, part_created, part) in enumerate(parts_by_message.get(mid, []))]
+            elif role in ("user", "system") and not isinstance(data.get("text"), str):
+                source = [(part, part_id, part_created, index) for index, (part_id, part_created, part) in enumerate(parts_by_message.get(mid, []))]
+
+            if role in ("user", "system"):
+                if isinstance(data.get("text"), str):
+                    item["content_chars"] = len(data["text"])
+                else:
+                    item["content_chars"] = sum(text_length(entry.get("text")) for entry, _pid, _pt, _index in source if entry.get("type") == "text")
+            else:
+                item["content_chars"] = sum(text_length(entry.get("text")) for entry, _pid, _pt, _index in source if entry.get("type") == "text")
+            item["has_reasoning"] = any(entry.get("type") == "reasoning" for entry, _pid, _pt, _index in source)
+            tools = [(entry, index, part_id, part_created) for entry, part_id, part_created, index in source if entry.get("type") == "tool"]
+            item["has_tool_calls"] = bool(tools)
+
+            if role == "assistant":
+                identity = {}
+                for key in ("modelID", "providerID"):
+                    value = safe_string(data.get(key))
+                    if value:
+                        identity[key] = value
+                nested = data.get("model")
+                if isinstance(nested, dict):
+                    clean_nested = {key: value for key in ("id", "providerID") if (value := safe_string(nested.get(key)))}
+                    if clean_nested:
+                        identity["model"] = clean_nested
+                model_id = identity.get("modelID") or (identity.get("model", {}).get("id"))
+                if model_id:
+                    model, _provider = _opencode_model_identity(identity)
+                    item["model"] = model
+                tokens = data.get("tokens")
+                if isinstance(tokens, dict):
+                    cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
+                    item["token_count"] = sum(token_value(tokens.get(key)) for key in ("input", "output")) + sum(token_value(cache.get(key)) for key in ("read", "write"))
+
+            for entry, index, part_id, part_created in tools:
+                state = entry.get("state") if isinstance(entry.get("state"), dict) else {}
+                if part_id is None:
+                    tool_id = safe_string(entry.get("id")) or f"{message_id}:tool:{index}"
+                    name = safe_string(entry.get("name")) or "tool"
+                    status = safe_string(state.get("status")) or "unknown"
+                    time_obj = entry.get("time") if isinstance(entry.get("time"), dict) else {}
+                    timestamp = valid_ms(time_obj.get("created")) or row_timestamp
+                else:
+                    tool_id = safe_string(entry.get("callID")) or safe_string(part_id) or f"{message_id}:tool:{index}"
+                    name = safe_string(entry.get("tool")) or "tool"
+                    status = safe_string(state.get("status")) or "unknown"
+                    state_time = state.get("time") if isinstance(state.get("time"), dict) else {}
+                    timestamp = valid_ms(state_time.get("start")) or valid_ms(part_created)
+                tool = {"id": tool_id, "name": name, "tool_name": name, "status": status, "has_args": "input" in state and state.get("input") is not None}
+                if timestamp is not None:
+                    tool["timestamp"] = timestamp
+                tool_calls.append(tool)
+            messages.append(item)
+        result = {"messages": messages, "tool_calls": tool_calls, "tool_executions": list(tool_calls)}
+    except BaseException:
+        try:
+            conn.rollback()
+        except BaseException:
+            pass
+        try:
+            conn.close()
+        except BaseException:
+            pass
+        raise
+    try:
+        conn.rollback()
+    finally:
+        conn.close()
+    return result
+
+
 def get_session_detail(tool: str, session_id: str) -> Dict[str, Any]:
     key = str(tool or "").strip().lower()
     if key not in SESSION_TOOLS:
@@ -7006,15 +7395,31 @@ def get_session_detail(tool: str, session_id: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"{TOOL_LABELS.get(key, key.title())} session not found: {session_id}")
     session.pop("_active_intervals", None)
 
+    turns = [dict(t, _tool=key) for t in raw.get("turns", [])]
     res = {
         "session": session,
-        "turns": _public_turns(raw.get("turns", [])),
+        "turns": _public_turns(turns),
         "timestamp": datetime.now().isoformat(),
     }
+    # Detail-only: how much of what is on screen actually carries a duration.
+    # Never added to session-list payloads, where this would cost a scan per row.
+    res["speed_measurement"] = turn_measurement_summary(
+        [t.get("_speed") for t in turns]
+    )
     if key == "hermes":
         res.update(_hermes_rich_session_detail(str(session_id), raw, session))
     elif key in ("antigravity_cli", "antigravity"):
         res.update(_antigravity_rich_session_detail(str(session_id), raw, session))
+    elif key == "opencode":
+        # The session and turns above come from the cached loader; this is a fresh
+        # read of OpenCode's store on every open. If it fails, return the session
+        # without its message timeline instead of failing the whole detail, as the
+        # Hermes and Antigravity readers do.
+        try:
+            res.update(_opencode_rich_session_detail(str(session_id), raw, session))
+        except (OSError, sqlite3.Error, ValueError) as error:
+            logger.warning("OpenCode detail: message metadata unavailable for session %s: %s", session_id, error)
+            res.update({"messages": [], "tool_calls": [], "tool_executions": []})
     return res
 
 

@@ -30,9 +30,19 @@ import zstandard
 
 try:
     from .. import clientpaths
+    from ..output_speed import (
+        STATUS_INCOMPLETE,
+        KimiStepAssociation,
+        kimi_usage_record_key,
+        omp_message_timing,
+        unmeasured,
+    )
     from ..pricing import PricingDatabase
+    from ..output_speed_readers import ClaudeRequestAssociation, CodexResponseAssociation, QwenTimingAssociation, native_message_timing
+    from ..speed_mode import timing_enabled
     from ..usage_store import (
         USAGE_ENTRY_FORMAT_VERSION,
+        UsageTailSliceIncomplete,
         UsageFileVanished,
         UsageFileUnreadable,
         usage_billing_fixed,
@@ -45,9 +55,19 @@ try:
 except ImportError:  # pragma: no cover
     # Allow running as a script by file path.
     import clientpaths
+    from output_speed import (
+        STATUS_INCOMPLETE,
+        KimiStepAssociation,
+        kimi_usage_record_key,
+        omp_message_timing,
+        unmeasured,
+    )
     from pricing import PricingDatabase
+    from output_speed_readers import ClaudeRequestAssociation, CodexResponseAssociation, QwenTimingAssociation, native_message_timing
+    from speed_mode import timing_enabled
     from usage_store import (
         USAGE_ENTRY_FORMAT_VERSION,
+        UsageTailSliceIncomplete,
         UsageFileVanished,
         UsageFileUnreadable,
         usage_billing_fixed,
@@ -200,6 +220,25 @@ def _glob_sigs(pattern: str) -> tuple:
     return tuple(sorted(items))
 
 
+_CODEX_COUNTER_FIELDS = (
+    "input_tokens",
+    "cached_input_tokens",
+    "cache_write_input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+)
+
+
+def _codex_counters(snapshot: dict[str, Any]) -> dict[str, int]:
+    values: dict[str, int] = {}
+    for field in _CODEX_COUNTER_FIELDS:
+        value = snapshot.get(field, 0)
+        if isinstance(value, bool):
+            raise ValueError("boolean token count")
+        values[field] = int(value or 0)
+    return values
+
+
 def codex_token_event_key(session_id: Any, info: Any) -> Optional[str]:
     """Return a stable identity for a Codex token-count event.
 
@@ -222,22 +261,7 @@ def codex_token_event_key(session_id: Any, info: Any) -> Optional[str]:
     if not isinstance(total, dict) or not total or not isinstance(last, dict) or not last:
         return None
 
-    fields = (
-        "input_tokens",
-        "cached_input_tokens",
-        "cache_write_input_tokens",
-        "output_tokens",
-        "reasoning_output_tokens",
-    )
-
-    def normalized(snapshot: dict[str, Any]) -> dict[str, int]:
-        values: dict[str, int] = {}
-        for field in fields:
-            value = snapshot.get(field, 0)
-            if isinstance(value, bool):
-                raise ValueError("boolean token count")
-            values[field] = int(value or 0)
-        return values
+    normalized = _codex_counters
 
     try:
         canonical = json.dumps(
@@ -256,6 +280,124 @@ def codex_token_event_key(session_id: Any, info: Any) -> Optional[str]:
     except (TypeError, ValueError, OverflowError):
         return None
     return f"codex-token-v1:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+def codex_compaction_event_key(session_id: Any, record: Any) -> Optional[str]:
+    """Return a stable identity for a Codex compaction request's usage.
+
+    A remote compaction is a ``token_usage_record`` that no ``token_count``
+    carries on OpenAI models (issue #222), so it is billed as its own row. Like
+    ``codex_token_event_key`` it hashes the stable usage state, so a resumed
+    history's copy collapses against the original; the record's own usage and
+    the thread total it leaves behind play the role of ``last``/``total``.
+    Missing state returns None for the same reason as there.
+    """
+    sid = str(session_id or "").strip()
+    if not sid or not isinstance(record, dict):
+        return None
+    usage = record.get("usage")
+    thread = record.get("thread_token_usage")
+    if not isinstance(usage, dict) or not usage or not isinstance(thread, dict) or not thread:
+        return None
+    try:
+        canonical = json.dumps(
+            {
+                "version": 1,
+                "kind": "compaction",
+                "session_id": sid,
+                "thread_token_usage": _codex_counters(thread),
+                "usage": _codex_counters(usage),
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return f"codex-compaction-v1:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+class CodexCompactionTracker:
+    """Find the compaction requests that no ``token_count`` bills.
+
+    Codex logs a remote compaction as a ``token_usage_record`` (also inlined as
+    the ``compacted`` event's ``latest_token_usage_record``) answered by a
+    ``compacted`` event naming its ``response_id``. On OpenAI models the
+    ``token_count`` that follows has zero ``last_token_usage`` and every later
+    total excludes the request; other providers' ``token_count`` carries it as
+    ``last_token_usage``, before or after the ``compacted`` event. The log
+    decides: a compaction is carried when a ``token_count`` after its record has
+    exactly its usage, and bills as its own row only when none does. Shared by both Codex parsers so Overview and Sessions agree.
+
+    Feed every parsed line to :meth:`observe`; read :meth:`uncarried` at EOF.
+    """
+
+    def __init__(self) -> None:
+        self._record: Optional[dict[str, Any]] = None
+        self._record_carried = False
+        self._turn_models: dict[str, str] = {}
+        self._compactions: List[dict[str, Any]] = []
+
+    @staticmethod
+    def _signature(usage: Any) -> Optional[Tuple[int, ...]]:
+        if not isinstance(usage, dict):
+            return None
+        try:
+            signature = tuple(_codex_counters(usage).values())
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return signature if any(signature) else None
+
+    def observe(self, msg: dict[str, Any]) -> Optional[dict[str, Any]]:
+        """Return the compaction request this line opens, for the caller to annotate."""
+        kind = msg.get("type")
+        p = msg.get("payload") if isinstance(msg.get("payload"), dict) else {}
+        if kind == "token_usage_record":
+            self._record = p
+            self._record_carried = False
+        elif kind == "turn_context":
+            if p.get("turn_id") and p.get("model"):
+                self._turn_models[str(p["turn_id"])] = str(p["model"])
+        elif kind == "compacted":
+            rid = p.get("compaction_response_id")
+            record = None
+            for candidate in (p.get("latest_token_usage_record"), self._record):
+                if rid and isinstance(candidate, dict) and candidate.get("response_id") == rid:
+                    record = candidate
+                    break
+            signature = self._signature(record.get("usage")) if record else None
+            if signature is None:
+                return None
+            try:
+                at = datetime.fromisoformat(str(msg.get("timestamp")).replace("Z", "+00:00"))
+                timestamp_ms = int(at.astimezone(timezone.utc).timestamp() * 1000)
+            except (TypeError, ValueError, OverflowError, OSError):
+                return None
+            compaction = {
+                "record": record,
+                "signature": signature,
+                "model": self._turn_models.get(str(record.get("turn_id") or "")),
+                "timestamp": timestamp_ms,
+                # A custom provider's token_count can land between the record
+                # and its `compacted` event.
+                "carried": self._record_carried and record.get("response_id") == (self._record or {}).get("response_id"),
+            }
+            self._compactions.append(compaction)
+            return compaction
+        elif kind == "event_msg" and p.get("type") == "token_count":
+            info = p.get("info") if isinstance(p.get("info"), dict) else {}
+            signature = self._signature(info.get("last_token_usage"))
+            if signature is None:
+                return None
+            if self._record is not None and self._signature(self._record.get("usage")) == signature:
+                self._record_carried = True
+            for compaction in self._compactions:
+                if not compaction["carried"] and compaction["signature"] == signature:
+                    compaction["carried"] = True
+                    break
+        return None
+
+    def uncarried(self) -> List[dict[str, Any]]:
+        return [c for c in self._compactions if not c["carried"]]
 
 
 # Placeholder resolved for rows written before a file's first model signal (a
@@ -478,6 +620,17 @@ class BaseParser(ABC):
     # module: every parser in this file shares one source file, so a module
     # hash made an unrelated parser's edit invalidate all of them.
     persistent_parser_version: ClassVar[Optional[int]] = None
+    # Whether this source persists a per-call duration that can be paired with
+    # its own tokens. Default False: a source is measured only when it actually
+    # measures, never because a shared parser happened to run over its files.
+    _tracks_output_speed: ClassVar[bool] = False
+    # True only while the store has handed this parser the TAIL of a file rather
+    # than the whole of one (compute._collect_parser_tail sets it). A parser whose
+    # rows are self-contained never reads it. A parser that pairs records across
+    # lines has to know which it was given, because the same orphan bracket means
+    # "this call had no timing" in a whole file and "the slice was too short" in a
+    # tail -- and the second answer is a whole-file reparse, not a stored gap.
+    parsing_tail_slice: bool = False
 
     # Shared across all instances:
     #   {source_name: ((file_sigs, pricing_sig, runtime_sig), [entries])}
@@ -563,6 +716,7 @@ class BaseParser(ABC):
             self._file_signatures(),
             self._pricing_signature(),
             self.runtime_config_signature(),
+            timing_enabled(),
         )
         cached = self._entry_cache.get(self.source_name)
         if cached is not None and cached[0] == sig:
@@ -723,7 +877,10 @@ class OpenCodeParser(BaseParser):
                 if not isinstance(tokens, dict):
                     continue
                 model, provider = _opencode_model_identity(data)
-                out.append(self._build_entry(model, provider, tokens, self._i(ts_ms)))
+                entry = self._build_entry(model, provider, tokens, self._i(ts_ms))
+                if timing_enabled():
+                    entry["_speed"] = native_message_timing(data)
+                out.append(entry)
             except Exception:
                 continue
         return out
@@ -752,7 +909,7 @@ class OpenCodeParser(BaseParser):
 
         s_ms = int(self._to_utc(since_date).timestamp() * 1000) if since_date else 0
         u_ms = int(self._to_utc(until_date).timestamp() * 1000) if until_date else 9999999999999
-        cache_key = (s_ms, u_ms)
+        cache_key = (s_ms, u_ms, timing_enabled())
 
         cached = type(self)._query_cache.get(cache_key)
         if cached is not None:
@@ -1075,7 +1232,10 @@ class CodexParser(BaseParser):
     # 1: token_count deltas keyed on the stable usage-state event id, fresh
     #    input split out of Codex's cache-inclusive input_tokens, placeholder
     #    models resolved to the file's own first model signal.
-    persistent_parser_version = 1
+    # 2: explicit response-owned item clocks and verified tool interval union.
+    # 4: a compaction request no token_count carries is billed as its own row
+    #    (issue #222).
+    persistent_parser_version = 4
 
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)
@@ -1127,6 +1287,63 @@ class CodexParser(BaseParser):
                 # the file's first append would miss it — its placeholder marker
                 # must still be resolved by THIS file's model signal.
                 file_entry_indices: set[int] = set()
+                association = CodexResponseAssociation() if timing_enabled() else None
+                pending_speed = []
+                compactions = CodexCompactionTracker()
+
+                def build_entry(usage, entry_model, entry_provider, ts_ms, entry_id):
+                    # In Codex: input_tokens INCLUDES cached tokens
+                    # So fresh_input = input_tokens - cached_input_tokens
+                    total_input = self._i(usage.get("input_tokens"))
+                    cache_read = self._i(usage.get("cached_input_tokens"))
+                    input_t = total_input - cache_read  # Fresh input only
+                    output_t = self._i(usage.get("output_tokens"))
+                    reasoning = self._i(usage.get("reasoning_output_tokens"))
+
+                    if input_t == 0 and output_t == 0 and cache_read == 0 and reasoning == 0:
+                        return None
+
+                    billed_model = entry_model or CODEX_DEFAULT_MODEL
+                    entry = {
+                        "source": self.source_name,
+                        "model": billed_model,
+                        "provider": entry_provider,
+                        "input": input_t,
+                        "output": output_t,
+                        "cacheRead": cache_read,
+                        "cacheWrite": 0,
+                        "reasoning": reasoning,
+                        "cost": self.pricing_db.get_cost(billed_model, input_t, output_t, cache_read, 0),
+                        "timestamp": ts_ms,
+                        "entry_id": entry_id,
+                        "_session_id": own_session_id or current_session_id or Path(session_file).stem,
+                        # Codex logs no cache writes, so the billed cache-write
+                        # bucket is 0 rather than the entry's cacheWrite field.
+                        "_billing": usage_billing_pricing(
+                            [billed_model],
+                            input_tokens=input_t,
+                            output_tokens=output_t,
+                            cache_read=cache_read,
+                        ),
+                    }
+                    if entry_model is None:
+                        entry["_model_placeholder"] = True
+                    return entry
+
+                def add_entry(entry, event_key):
+                    if event_key and event_key in event_index_by_key:
+                        self.replay_events_skipped += 1
+                        existing_index = event_index_by_key[event_key]
+                        if entry["timestamp"] < out[existing_index]["timestamp"]:
+                            out[existing_index] = entry
+                            # The replacement may sit before this file's first
+                            # append; the file now owns that slot's marker too.
+                            file_entry_indices.add(existing_index)
+                        return
+                    if event_key:
+                        event_index_by_key[event_key] = len(out)
+                    file_entry_indices.add(len(out))
+                    out.append(entry)
 
                 for line_no, line in enumerate(_iter_jsonl_lines(session_file), start=1):
                     try:
@@ -1135,6 +1352,10 @@ class CodexParser(BaseParser):
                         continue
 
                     p = msg.get("payload") or {}
+                    if association is not None:
+                        association.observe(msg)
+                    if association is not None and msg.get("type") == "event_msg" and p.get("type") == "token_count":
+                        association.register(str(line_no), p.get("info") or {})
                     if msg.get("type") == "turn_context":
                         saw_turn_context = True
                         if p.get("model"):
@@ -1191,6 +1412,21 @@ class CodexParser(BaseParser):
                                     first_model_seen = model
                                     first_provider_seen = provider
 
+                    compaction = compactions.observe(msg)
+                    if compaction is not None:
+                        # Whether it bills is only known at EOF, but the key
+                        # scope and model are those of the line it was logged on.
+                        compaction["key_scope"] = codex_replay_key_session_id(
+                            is_fork_file,
+                            own_session_id,
+                            current_session_id,
+                            subagent_parent_id,
+                            saw_turn_context,
+                        )
+                        compaction["model"] = compaction["model"] or model
+                        compaction["provider"] = provider
+                        compaction["line_no"] = line_no
+
                     if msg.get("type") != "event_msg" or p.get("type") != "token_count":
                         continue
 
@@ -1222,54 +1458,47 @@ class CodexParser(BaseParser):
                         self.replay_events_skipped += 1
                         continue
 
-                    # In Codex: input_tokens INCLUDES cached tokens
-                    # So fresh_input = input_tokens - cached_input_tokens
-                    total_input = self._i(usage.get("input_tokens"))
-                    cache_read = self._i(usage.get("cached_input_tokens"))
-                    input_t = total_input - cache_read  # Fresh input only
-                    output_t = self._i(usage.get("output_tokens"))
-                    reasoning = self._i(usage.get("reasoning_output_tokens"))
-
-                    if input_t == 0 and output_t == 0 and cache_read == 0 and reasoning == 0:
+                    entry = build_entry(
+                        usage,
+                        model,
+                        provider,
+                        int(ts.timestamp() * 1000),
+                        event_key or f"{session_file}:{line_no}",
+                    )
+                    if entry is None:
                         continue
+                    if association is not None:
+                        pending_speed.append((entry, str(line_no)))
+                    add_entry(entry, event_key)
 
-                    entry_model = model or CODEX_DEFAULT_MODEL
-                    entry = {
-                        "source": self.source_name,
-                        "model": entry_model,
-                        "provider": provider,
-                        "input": input_t,
-                        "output": output_t,
-                        "cacheRead": cache_read,
-                        "cacheWrite": 0,
-                        "reasoning": reasoning,
-                        "cost": self.pricing_db.get_cost(entry_model, input_t, output_t, cache_read, 0),
-                        "timestamp": int(ts.timestamp() * 1000),
-                        "entry_id": event_key or f"{session_file}:{line_no}",
-                        # Codex logs no cache writes, so the billed cache-write
-                        # bucket is 0 rather than the entry's cacheWrite field.
-                        "_billing": usage_billing_pricing(
-                            [entry_model],
-                            input_tokens=input_t,
-                            output_tokens=output_t,
-                            cache_read=cache_read,
-                        ),
-                    }
-                    if model is None:
-                        entry["_model_placeholder"] = True
-                    if event_key and event_key in event_index_by_key:
+                for compaction in compactions.uncarried():
+                    # No token_count billed this request (issue #222), so it is
+                    # its own row. It is no response the speed reader timed:
+                    # compaction is incomplete there, and never measured.
+                    record = compaction["record"]
+                    key_session_id, replay_fallback = compaction["key_scope"]
+                    event_key = codex_compaction_event_key(key_session_id, record)
+                    if replay_fallback and event_key is None:
                         self.replay_events_skipped += 1
-                        existing_index = event_index_by_key[event_key]
-                        if entry["timestamp"] < out[existing_index]["timestamp"]:
-                            out[existing_index] = entry
-                            # The replacement may sit before this file's first
-                            # append; the file now owns that slot's marker too.
-                            file_entry_indices.add(existing_index)
                         continue
-                    if event_key:
-                        event_index_by_key[event_key] = len(out)
-                    file_entry_indices.add(len(out))
-                    out.append(entry)
+                    entry = build_entry(
+                        record["usage"],
+                        compaction["model"],
+                        compaction["provider"],
+                        compaction["timestamp"],
+                        event_key or f"{session_file}:{compaction['line_no']}",
+                    )
+                    if entry is None:
+                        continue
+                    if association is not None:
+                        entry["_speed"] = unmeasured(STATUS_INCOMPLETE)
+                    add_entry(entry, event_key)
+
+                timings = association.resolve() if association is not None else {}
+                for timed_entry, identity in pending_speed:
+                    timed_entry["_speed"] = timings[identity]
+                    if timed_entry["_speed"]["speed_calls"]:
+                        timed_entry["_speed_start"] = association.opened[identity]
 
                 if first_model_seen:
                     # Rows written before the file's first model signal (a fork's
@@ -1368,7 +1597,9 @@ class ClaudeParser(BaseParser):
     #    role-bearing id, which on endpoints that stamp both `type` and
     #    `message.role` was the partial that carries the whole prompt and no
     #    output yet -- dropping ~20% of all output tokens.
-    persistent_parser_version = 2
+    # 3: rows carry the session reader's session id, so the timing cache can
+    #    tell when every input of a session has been read.
+    persistent_parser_version = 3
 
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)
@@ -1406,17 +1637,31 @@ class ClaudeParser(BaseParser):
         # distinguishable by shape: whether the row also carries `message.role`
         # says nothing about whether more writes follow.
         #
+        # Subagent transcripts (subagents/agent-*.jsonl) are the exception: most
+        # of their requests never get the finished write, so the largest one
+        # still holds the streaming-start output count (anthropics/claude-code#84223,
+        # issue #227). Input and cache are right; output is a lower bound, and
+        # nothing on disk carries the real count, so none is estimated here.
+        #
         # See claude_usage_supersedes for the tie rules.
         best_by_message_id: Dict[str, Tuple[int, ClaudeUsageBuckets, Dict[str, Any]]] = {}
+        measure_speed = timing_enabled()
 
         for path_str, _, _ in self._file_signatures():
             session_file = Path(path_str)
+            # sessions._parse_claude_session_file's rule: the last sessionId, else the stem.
+            session_id = session_file.stem
+            created: List[Tuple[Dict[str, Any], str]] = []
+            association = ClaudeRequestAssociation() if measure_speed else None
             try:
                 for line in _iter_jsonl_lines(session_file):
                     try:
                         obj = json.loads(line)
                     except Exception:
                         continue
+                    session_id = obj.get("sessionId") or session_id
+                    if association is not None:
+                        association.observe(obj)
                     msg = obj.get("message") if isinstance(obj.get("message"), dict) else {}
                     role = msg.get("role")
                     is_top_level_assistant = role is None and obj.get("type") == "assistant"
@@ -1474,13 +1719,22 @@ class ClaudeParser(BaseParser):
                             cache_write=cache_w,
                         ),
                     }
+                    created.append((entry, msg_id))
+                    if association is not None:
+                        entry["_stream_id"] = str(obj.get("agentId") or "").strip() or "main"
                     if not msg_id:
                         out.append(entry)
                         continue
 
                     best_by_message_id[msg_id] = (total_t, buckets, entry)
             except Exception:
-                continue
+                pass
+            for entry, msg_id in created:
+                entry["_session_id"] = str(session_id)
+                if association is not None and msg_id:
+                    entry["_speed"] = association.resolve(msg_id, entry["output"])
+                    if entry["_speed"]["speed_calls"]:
+                        entry["_speed_start"] = association.opened[msg_id]
 
         out.extend(entry for _, _, entry in best_by_message_id.values())
         out.sort(key=lambda entry: int(entry.get("timestamp", 0) or 0))
@@ -2034,6 +2288,10 @@ class KimiParser(BaseParser):
     """
 
     source_name = "kimi"
+    # Kimi Code separates a provider-reported decode duration from its token row.
+    # The legacy StatusUpdate schema has no duration at all, so those rows find no
+    # timing and simply stay unmeasured.
+    _tracks_output_speed = True
     sync_capability = SourceSyncCapability(
         mode="file_replace",
         append_jsonl=True,
@@ -2045,7 +2303,12 @@ class KimiParser(BaseParser):
     # 1: legacy StatusUpdate rows keyed on message id and Kimi Code
     #    usage.record rows keyed on a (path, content) hash, wire model names
     #    mapped through _WIRE_MODEL_MAP.
-    persistent_parser_version = 1
+    # 2: usage.record rows carry the paired step.end decode duration, so the
+    #    stored rows gain the output-speed columns. Bumping rebuilds kimi rows
+    #    only; token and cost values are unchanged by the reparse.
+    # 3: the append fallback includes the matching window's upper boundary;
+    #    rebuild rows an earlier development build could have left untimed.
+    persistent_parser_version = 4
 
     # Wire model names emitted by Kimi Code usage.record rows, mapped to
     # canonical TokDash pricing keys. The display names in the CLI's own
@@ -2167,7 +2430,9 @@ class KimiParser(BaseParser):
         ts_ms = int(ts.timestamp() * 1000)
         return self._build_entry(model, token_usage, ts_ms, message_id)
 
-    def _entry_from_usage_record(self, record: Dict[str, Any], path_str: str, seen_message_ids: set) -> Optional[Dict[str, Any]]:
+    def _entry_from_usage_record(
+        self, record: Dict[str, Any], path_str: str, seen_message_ids: set
+    ) -> Optional[Dict[str, Any]]:
         """Parse a Kimi Code >=0.26 usage.record row; None if not applicable."""
         if record.get("type") != "usage.record":
             return None
@@ -2190,21 +2455,10 @@ class KimiParser(BaseParser):
 
         # No message id in this schema; dedup on (path, content) instead. The
         # path keeps identical rows from distinct sessions/agents countable,
-        # while duplicated lines within one file still collapse.
-        dedup_key = hashlib.sha1(
-            json.dumps(
-                [
-                    path_str,
-                    ts_ms,
-                    model,
-                    usage.get("inputOther"),
-                    usage.get("output"),
-                    usage.get("inputCacheRead"),
-                    usage.get("inputCacheCreation"),
-                ],
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        # while duplicated lines within one file still collapse. Shared with the
+        # timing reader and the session drill-down (kimi_usage_record_key) so a
+        # duration can only ever land on the row that billed these tokens.
+        dedup_key = kimi_usage_record_key(getattr(self,"tail_source_path",None) or path_str, ts_ms, model, usage)
         if dedup_key in seen_message_ids:
             return None
         seen_message_ids.add(dedup_key)
@@ -2215,7 +2469,10 @@ class KimiParser(BaseParser):
             "input_cache_read": usage.get("inputCacheRead"),
             "input_cache_creation": usage.get("inputCacheCreation"),
         }
-        return self._build_entry(model, token_usage, ts_ms, dedup_key)
+        entry = self._build_entry(model, token_usage, ts_ms, dedup_key)
+        path = Path(getattr(self,'tail_source_path',None) or path_str)
+        entry['_session_id'] = path.parents[2].name if path.parent.parent.name == 'agents' else path.parent.name
+        return entry
 
     def _parse_all(self) -> List[Dict[str, Any]]:
         """Collect token usage from Kimi CLI / Kimi Code session files."""
@@ -2223,6 +2480,13 @@ class KimiParser(BaseParser):
         seen_message_ids: set[str] = set()
 
         for path_str, _, _ in self._file_signatures():
+            # One pass, not two. The usage.record rows and the step brackets that
+            # time them are different records of one file, so the association cannot
+            # be decided while reading -- but it can be *collected* while reading,
+            # which is what keeps a wire log at a single JSON parse per line. The
+            # verdict is hung on the rows below once the file is done.
+            association = KimiStepAssociation() if self._tracks_output_speed and timing_enabled() else None
+            pending_speed: List[Tuple[Dict[str, Any], str]] = []
             try:
                 with open(path_str, "r", encoding="utf-8") as f:
                     for line in f:
@@ -2233,15 +2497,51 @@ class KimiParser(BaseParser):
                             record = json.loads(line)
                         except json.JSONDecodeError:
                             continue
-
+                        if association is not None:
+                            association.observe(record)
                         entry = self._entry_from_usage_record(record, path_str, seen_message_ids)
                         if entry is None:
                             entry = self._entry_from_status_update(record, seen_message_ids)
+                        elif association is not None:
+                            # Registered under the key that billed these tokens, so a
+                            # call can never inherit another call's duration. The
+                            # verdict comes back once the file is read, by which time
+                            # the bracket it needs may not have arrived yet.
+                            association.register_usage(
+                                agent=record.get("agentId"),
+                                timestamp_ms=entry["timestamp"],
+                                usage=record["usage"],
+                                identity=entry["message_id"],
+                            )
+                            pending_speed.append((entry, entry["message_id"]))
                         if entry is not None:
+                            path = Path(getattr(self,'tail_source_path',None) or path_str)
+                            entry['_session_id'] = path.parents[2].name if path.parent.parent.name == 'agents' else path.parent.name
                             out.append(entry)
-
             except Exception:
                 continue
+
+            if association is None:
+                continue
+            timings = association.resolve()
+            # Outside the try above on purpose: this is the parser telling the store
+            # that the slice it was handed split a call from its duration, and the
+            # per-file `except Exception` would otherwise swallow that request and
+            # store an unmeasured row the file could have answered. Either half of
+            # the split counts, because the append boundary falls in the middle of a
+            # pair rather than on one of its edges: the slice can hold the step.end
+            # whose row went in earlier, or the row whose step.end went in earlier.
+            if self.parsing_tail_slice and (
+                association.claims_a_row_this_text_missed
+                or association.claims_a_bracket_this_text_missed
+            ):
+                raise UsageTailSliceIncomplete(path_str)
+            for entry, identity in pending_speed:
+                speed = timings.get(identity)
+                if speed is not None:
+                    # Not copied: the verdict is immutable, so rows that share a
+                    # status share one dict instead of minting their own.
+                    entry["_speed"] = speed
 
         return out
 
@@ -2697,7 +2997,7 @@ class PiAgentParser(BaseParser):
                                 cache_write=cache_w,
                             )
 
-                        out.append({
+                        row = {
                             "source": self.source_name,
                             "model": model,
                             "provider": provider,
@@ -2709,8 +3009,16 @@ class PiAgentParser(BaseParser):
                             "cost": cost,
                             "timestamp": int(ts.timestamp() * 1000),
                             "entry_id": event_key,
+                            "_session_id": cur_session_id,
                             "_billing": billing,
-                        })
+                        }
+                        # _parse_all is shared with pi_agent (O5), which writes no
+                        # duration/ttft at all. Gating on the class attribute keeps
+                        # omp's new timing out of pi's rows rather than letting an
+                        # inherited method silently upgrade the parent source.
+                        if self._tracks_output_speed and timing_enabled():
+                            row["_speed"] = omp_message_timing(msg)
+                        out.append(row)
             except Exception:
                 continue
 
@@ -2742,7 +3050,13 @@ class OmpParser(PiAgentParser):
     """
 
     source_name = "omp"
-    persistent_parser_version = 1
+    # omp carries duration + ttft + usage on the same assistant record, so its
+    # output window needs no association step at all. pi_agent, which shares
+    # _parse_all, writes none of those fields and stays unmeasured.
+    _tracks_output_speed = True
+    # 2: rows carry the paired duration, and a record the source itself labels
+    #    error/aborted is stored as an exclusion rather than a measurement.
+    persistent_parser_version = 3
     sync_capability = SourceSyncCapability(mode="file_replace", reason="OMP session-scoped rows.")
     use_recorded_cost = False
 
@@ -3530,7 +3844,7 @@ class MimoParser(BaseParser):
 
         s_ms = int(self._to_utc(since_date).timestamp() * 1000) if since_date else 0
         u_ms = int(self._to_utc(until_date).timestamp() * 1000) if until_date else 9999999999999
-        cache_key = (s_ms, u_ms)
+        cache_key = (s_ms, u_ms, timing_enabled())
 
         cached = type(self)._query_cache.get(cache_key)
         if cached is not None:
@@ -3567,6 +3881,8 @@ class MimoParser(BaseParser):
                             continue
                         entry = self._build_entry(data, self._i(ts_ms))
                         entry["entry_id"] = f"mimo:{msg_id}"
+                        if timing_enabled():
+                            entry["_speed"] = native_message_timing(data, source="mimo")
                         out.append(entry)
                     except Exception:
                         continue
@@ -3625,6 +3941,29 @@ def zcode_snapshot_signatures(db_path: Path) -> tuple:
     return tuple(out)
 
 
+def _zcode_copy_fingerprints(db_path: Path) -> tuple:
+    # The coherence check for the copy below. zcode_snapshot_signatures
+    # stays (path, mtime_ns, size) because the usage store and the
+    # sessions caches take that shape; this one adds what tells a
+    # replaced or rewritten file apart when the clock is too coarse to
+    # move mtime: st_ino (the NTFS file index on Windows) and, where it
+    # means "last change", st_ctime_ns. On Windows st_ctime is the
+    # creation time, which does not move on a rewrite, so it is left
+    # out there.
+    use_ctime = os.name != "nt"
+    out = []
+    for p in (db_path, Path(str(db_path) + "-wal")):
+        try:
+            st = p.stat()
+            out.append((
+                str(p), st.st_mtime_ns, st.st_size, st.st_ino,
+                st.st_ctime_ns if use_ctime else None,
+            ))
+        except OSError:
+            out.append((str(p), None, None, None, None))
+    return tuple(out)
+
+
 def _zcode_open_snapshot(db_path: Path) -> Optional[Tuple[sqlite3.Connection, Path]]:
     # Open a private temp-dir copy, never the source file. A ?mode=ro
     # open of a WAL database is still not side-effect free: when the
@@ -3651,7 +3990,7 @@ def _zcode_open_snapshot(db_path: Path) -> Optional[Tuple[sqlite3.Connection, Pa
     # Returns (conn, tmpdir); None on a copy/open error or when every
     # attempt raced a source change - no fallback open in another mode.
     for _attempt in range(_ZCODE_SNAPSHOT_MAX_ATTEMPTS):
-        before = zcode_snapshot_signatures(db_path)
+        before = _zcode_copy_fingerprints(db_path)
         tmpdir: Optional[Path] = None
         try:
             tmpdir = Path(tempfile.mkdtemp(prefix="tokdash-zcode."))
@@ -3659,7 +3998,7 @@ def _zcode_open_snapshot(db_path: Path) -> Optional[Tuple[sqlite3.Connection, Pa
             wal = Path(str(db_path) + "-wal")
             if wal.exists():
                 shutil.copy2(wal, tmpdir / (db_path.name + "-wal"))
-            if zcode_snapshot_signatures(db_path) != before:
+            if _zcode_copy_fingerprints(db_path) != before:
                 raise OSError("source changed mid-copy")
             conn = sqlite3.connect(str(tmpdir / db_path.name))
         except (OSError, sqlite3.Error):
@@ -3668,7 +4007,7 @@ def _zcode_open_snapshot(db_path: Path) -> Optional[Tuple[sqlite3.Connection, Pa
             # A failure accompanied by a signature change is a
             # generation change that landed mid-copy - retry it.
             if (
-                zcode_snapshot_signatures(db_path) != before
+                _zcode_copy_fingerprints(db_path) != before
                 and _attempt + 1 < _ZCODE_SNAPSHOT_MAX_ATTEMPTS
             ):
                 continue
@@ -5215,7 +5554,8 @@ class DSHParser(BaseParser):
     )
     # 1: folded usage samples keyed on dsh_sample_entry_id. The shared
     #    decoder's own versions ride along in persistent_parser_signature().
-    persistent_parser_version = 1
+    # 2: matched clean-stream speed windows; retry-contaminated steps excluded.
+    persistent_parser_version = 3
 
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)
@@ -5269,6 +5609,8 @@ class DSHParser(BaseParser):
                     "cost": self.pricing_db.get_cost(model, input_t, output_t, cache_r, cache_w),
                     "timestamp": int(sample["timestamp_ms"]),
                     "entry_id": dsh_sample_entry_id(session_id, sample),
+                    "_session_id": session_id,
+                    **({"_speed": sample["_speed"]} if "_speed" in sample else {}),
                     "_billing": usage_billing_pricing(
                         [model],
                         input_tokens=input_t,
@@ -6284,7 +6626,7 @@ def qwen_row_from_record(rec: Dict[str, Any]) -> Optional[Tuple[str, Dict[str, A
 
 
 def qwen_session_file(
-    path: str, unavailable: Optional[type] = None
+    path: str, unavailable: Optional[type] = None, *, tail_slice: bool = False
 ) -> Tuple[List[Tuple[str, Dict[str, Any]]], Dict[str, Any]]:
     """One chat file -> (rows, meta) with rows = [(entry_id, row), ...] and
     meta = {"session_id", "cwd", "preview"}.
@@ -6305,6 +6647,7 @@ def qwen_session_file(
     that call, because aborting the whole source (rather than syncing a
     partial corpus to the store) is Overview's shipped behavior.
     """
+    association = QwenTimingAssociation() if timing_enabled() else None
     rows: List[Tuple[str, Dict[str, Any]]] = []
     session_id = ""
     cwd = ""
@@ -6338,12 +6681,17 @@ def qwen_session_file(
                 if not preview and rec.get("type") == "user":
                     preview = _qwen_user_text(rec)
                 row_tuple = qwen_row_from_record(rec)
+                if association is not None:
+                    association.observe(rec, row_tuple[1] if row_tuple else None)
                 if row_tuple is not None:
                     rows.append(row_tuple)
     except OSError as exc:
         if unavailable is not None:
             raise unavailable(path) from exc
         raise
+    missed = association.resolve() if association is not None else False
+    if tail_slice and missed:
+        raise UsageTailSliceIncomplete("Qwen assistant parent may precede the tail slice")
     return rows, {
         "session_id": session_id or Path(path).stem,
         "cwd": cwd,
@@ -6406,8 +6754,8 @@ class QwenCodeParser(BaseParser):
     )
     # 1: assistant records with dict usageMetadata, Gemini cache-inclusive
     #    prompt split, source-global "qwen:<uuid>" key, pricing-DB cost
-    #    only.
-    persistent_parser_version = 1
+    #    only. 2 adds directly linked API telemetry to the counted settlement.
+    persistent_parser_version = 3
 
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)
@@ -6451,8 +6799,8 @@ class QwenCodeParser(BaseParser):
         # unavailable=None keeps this call's swallow-and-return-[] behavior
         # on a failed open; qwen_session_file is the shared reader the
         # Sessions harness reaches with the caller's exception class instead.
-        rows, _meta = qwen_session_file(path_str)
-        return [self._build_entry(entry_id, row) for entry_id, row in rows]
+        rows, _meta = qwen_session_file(path_str, tail_slice=self.parsing_tail_slice)
+        return [dict(self._build_entry(entry_id, row), _session_id=str(_meta.get('session_id') or 'unknown')) for entry_id, row in rows]
 
     def _parse_all(self) -> List[Dict[str, Any]]:
         # The store's stable-key upsert keeps the earliest-timestamped
@@ -7814,6 +8162,11 @@ class DevinParser(BaseParser):
     # that struct under either rename convention. A miss costs one dict lookup;
     # the wrong list costs every token this source would ever report, and only
     # the tripwire in collect() would say so (Q3/Q4 settle it).
+    #
+    # The ``metadata.*`` paths come from a populated store rather than the
+    # binary docs: a real ``chat_message`` payload carries ``metadata.metrics``
+    # holding ``input_tokens``/``output_tokens``/``cache_read_tokens``/
+    # ``cache_creation_tokens`` beside ``ttft_ms`` and friends.
     _USAGE_PATHS: ClassVar[Tuple[str, ...]] = (
         "",
         "usage",
@@ -7826,6 +8179,10 @@ class DevinParser(BaseParser):
         "message.performance_metrics",
         "message.performanceMetrics",
         "message",
+        "metadata.metrics",
+        "metadata.usage",
+        "metadata.performance_metrics",
+        "metadata.performanceMetrics",
         "extensions.usage",
         "extensions.performance_metrics",
         "extensions.performanceMetrics",
@@ -7837,6 +8194,8 @@ class DevinParser(BaseParser):
         "model_id",
         "modelUid",
         "model_uid",
+        "generation_model",
+        "generationModel",
     )
     @classmethod
     def _ts_ms_sql(cls, column: str) -> str:
@@ -8048,7 +8407,12 @@ class DevinParser(BaseParser):
         return None
 
     def _model_of(self, node: Dict[str, Any], usage: Dict[str, Any]) -> str:
-        for container in (node, usage):
+        # A populated store names the model at ``metadata.generation_model``
+        # (``swe-2-high``, ``summarizer``, ...), so ``metadata`` is checked
+        # alongside the node and the usage container.
+        metadata = node.get("metadata")
+        containers = (node, usage, metadata) if isinstance(metadata, dict) else (node, usage)
+        for container in containers:
             for field in self._MODEL_FIELDS:
                 value = container.get(field)
                 if isinstance(value, str) and value.strip():
@@ -8076,7 +8440,9 @@ class DevinParser(BaseParser):
             # totals, and it is the same filter the other DB sources use.
             return None
 
-        message_id = node.get("id")
+        # Live stores name it ``message_id``; ``id`` covers the documented
+        # shape and any other writer.
+        message_id = node.get("id") or node.get("message_id")
         entry_id = (
             f"devin:{session_id}:{message_id}"
             if isinstance(message_id, str) and message_id.strip()

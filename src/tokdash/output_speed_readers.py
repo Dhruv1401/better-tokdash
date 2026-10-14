@@ -1,0 +1,763 @@
+"""Verified per-call readers shared by usage accounting and session detail.
+
+No reader changes which usage record is billed. Ownership and exclusions travel
+with that record, including when a fork or a final settlement replaces it.
+"""
+from __future__ import annotations
+
+from bisect import bisect_left
+from collections import defaultdict
+from datetime import datetime
+from typing import Any
+import math
+
+try:
+    from .output_speed import (
+        BASIS_INCLUDING, KIND_POST_FIRST_TOKEN, KIND_REQUEST_WINDOW,
+        KIND_RESPONSE_WINDOW, STATUS_AMBIGUOUS_PAIR, STATUS_INCOMPLETE,
+        STATUS_INVALID_TIMING, STATUS_MISSING_TIMING, STATUS_RETRY_CONTAMINATED,
+        measured, unmeasured,
+    )
+except ImportError:  # coding_tools.py also supports direct script execution
+    from output_speed import (
+        BASIS_INCLUDING, KIND_POST_FIRST_TOKEN, KIND_REQUEST_WINDOW,
+        KIND_RESPONSE_WINDOW, STATUS_AMBIGUOUS_PAIR, STATUS_INCOMPLETE,
+        STATUS_INVALID_TIMING, STATUS_MISSING_TIMING, STATUS_RETRY_CONTAMINATED,
+        measured, unmeasured,
+    )
+
+
+def number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        n = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return n if math.isfinite(n) and n >= 0 else None
+
+
+def request_window_timing(output, reasoning, created, completed, error=None, finish=None, *, ensemble=False):
+    """OpenCode-family output excludes reasoning; the two disjoint buckets add.
+
+    Created-to-completed includes request overhead AND any awaited tools/retries.
+    Completion is written even on failure, so an error/abnormal finish wins over
+    the presence of a closing clock. No duration floor or rate ceiling.
+    """
+    if ensemble:
+        # MiMo max mode replays a winning candidate after multiple requests and
+        # a judge. Its assistant-message clock is not a single-call window.
+        return unmeasured(STATUS_AMBIGUOUS_PAIR)
+    if error is not None or str(finish or '').lower() in {
+        'error', 'aborted', 'cancelled', 'canceled', 'length', 'content-filter',
+    }:
+        return unmeasured(STATUS_INCOMPLETE)
+    if completed is None:
+        return unmeasured(STATUS_INCOMPLETE)
+    start, end = number(created), number(completed)
+    out, think = number(output), number(reasoning if reasoning is not None else 0)
+    if (start is None or end is None or out is None or think is None
+            or not out.is_integer() or not think.is_integer()):
+        return unmeasured(STATUS_INVALID_TIMING)
+    return measured(tokens=out + think, duration_ms=end - start,
+                    measurement_kind=KIND_REQUEST_WINDOW, token_basis=BASIS_INCLUDING)
+
+
+def native_message_timing(data, source=None):
+    tokens = data.get('tokens') or {}
+    clock = data.get('time') or {}
+    return request_window_timing(tokens.get('output'), tokens.get('reasoning'),
+                                 clock.get('created'), clock.get('completed'),
+                                 data.get('error'), data.get('finish'),
+                                 ensemble=source == 'mimo' and (data.get('agent') == 'max' or data.get('mode') == 'max'))
+
+
+class QwenTimingAssociation:
+    """Direct assistant.parentUuid -> API telemetry UUID, never a time join.
+
+    The recorder appends telemetry synchronously before recording the assistant
+    settlement. Only direct, unique links in the same session/agent are accepted;
+    interleaving or historical records without telemetry are ordinary absence.
+    Token/model comparisons validate the linked record, never establish its owner.
+    """
+    def __init__(self):
+        self.telemetry = {}
+        self.rows = []
+        self.conflicts = set()
+
+    def observe(self, rec, row=None):
+        payload = rec.get('systemPayload')
+        event = payload.get('uiEvent') if isinstance(payload, dict) else None
+        if rec.get('type') == 'system' and isinstance(event, dict):
+            if event.get('event.name') in {'qwen-code.api_response', 'api_response'}:
+                identity = rec.get('uuid')
+                if identity:
+                    old = self.telemetry.get(identity)
+                    if old is not None and old != rec:
+                        self.conflicts.add(identity)
+                    self.telemetry[identity] = rec
+        if row is not None:
+            self.rows.append((rec, row))
+
+    def resolve(self):
+        claims = defaultdict(set)
+        for rec, _row in self.rows:
+            claims[rec.get('parentUuid')].add(rec.get('uuid') or id(rec))
+        for rec, row in self.rows:
+            parent = rec.get('parentUuid')
+            owner = self.telemetry.get(parent)
+            speed = unmeasured(STATUS_MISSING_TIMING)
+            if parent in self.conflicts or (owner and len(claims[parent]) != 1):
+                speed = unmeasured(STATUS_AMBIGUOUS_PAIR)
+            elif owner:
+                event = owner['systemPayload']['uiEvent']
+                scope = all(rec.get(k) == owner.get(k) for k in ('sessionId', 'agentId', 'isSidechain'))
+                model = str(event.get('model') or '').rsplit('/', 1)[-1].casefold()
+                usage = rec.get('usageMetadata') or {}
+                counters = [('promptTokenCount', 'input_token_count'),
+                            ('candidatesTokenCount', 'output_token_count'),
+                            ('thoughtsTokenCount', 'thoughts_token_count'),
+                            ('cachedContentTokenCount', 'cached_content_token_count')]
+                valid = scope and bool(event.get('response_id')) and model == str(row['model']).rsplit('/', 1)[-1].casefold()
+                valid = valid and all(isinstance(usage.get(a, 0), int) and not isinstance(usage.get(a, 0), bool)
+                                      and usage.get(a, 0) >= 0 and usage.get(a, 0) == event.get(b, 0) for a, b in counters)
+                # OpenAI-compatible Qwen adapters can put reasoning INSIDE
+                # candidatesTokenCount, while Gemini adapters keep it separate.
+                # Resolve this from the recorded total identity, never from
+                # the billing row's two counters or an assumed provider default.
+                candidate, think = usage.get('candidatesTokenCount',0), usage.get('thoughtsTokenCount',0)
+                total = usage.get('totalTokenCount')
+                speed_tokens = candidate if think == 0 and total is None else None
+                if valid and isinstance(total,int) and not isinstance(total,bool) and total == event.get('total_token_count'):
+                    prompt = usage.get('promptTokenCount',0)
+                    if total == prompt + candidate and think <= candidate:
+                        speed_tokens = candidate
+                    elif total == prompt + candidate + think:
+                        speed_tokens = candidate + think
+                if not valid or speed_tokens is None:
+                    speed = unmeasured(STATUS_AMBIGUOUS_PAIR)
+                elif event.get('status_code', 200) != 200:
+                    speed = unmeasured(STATUS_INCOMPLETE)
+                elif event.get('duration_ms') is not None and event.get('ttft_ms') is not None:
+                    duration, ttft = number(event['duration_ms']), number(event['ttft_ms'])
+                    speed = (unmeasured(STATUS_INVALID_TIMING) if duration is None or ttft is None else
+                             measured(tokens=speed_tokens, duration_ms=duration - ttft,
+                                      measurement_kind=KIND_POST_FIRST_TOKEN, token_basis=BASIS_INCLUDING))
+            row['_speed'] = speed
+        return any(rec.get('parentUuid') not in self.telemetry for rec, _ in self.rows)
+
+
+#: System entries Claude Code writes when a request failed and was sent again.
+CLAUDE_RETRY_SUBTYPES = frozenset({'api_error', 'model_refusal_fallback'})
+
+
+def _claude_ms(value):
+    try:
+        return round(datetime.fromisoformat(str(value).replace('Z', '+00:00')).timestamp() * 1000)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+class ClaudeRequestAssociation:
+    """One Claude Code request -> its own content-block stamps, never a time join.
+
+    A request is every assistant entry of one message id, one per content block,
+    each stamped when its block finished. Since 2.1.287 a leading thinking block
+    carries thinkingDurationMs, its own streaming time, so its stamp minus that
+    is the first output token and the window runs to the last block. Otherwise
+    the window opens at the request's sender, the nearest user entry (prompt or
+    tool_result) up the parentUuid chain: attachments are written with the
+    response, so they never open it. That window holds prefill and transport,
+    and through an API error or fallback also the retry (retry_contaminated);
+    through another request's response it has no sender (ambiguous_pair). No
+    stop_reason is an interrupted request or a subagent log written before its
+    final usage: incomplete either way. Output tokens include thinking. Links
+    stay inside one transcript; no tok/s floor or ceiling. ``opened`` keeps
+    where each window began: the billed row is the first block's write, which
+    is neither end of a multi-block window.
+    """
+    def __init__(self):
+        self.links = {}  # uuid -> (parentUuid, tag, raw timestamp, message id)
+        self.calls = {}  # message id -> [parent, first order, first, think ms, last, stopped, failed, clock]
+        self.opened = {}
+
+    def observe(self, obj):
+        if not isinstance(obj, dict):
+            return
+        kind = obj.get('type')
+        message = obj.get('message') if isinstance(obj.get('message'), dict) else {}
+        role = message.get('role')
+        uuid = obj.get('uuid')
+        # The usage parser's own row selection and id, so a timing lands on its row.
+        identity = str(message.get('id') or uuid or '') if role == 'assistant' or (role is None and kind == 'assistant') else ''
+        parent = obj.get('parentUuid') if isinstance(obj.get('parentUuid'), str) else None
+        if isinstance(uuid, str) and uuid:
+            retry = obj.get('isApiErrorMessage') or (kind == 'system' and str(obj.get('subtype')) in CLAUDE_RETRY_SUBTYPES)
+            tag = 'retry' if retry else 'user' if kind == 'user' else 'call' if identity else ''
+            self.links[uuid] = (parent, tag, obj.get('timestamp'), identity)
+        if not identity:
+            return
+        stamp = _claude_ms(obj.get('timestamp'))
+        index = obj.get('apiBlockIndex')
+        order = (index if isinstance(index, int) and not isinstance(index, bool) else math.inf,
+                 math.inf if stamp is None else stamp)
+        call = self.calls.get(identity)
+        if call is None:
+            call = self.calls[identity] = [parent, None, None, None, None, False, False, True]
+        if stamp is None:
+            call[7] = False
+        else:
+            call[4] = stamp if call[4] is None else max(call[4], stamp)
+        if call[1] is None or order < call[1]:
+            content = message.get('content')
+            thinking = (isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict)
+                        and content[0].get('type') == 'thinking')
+            call[1:4] = [order, stamp, obj.get('thinkingDurationMs') if thinking else None]
+        call[5] = call[5] or bool(message.get('stop_reason'))
+        call[6] = call[6] or bool(obj.get('isApiErrorMessage')) or message.get('model') == '<synthetic>'
+
+    def resolve(self, identity, tokens):
+        call = self.calls.get(identity)
+        if call is None:
+            return unmeasured(STATUS_MISSING_TIMING)
+        parent, _order, first, think, last, stopped, failed, clock = call
+        if failed or not stopped:
+            return unmeasured(STATUS_INCOMPLETE)
+        if not clock:
+            return unmeasured(STATUS_INVALID_TIMING)
+        think = number(think)
+        if think:
+            self.opened[identity] = first - think
+            return measured(tokens=tokens, duration_ms=last - (first - think),
+                            measurement_kind=KIND_POST_FIRST_TOKEN, token_basis=BASIS_INCLUDING)
+        link, hops = self.links.get(parent), 0
+        while link is not None and link[1] != 'user':
+            if link[1] == 'retry':
+                return unmeasured(STATUS_RETRY_CONTAMINATED)
+            if link[1] == 'call' and link[3] != identity:
+                return unmeasured(STATUS_AMBIGUOUS_PAIR)
+            link, hops = self.links.get(link[0]), hops + 1
+            if hops > len(self.links):
+                return unmeasured(STATUS_INVALID_TIMING)  # a parentUuid cycle
+        if link is None:
+            return unmeasured(STATUS_MISSING_TIMING)
+        start = _claude_ms(link[2])
+        if start is None:
+            return unmeasured(STATUS_INVALID_TIMING)
+        self.opened[identity] = start
+        return measured(tokens=tokens, duration_ms=last - start,
+                        measurement_kind=KIND_REQUEST_WINDOW, token_basis=BASIS_INCLUDING)
+
+
+def dsh_stream_timing(stream, usage):
+    """First explicit assistant chunk -> unique usage chunk in that exact stream.
+
+    Coalesced runs only supply time0 in newer formats. Untimestamped legacy runs
+    remain unavailable. Settlement tokens must agree with the stream's usage.
+    """
+    if not isinstance(stream, list) or not stream:
+        return unmeasured(STATUS_MISSING_TIMING)
+    if not isinstance(usage, dict) or number(usage.get('outputTokens')) is None:
+        return unmeasured(STATUS_AMBIGUOUS_PAIR)
+    first = None
+    latest = None
+    ends = []
+    for record in stream:
+        if not isinstance(record, dict):
+            return unmeasured(STATUS_AMBIGUOUS_PAIR)
+        kind = record.get('type')
+        chunk = record.get('chunk') or {}
+        if not isinstance(chunk, dict):
+            return unmeasured(STATUS_AMBIGUOUS_PAIR)
+        clock = record.get('time') if kind == 'chunk' else record.get('time0')
+        stamp = number(clock)
+        if kind in {'text-chunks', 'reasoning-chunks', 'tool-call-chunks'} and stamp is None:
+            return unmeasured(STATUS_MISSING_TIMING)
+        if kind == 'chunk' and chunk.get('type') == 'usage':
+            ends.append((stamp, chunk.get('usage')))
+        elif kind == 'chunk' and chunk.get('type') == 'finish':
+            reason = chunk.get('reason') or {}
+            if not isinstance(reason, dict) or reason.get('kind') in {'error', 'abort', 'aborted', 'cancelled', 'canceled'}:
+                return unmeasured(STATUS_INCOMPLETE)
+        elif kind == 'chunk' and chunk.get('type') in {'error', 'abort', 'aborted'}:
+            return unmeasured(STATUS_INCOMPLETE)
+        elif kind == 'chunk' or kind in {'text-chunks', 'reasoning-chunks', 'tool-call-chunks'}:
+            if stamp is None:
+                return unmeasured(STATUS_MISSING_TIMING)
+            if first is None:
+                first = stamp
+            if ends or (first is not None and stamp < first):
+                return unmeasured(STATUS_INVALID_TIMING)
+            # Coalesced records do not establish a monotone producer clock.
+            # Every observed output bound must precede its settlement, even
+            # when a later record carries an earlier timestamp.
+            latest = stamp if latest is None else max(latest, stamp)
+        else:
+            return unmeasured(STATUS_AMBIGUOUS_PAIR)
+    if len(ends) != 1:
+        return unmeasured(STATUS_AMBIGUOUS_PAIR if ends else STATUS_MISSING_TIMING)
+    end, counted = ends[0]
+    if counted != usage:
+        return unmeasured(STATUS_AMBIGUOUS_PAIR)
+    if first is None or end is None:
+        return unmeasured(STATUS_MISSING_TIMING)
+    if end < latest:
+        return unmeasured(STATUS_INVALID_TIMING)
+    return measured(tokens=usage.get('outputTokens'), duration_ms=end - first,
+                    measurement_kind=KIND_RESPONSE_WINDOW, token_basis=BASIS_INCLUDING)
+
+
+_CODEX_COUNTERS = ('input_tokens', 'cached_input_tokens', 'cache_write_input_tokens',
+                   'output_tokens', 'reasoning_output_tokens', 'total_tokens')
+
+def _usage_signature(usage):
+    if not isinstance(usage, dict):
+        return None
+    return tuple(usage.get(k, 0) for k in _CODEX_COUNTERS)
+
+
+def _trails(total, expected, drift):
+    """A snapshot total plus the drift it trails by equals the marker's total."""
+    have, want = _usage_signature(total), _usage_signature(expected)
+    if not any(drift):
+        return have == want
+    if have is None or want is None:
+        return False
+    try:
+        return tuple(a + d for a, d in zip(have, drift)) == want
+    except TypeError:
+        return False
+
+
+def clipped_union_ms(intervals, start, end):
+    """Clip before union: overlaps and out-of-bracket tails count only once."""
+    total, cursor = 0.0, start
+    for lo, hi in sorted((max(start, a), min(end, b)) for a, b in intervals):
+        if hi > max(cursor, lo):
+            total += hi - max(cursor, lo)
+            cursor = hi
+    return total
+
+
+def _codex_tool_work_ms(item):
+    """Work a Codex tool item reports, in ms; 0 when it reports none.
+
+    A value that cannot be read, or a bare `duration` number with no unit to
+    trust, may hide real work, so it counts as more than any stamp can hide.
+    """
+    duration = item.get('duration_ms', item.get('duration'))
+    if isinstance(duration, dict):
+        parts = ((duration.get('secs'), 1000), (duration.get('nanos'), 1e-6))
+    else:
+        parts = ((duration, 1 if 'duration_ms' in item else math.inf),)
+    work = 0.0
+    for value, scale in parts:
+        n = number(value)
+        if value is not None and n is None:
+            return math.inf
+        if n:
+            work += n * scale
+    return work
+
+
+def _codex_counters_ok(usage):
+    """The total identity proves output includes reasoning; never add a reasoning
+    bucket to a counter whose inclusion is unverified."""
+    return isinstance(usage, dict) and not any(
+        not isinstance(usage.get(k, 0), int) or isinstance(usage.get(k, 0), bool) or usage.get(k, 0) < 0
+        for k in _CODEX_COUNTERS
+    ) and usage.get('total_tokens') == usage.get('input_tokens', 0) + usage.get('output_tokens', 0) \
+        and usage.get('reasoning_output_tokens', 0) <= usage.get('output_tokens', 0)
+
+
+def _line_ms(obj):
+    """When the rollout writer stamped this line, in epoch ms."""
+    raw = obj.get('timestamp')
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace('Z', '+00:00')).timestamp() * 1000
+    except ValueError:
+        return None
+
+
+# Line clocks. Codex writes each output item to the rollout as it completes, and
+# stamps every line, so the lines bound a response that no model item clock
+# covers: before 0.153 no token_usage_record owns one, before 0.147 there are
+# no item clocks at all, and a response ending in a tool call streamed that
+# call with no clock of its own.
+_CODEX_OUTPUT_LINES = frozenset({'reasoning', 'message', 'function_call', 'custom_tool_call', 'web_search_call',
+                                 'local_shell_call', 'tool_search_call', 'image_generation_call'})
+# Lines that send the next request: a tool's result, or the user's message.
+_CODEX_INPUT_LINES = frozenset({'function_call_output', 'custom_tool_call_output', 'local_shell_call_output',
+                                'tool_search_output'})
+_CODEX_DISRUPTIONS = {'turn_aborted': STATUS_INCOMPLETE, 'error': STATUS_INCOMPLETE,
+                      'context_compacted': STATUS_INCOMPLETE, 'stream_error': STATUS_RETRY_CONTAMINATED}
+# A first output this long after its request is a wait on something other than
+# the model; the line clocks cannot say what.
+CODEX_STALL_MS = 600_000
+# No served model streams this fast; such a window is a clock artefact.
+CODEX_MAX_TOK_PER_S = 3000.0
+# How many of the newest uncarried markers a snapshot total may account for.
+_CODEX_UNCARRIED_TRIED = 8
+
+
+class CodexResponseAssociation:
+    """Explicit response marker owns timed model items and one counted snapshot.
+
+    token_usage_record closes a response, naming response_id + turn_id and its
+    thread usage state. The following token_count must validate that SAME state.
+    Without that marker ownership is unproven. No token-event gap is a duration.
+    Collapsed Reasoning, unknown items and compaction are excluded. Hosted tool
+    intervals are indexed per turn and clipped into each verified first/last
+    model-item bracket, including searches logged after their response.
+
+    A counted snapshot that response marker cannot time (a response ending in a
+    tool call, or a log older than 0.153) is timed from line clocks instead, by
+    order: the response is the output lines between the line that sent its
+    request and the next input, closed by exactly one counted snapshot. Where
+    item clocks still cover its start (0.147+), it runs from its first model
+    item's start to its last output line, minus the same hosted tool time, and
+    is a response_window. Otherwise it runs from the sending line, so it includes
+    the wait for the first token, and is a request_window.
+    """
+    MODEL_ITEMS = frozenset({'AgentMessage', 'Reasoning'})
+    # The server runs a hosted tool inside the response, and the model waits on it there.
+    HOSTED_TOOL_ITEMS = frozenset({'WebSearch'})
+    # Codex runs a client tool alongside the stream or between requests: a call
+    # starts as soon as it has streamed, and a background command can outlive
+    # several later responses. The model never waits on one within a response,
+    # so its clock bounds nothing there.
+    CLIENT_TOOL_ITEMS = frozenset({'CommandExecution', 'FileChange', 'McpToolCall', 'DynamicToolCall',
+                                   'Extension', 'ImageView', 'SubAgentActivity', 'CollabAgentToolCall'})
+
+    def __init__(self):
+        self.turn = None
+        self.models = []
+        self.model_item_ids = []
+        self.status = None
+        self.pending = None
+        self.calls = {}
+        self.tools = defaultdict(list)
+        self.seen_items = {}
+        self.seen_responses = set()
+        self.tool_call_output = False
+        self.reasoning_items = False
+        self.invalid_tool_turns = set()
+        self.conflicting_items = set()
+        # Codex's thread total counts every marked response, but some never
+        # reach a counted snapshot: a remote compaction (#222), or a response
+        # whose turn ended first. From then on every snapshot total trails the
+        # marker's by their usage. Uncarried markers wait here, oldest first.
+        self.drift = (0,) * len(_CODEX_COUNTERS)
+        self.uncarried = {}
+        # Line clocks: the stamp of the line that sent the request being
+        # answered (None once a response has answered it), the response being
+        # written, and the one closed since the last counted snapshot.
+        self.sent = None
+        self.disrupted = None
+        self.clocks = self._new_clocks()
+        self.reply = None
+        self.answered = None
+        self.replies = {}
+        # Where each measured window opened, in epoch ms: the counted snapshot
+        # can land well after its response, behind the tool that response ran.
+        self.opened = {}
+
+    @staticmethod
+    def _new_clocks():
+        return {'start': None, 'collapsed': False, 'reasoning': False, 'items': []}
+
+    def _close_reply(self):
+        if self.reply is not None:
+            if self.answered is None:
+                self.answered = self.reply
+            else:
+                # Two responses before one counted snapshot: neither owns it.
+                self.answered['status'] = STATUS_AMBIGUOUS_PAIR
+            self.reply = None
+            self.sent = None
+            self.disrupted = None
+            self.clocks = self._new_clocks()
+
+    def _send(self, at):
+        self._close_reply()
+        self.sent, self.disrupted, self.clocks = at, None, self._new_clocks()
+
+    def _disrupt(self, status):
+        if self.reply is not None:
+            self.reply['status'] = self.reply['status'] or status
+        else:
+            self.disrupted = self.disrupted or status
+
+    def _observe_lines(self, obj, kind, p):
+        if kind == 'response_item':
+            line = p.get('type')
+            if line in _CODEX_INPUT_LINES or (line == 'message' and p.get('role') == 'user'):
+                sends = True
+            elif line in _CODEX_OUTPUT_LINES and (line != 'message' or p.get('role') == 'assistant'):
+                sends = False
+            else:
+                return
+        elif kind in {'task_started', 'turn_context', 'user_message'}:
+            sends = True
+        else:
+            if kind in _CODEX_DISRUPTIONS:
+                self._disrupt(_CODEX_DISRUPTIONS[kind])
+            elif kind == 'compacted':
+                self._disrupt(STATUS_INCOMPLETE)
+            elif kind == 'token_usage_record':
+                self._close_reply()
+            return
+        at = _line_ms(obj)
+        if at is None:
+            return
+        if sends:
+            self._send(at)
+        elif self.reply is None:
+            self.reply = {'sent': self.sent, 'first': at, 'last': at, 'turn': self.turn,
+                          'status': self.disrupted, 'clocks': self.clocks}
+        else:
+            self.reply['last'] = max(self.reply['last'], at)
+
+    def _reset(self):
+        self.models = []
+        self.model_item_ids = []
+        self.status = None
+        self.pending = None
+        self.tool_call_output = False
+        self.reasoning_items = False
+
+    def _exclude(self, status):
+        self.status = status
+        if self.pending:
+            self.pending['status'] = status
+
+    def observe(self, obj):
+        p = obj.get('payload') or {}
+        kind = p.get('type') if obj.get('type') == 'event_msg' else obj.get('type')
+        self._observe_lines(obj, kind, p)
+        if kind in {'task_started', 'turn_context', 'session_meta'}:
+            new_turn = p.get('turn_id')
+            if new_turn != self.turn or kind in {'task_started', 'session_meta'}:
+                self._reset()
+            self.turn = new_turn
+        elif kind in {'turn_aborted', 'compacted'}:
+            named = p.get('latest_token_usage_record') if kind == 'compacted' else None
+            if (isinstance(named, dict) and named.get('response_id') == p.get('compaction_response_id')
+                    and named['response_id'] not in self.seen_responses and _codex_counters_ok(named.get('usage'))):
+                # A window that opens on its compaction names the marker inline.
+                self.seen_responses.add(named['response_id'])
+                self.uncarried[named['response_id']] = _usage_signature(named['usage'])
+            self.status = STATUS_INCOMPLETE
+            self.models = []
+            if self.pending:
+                self.pending['status'] = STATUS_INCOMPLETE
+        elif kind == 'response_item':
+            if p.get('type') in {'function_call', 'custom_tool_call', 'tool_search_call', 'web_search_call'}:
+                self.tool_call_output = True
+        elif kind == 'item_completed':
+            item = p.get('item') or {}
+            item_kind, item_id = item.get('type'), item.get('id')
+            if item_kind in self.CLIENT_TOOL_ITEMS:
+                return
+            turn = p.get('turn_id')
+            interval = (number(p.get('started_at_ms')), number(p.get('completed_at_ms')))
+            old = self.seen_items.get((turn, item_id)) if item_id else None
+            if old is not None:
+                if old != (item_kind, interval):
+                    self.conflicting_items.add((turn, item_id))
+                    # Model IDs belong to the response that first recorded
+                    # them. A contradiction may arrive after registration or
+                    # after the next response starts; do not poison that next
+                    # response's pending association instead of the owner.
+                    if old[0] not in self.MODEL_ITEMS:
+                        self._exclude(STATUS_AMBIGUOUS_PAIR)
+                    if item_kind in self.HOSTED_TOOL_ITEMS or old[0] in self.HOSTED_TOOL_ITEMS:
+                        self.invalid_tool_turns.add(turn)
+                return
+            if item_id:
+                self.seen_items[(turn, item_id)] = (item_kind, interval)
+            if item_kind == 'UserMessage':
+                return
+            if item_kind == 'ContextCompaction':
+                self._exclude(STATUS_INCOMPLETE)
+                self._disrupt(STATUS_INCOMPLETE)
+                self.models = []
+                return
+            if item_kind not in self.MODEL_ITEMS | self.HOSTED_TOOL_ITEMS:
+                self._exclude(STATUS_AMBIGUOUS_PAIR)
+                return
+            if item_kind in self.MODEL_ITEMS:
+                clocks = self.clocks
+                if item_id:
+                    clocks['items'].append((turn, item_id))
+                if None in interval or interval[1] <= interval[0] or not turn or turn != self.turn:
+                    clocks['collapsed'] = True
+                else:
+                    clocks['start'] = interval[0] if clocks['start'] is None else min(clocks['start'], interval[0])
+                    clocks['reasoning'] = clocks['reasoning'] or item_kind == 'Reasoning'
+            if item_id and item_kind in self.MODEL_ITEMS:
+                self.model_item_ids.append((turn, item_id))
+            if None in interval or interval[1] < interval[0]:
+                self._exclude(STATUS_INVALID_TIMING)
+                if item_kind in self.HOSTED_TOOL_ITEMS:
+                    self.invalid_tool_turns.add(turn)
+                return
+            if item_kind in self.HOSTED_TOOL_ITEMS:
+                # A collapsed clock cannot bound a tool that reports real work.
+                # The stamps are whole milliseconds, so a tool reporting under
+                # 1 ms shares one stamp legitimately.
+                if interval[0] == interval[1] and _codex_tool_work_ms(item) >= 1:
+                    self.invalid_tool_turns.add(turn)
+                self.tools[turn].append(interval)
+            elif not turn or turn != self.turn:
+                self.status = STATUS_AMBIGUOUS_PAIR
+            else:
+                if interval[0] == interval[1]:
+                    self.status = STATUS_INVALID_TIMING
+                if item_kind == 'Reasoning':
+                    self.reasoning_items = True
+                self.models.append(interval)
+        elif kind == 'token_usage_record':
+            rid = p.get('response_id')
+            status = self.status
+            if not rid or rid in self.seen_responses or p.get('turn_id') != self.turn:
+                status = STATUS_AMBIGUOUS_PAIR
+            if self.tool_call_output:
+                # Arguments have output tokens but no complete timed model item.
+                status = status or STATUS_MISSING_TIMING
+            usage = p.get('usage')
+            if not _codex_counters_ok(usage):
+                status = STATUS_AMBIGUOUS_PAIR
+            if isinstance(usage, dict) and number(usage.get('reasoning_output_tokens')) not in (None, 0) and not self.reasoning_items:
+                status = status or STATUS_MISSING_TIMING
+            if rid and rid not in self.seen_responses and _codex_counters_ok(usage):
+                self.uncarried[rid] = _usage_signature(usage)
+                if len(self.uncarried) > 4 * _CODEX_UNCARRIED_TRIED:
+                    del self.uncarried[next(iter(self.uncarried))]
+            self.seen_responses.add(rid)
+            self.pending = {'turn': self.turn, 'models': self.models,
+                            'items': tuple(self.model_item_ids), 'response': rid,
+                            'status': status, 'usage': p.get('usage'),
+                            'total': p.get('thread_token_usage')}
+            self.models = []
+            self.model_item_ids = []
+            self.status = None
+            self.tool_call_output = False
+            self.reasoning_items = False
+
+    def register(self, identity, info):
+        owner = self.pending
+        self.pending = None
+        if identity in self.calls:
+            return
+        status = STATUS_MISSING_TIMING
+        if owner:
+            valid = (_usage_signature(info.get('last_token_usage')) == _usage_signature(owner['usage'])
+                     and self._carries(info.get('total_token_usage'), owner))
+            status = owner['status'] if valid else STATUS_AMBIGUOUS_PAIR
+        self.calls[identity] = (owner, status)
+        # Invalid/duplicate snapshots must not donate items to another response.
+        self.models = []
+        self.model_item_ids = []
+        self.status = None
+        self.tool_call_output = False
+        self.reasoning_items = False
+        # Before 0.153 the snapshot is what closes a response's output.
+        self._close_reply()
+        usage = info.get('last_token_usage') if isinstance(info, dict) else None
+        if isinstance(usage, dict) and usage:
+            # Only a snapshot the usage parser can bill claims a response.
+            reply, self.answered = self.answered, None
+            if reply is not None:
+                self.replies[identity] = (reply, usage)
+
+    def _carries(self, total, owner):
+        """The snapshot total is the marker's, less what no snapshot carried.
+
+        The newest uncarried markers are tried first, so one that a snapshot
+        did carry but could not be validated does not block the rest.
+        """
+        own = self.uncarried.pop(owner['response'], None)
+        if _trails(total, owner['total'], self.drift):
+            return True
+        drift = self.drift
+        for rid in list(self.uncarried)[::-1][:_CODEX_UNCARRIED_TRIED]:
+            drift = tuple(a + b for a, b in zip(drift, self.uncarried[rid]))
+            if _trails(total, owner['total'], drift):
+                self.drift, self.uncarried = drift, {}
+                return True
+        if own is not None:
+            self.uncarried[owner['response']] = own
+        return False
+
+    def _tool_ms(self, tool_index, turn, start, end):
+        intervals, starts, ends = tool_index.get(turn, ([], [], []))
+        return clipped_union_ms(intervals[bisect_left(ends, start):bisect_left(starts, end)], start, end)
+
+    def _line_clock(self, identity, tool_index):
+        """Time a counted snapshot the response marker could not, from its lines."""
+        reply, usage = self.replies.get(identity, (None, None))
+        if reply is None or reply['sent'] is None:
+            # No output lines, or no new input since the previous response.
+            return unmeasured(STATUS_MISSING_TIMING)
+        if reply['status']:
+            return unmeasured(reply['status'])
+        if not _codex_counters_ok(usage):
+            return unmeasured(STATUS_AMBIGUOUS_PAIR)
+        clocks, tokens = reply['clocks'], usage.get('output_tokens')
+        start = clocks['start']
+        if (start is not None and not clocks['collapsed'] and reply['sent'] <= start <= reply['first']
+                and (clocks['reasoning'] or not usage.get('reasoning_output_tokens'))
+                and reply['turn'] not in self.invalid_tool_turns
+                and not any(item in self.conflicting_items for item in clocks['items'])):
+            # Item clocks cover the start of the first output, and every
+            # reasoning token has a clock of its own.
+            window = reply['last'] - start - self._tool_ms(tool_index, reply['turn'], start, reply['last'])
+            self.opened[identity] = start
+            return measured(tokens=tokens, duration_ms=window, measurement_kind=KIND_RESPONSE_WINDOW,
+                            token_basis=BASIS_INCLUDING, max_tok_per_s=CODEX_MAX_TOK_PER_S)
+        if reply['first'] - reply['sent'] > CODEX_STALL_MS:
+            return unmeasured(STATUS_INVALID_TIMING)
+        self.opened[identity] = reply['sent']
+        return measured(tokens=tokens, duration_ms=reply['last'] - reply['sent'],
+                        measurement_kind=KIND_REQUEST_WINDOW, token_basis=BASIS_INCLUDING,
+                        max_tok_per_s=CODEX_MAX_TOK_PER_S)
+
+    def _tool_index(self):
+        tool_index = {}
+        for turn, intervals in self.tools.items():
+            merged = []
+            for lo, hi in sorted(intervals):
+                if merged and lo <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+                else:
+                    merged.append((lo, hi))
+            tool_index[turn] = (merged, [lo for lo, _ in merged], [hi for _, hi in merged])
+        return tool_index
+
+    def resolve(self):
+        out = {}
+        tool_index = self._tool_index()
+        for identity, (owner, status) in self.calls.items():
+            if owner and any(item in self.conflicting_items for item in owner['items']):
+                status = STATUS_AMBIGUOUS_PAIR
+            if not status and (not owner or not owner['models']):
+                status = STATUS_MISSING_TIMING
+            if status == STATUS_MISSING_TIMING:
+                # The marker had nothing to time; its exclusions stand.
+                out[identity] = self._line_clock(identity, tool_index)
+                continue
+            if owner['turn'] in self.invalid_tool_turns:
+                status = STATUS_INVALID_TIMING
+            if status:
+                out[identity] = unmeasured(status)
+                continue
+            start = min(a for a, _ in owner['models'])
+            end = max(b for _, b in owner['models'])
+            window = end - start - self._tool_ms(tool_index, owner['turn'], start, end)
+            self.opened[identity] = start
+            out[identity] = measured(tokens=(owner['usage'] or {}).get('output_tokens'), duration_ms=window,
+                                       measurement_kind=KIND_RESPONSE_WINDOW, token_basis=BASIS_INCLUDING)
+        return out
