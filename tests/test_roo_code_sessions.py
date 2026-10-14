@@ -362,8 +362,9 @@ def test_the_window_filters_turns_within_a_task(monkeypatch, tmp_path, roo_home)
     _write(storage, _task(TASK, requests=[req(T0 + 40, 100, 5), req(day_two, 200, 9)]))
     _setup(monkeypatch, tmp_path, storage)
 
-    day_one = sessions._ms_to_iso(T0)[:10]
-    day_two_label = sessions._ms_to_iso(day_two)[:10]
+    from datetime import datetime
+    day_one = datetime.fromtimestamp(T0 / 1000).strftime("%Y-%m-%d")
+    day_two_label = datetime.fromtimestamp(day_two / 1000).strftime("%Y-%m-%d")
 
     first = get_sessions_data("roo_code", "range", date_from=day_one, date_to=day_one)
     assert first["summary"]["session_count"] == 1
