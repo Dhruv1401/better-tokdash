@@ -3369,9 +3369,27 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                             m_entry["output"] += _to_int(u_out)
                             m_entry["cache_read"] += _to_int(u_cr)
                             m_entry["cache_write"] += _to_int(u_cw)
+                            m_entry.setdefault("has_fixed_cost", False)
                             m_entry["reasoning"] += _to_int(u_reason)
-                            m_entry["estimated_cost"] += float(u_est or 0.0)
-                            m_entry["actual_cost"] += float(u_act or 0.0)
+                            u_act_f = float(u_act or 0.0)
+                            u_est_f = float(u_est or 0.0)
+                            if u_act_f > 0:
+                                m_entry["cost"] = m_entry.get("cost", 0.0) + u_act_f
+                                m_entry["has_fixed_cost"] = True
+                            elif u_est_f > 0:
+                                m_entry["cost"] = m_entry.get("cost", 0.0) + u_est_f
+                                m_entry["has_fixed_cost"] = True
+                            else:
+                                u_in_v = _to_int(u_in)
+                                u_out_v = _to_int(u_out)
+                                u_cr_v = _to_int(u_cr)
+                                u_cw_v = _to_int(u_cw)
+                                u_provider = HermesParser._infer_provider(u_model)
+                                u_pm = f"{u_provider}/{u_model}" if u_provider else u_model
+                                rc = _pricing_db.get_cost(u_pm, u_in_v, u_out_v, u_cr_v, u_cw_v)
+                                if rc == 0.0 and u_provider:
+                                    rc = _pricing_db.get_cost(u_model, u_in_v, u_out_v, u_cr_v, u_cw_v)
+                                m_entry["cost"] = m_entry.get("cost", 0.0) + rc
                             fs = float(u_first) if u_first is not None else None
                             if fs is not None:
                                 fs_ms = int(fs * 1000) if fs < 1e12 else int(fs)
@@ -3420,21 +3438,17 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                                 m_cr = m_data["cache_read"]
                                 m_cw = m_data["cache_write"]
                                 m_reas = m_data["reasoning"]
-                                m_act_f = m_data["actual_cost"]
-                                m_est_f = m_data["estimated_cost"]
+                                m_cost = m_data.get("cost", 0.0)
+                                m_has_fixed = m_data.get("has_fixed_cost", False)
 
                                 if (m_in + m_out + m_cr + m_cw + m_reas) <= 0 and not (
-                                    m_act_f > 0 or m_est_f > 0
+                                    m_has_fixed or m_cost > 0
                                 ):
                                     continue
 
                                 provider = HermesParser._infer_provider(model_name)
                                 full_model = f"{provider}/{model_name}" if provider else model_name
-                                fixed_cost_val = (
-                                    m_act_f if m_act_f > 0
-                                    else m_est_f if m_est_f > 0
-                                    else None
-                                )
+                                fixed_cost_val = m_cost if m_has_fixed else None
                                 if fixed_cost_val is not None:
                                     bill = _billing_record(
                                         full_model,

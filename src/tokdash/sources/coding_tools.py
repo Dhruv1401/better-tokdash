@@ -3668,13 +3668,33 @@ class HermesParser(BaseParser):
                                     "first_seen": None,
                                 }
                             m_entry = m_dict[u_model]
+                            m_entry.setdefault("has_fixed_cost", False)
                             m_entry["input"] += self._i(u_in)
                             m_entry["output"] += self._i(u_out)
                             m_entry["cache_read"] += self._i(u_cr)
                             m_entry["cache_write"] += self._i(u_cw)
                             m_entry["reasoning"] += self._i(u_reason)
-                            m_entry["estimated_cost"] += float(u_est or 0.0)
-                            m_entry["actual_cost"] += float(u_act or 0.0)
+                            # Compute cost per-row so unpriced tokens are not
+                            # swallowed by a sibling row's fixed cost.
+                            u_act_f = float(u_act or 0.0)
+                            u_est_f = float(u_est or 0.0)
+                            if u_act_f > 0:
+                                m_entry["cost"] = m_entry.get("cost", 0.0) + u_act_f
+                                m_entry["has_fixed_cost"] = True
+                            elif u_est_f > 0:
+                                m_entry["cost"] = m_entry.get("cost", 0.0) + u_est_f
+                                m_entry["has_fixed_cost"] = True
+                            else:
+                                u_in_v = self._i(u_in)
+                                u_out_v = self._i(u_out)
+                                u_cr_v = self._i(u_cr)
+                                u_cw_v = self._i(u_cw)
+                                u_provider = self._infer_provider(u_model)
+                                u_pm = f"{u_provider}/{u_model}" if u_provider else u_model
+                                rc = self.pricing_db.get_cost(u_pm, u_in_v, u_out_v, u_cr_v, u_cw_v)
+                                if rc == 0.0 and u_provider:
+                                    rc = self.pricing_db.get_cost(u_model, u_in_v, u_out_v, u_cr_v, u_cw_v)
+                                m_entry["cost"] = m_entry.get("cost", 0.0) + rc
                             # Track earliest first_seen (normalized to ms) for ordering
                             fs = float(u_first) if u_first is not None else None
                             if fs is not None:
@@ -3721,26 +3741,20 @@ class HermesParser(BaseParser):
                                 m_cache_r = m_data["cache_read"]
                                 m_cache_w = m_data["cache_write"]
                                 m_reasoning = m_data["reasoning"]
-                                m_act_f = m_data["actual_cost"]
-                                m_est_f = m_data["estimated_cost"]
+                                m_cost = m_data.get("cost", 0.0)
+                                m_has_fixed = m_data.get("has_fixed_cost", False)
 
                                 has_tokens = (m_input + m_output + m_cache_r + m_cache_w + m_reasoning) > 0
-                                has_cost = m_act_f > 0 or m_est_f > 0
+                                has_cost = m_has_fixed or m_cost > 0
                                 if not has_tokens and not has_cost:
                                     continue
 
                                 provider = self._infer_provider(model_name)
-                                if m_act_f > 0:
-                                    cost = m_act_f
-                                    billing = usage_billing_fixed(m_act_f)
-                                elif m_est_f > 0:
-                                    cost = m_est_f
-                                    billing = usage_billing_fixed(m_est_f)
+                                cost = m_cost
+                                if m_has_fixed:
+                                    billing = usage_billing_fixed(m_cost)
                                 else:
                                     provider_model = f"{provider}/{model_name}" if provider else model_name
-                                    cost = self.pricing_db.get_cost(provider_model, m_input, m_output, m_cache_r, m_cache_w)
-                                    if cost == 0.0 and provider:
-                                        cost = self.pricing_db.get_cost(model_name, m_input, m_output, m_cache_r, m_cache_w)
                                     billing = usage_billing_pricing(
                                         [provider_model] + ([model_name] if provider else []),
                                         input_tokens=m_input,
