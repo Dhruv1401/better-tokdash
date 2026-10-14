@@ -3629,12 +3629,60 @@ class HermesParser(BaseParser):
                 except Exception:
                     conn.close()
                     continue
+                usage_by_session: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None
+                try:
+                    cur.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_model_usage'"
+                    )
+                    if cur.fetchone() is not None:
+                        cur.execute(
+                            """
+                            SELECT session_id, model,
+                                   input_tokens, output_tokens,
+                                   cache_read_tokens, cache_write_tokens,
+                                   reasoning_tokens, estimated_cost_usd, actual_cost_usd
+                            FROM session_model_usage
+                            WHERE model IS NOT NULL AND TRIM(model) != ''
+                            """
+                        )
+                        usage_rows = cur.fetchall()
+                        usage_by_session = {}
+                        for urow in usage_rows:
+                            (
+                                u_sid, u_model, u_in, u_out,
+                                u_cr, u_cw, u_reason,
+                                u_est, u_act,
+                            ) = urow
+                            u_sid = str(u_sid)
+                            u_model = str(u_model)
+                            m_dict = usage_by_session.setdefault(u_sid, {})
+                            if u_model not in m_dict:
+                                m_dict[u_model] = {
+                                    "input": 0,
+                                    "output": 0,
+                                    "cache_read": 0,
+                                    "cache_write": 0,
+                                    "reasoning": 0,
+                                    "estimated_cost": 0.0,
+                                    "actual_cost": 0.0,
+                                }
+                            m_entry = m_dict[u_model]
+                            m_entry["input"] += self._i(u_in)
+                            m_entry["output"] += self._i(u_out)
+                            m_entry["cache_read"] += self._i(u_cr)
+                            m_entry["cache_write"] += self._i(u_cw)
+                            m_entry["reasoning"] += self._i(u_reason)
+                            m_entry["estimated_cost"] += float(u_est or 0.0)
+                            m_entry["actual_cost"] += float(u_act or 0.0)
+                except Exception:
+                    usage_by_session = None
+
                 conn.close()
 
                 for row in rows:
                     try:
                         (
-                            row_id, model, billing_provider, started_at,
+                            row_id, sess_model, billing_provider, started_at,
                             message_count, input_t, output_t,
                             cache_r, cache_w, reasoning,
                             estimated_cost, actual_cost,
@@ -3645,20 +3693,7 @@ class HermesParser(BaseParser):
                             continue
                         seen_ids.add(row_id)
 
-                        input_t = self._i(input_t)
-                        output_t = self._i(output_t)
-                        cache_r = self._i(cache_r)
-                        cache_w = self._i(cache_w)
-                        reasoning = self._i(reasoning)
-
-                        actual_cost_f = float(actual_cost or 0.0)
-                        estimated_cost_f = float(estimated_cost or 0.0)
-
-                        # Skip rows with no tokens AND no recorded cost
-                        has_tokens = (input_t + output_t + cache_r + cache_w + reasoning) > 0
-                        has_cost = actual_cost_f > 0 or estimated_cost_f > 0
-                        if not has_tokens and not has_cost:
-                            continue
+                        msg_count_val = int(self._i(message_count))
 
                         # Timestamp: started_at is seconds; if > 1e12 already in ms.
                         try:
@@ -3667,51 +3702,115 @@ class HermesParser(BaseParser):
                             sa = 0.0
                         ts_ms = int(sa * 1000) if sa < 1e12 else int(sa)
 
-                        # Cost precedence: actual > estimated > pricing DB.
-                        # A recorded zero is NOT treated as a real zero — fall through.
-                        provider = str(billing_provider or "").strip() or self._infer_provider(str(model or ""))
-                        if actual_cost_f > 0:
-                            cost = actual_cost_f
-                            # Hermes' own subscription-aware number; never repriced.
-                            billing = usage_billing_fixed(actual_cost_f)
-                        elif estimated_cost_f > 0:
-                            cost = estimated_cost_f
-                            billing = usage_billing_fixed(estimated_cost_f)
-                        else:
-                            # Try provider/model first, then bare model
-                            provider_model = f"{provider}/{model}" if provider else str(model or "")
-                            cost = self.pricing_db.get_cost(provider_model, input_t, output_t, cache_r, cache_w)
-                            if cost == 0.0 and provider:
-                                cost = self.pricing_db.get_cost(str(model or ""), input_t, output_t, cache_r, cache_w)
-                            # Same ordered candidates, so a later provider-specific
-                            # rate still shadows the bare key on a reprice.
-                            billing = usage_billing_pricing(
-                                [provider_model] + ([str(model or "")] if provider else []),
-                                input_tokens=input_t,
-                                output_tokens=output_t,
-                                cache_read=cache_r,
-                                cache_write=cache_w,
-                            )
+                        if usage_by_session is not None and str(row_id) in usage_by_session:
+                            for model_name, m_data in usage_by_session[str(row_id)].items():
+                                m_input = m_data["input"]
+                                m_output = m_data["output"]
+                                m_cache_r = m_data["cache_read"]
+                                m_cache_w = m_data["cache_write"]
+                                m_reasoning = m_data["reasoning"]
+                                m_act_f = m_data["actual_cost"]
+                                m_est_f = m_data["estimated_cost"]
 
-                        out.append({
-                            "source": self.source_name,
-                            "model": str(model or "unknown"),
-                            "provider": provider,
-                            "input": input_t,
-                            "output": output_t,
-                            "cacheRead": cache_r,
-                            "cacheWrite": cache_w,
-                            "reasoning": reasoning,
-                            "cost": cost,
-                            "timestamp": ts_ms,
-                            # Hermes rows are session-level aggregates: one
-                            # entry represents N messages. Propagate the count
-                            # so compute.py credits sessions correctly instead
-                            # of treating each row as a single message.
-                            "messageCount": int(self._i(message_count)),
-                            "entry_id": f"hermes:{row_id}",
-                            "_billing": billing,
-                        })
+                                has_tokens = (m_input + m_output + m_cache_r + m_cache_w + m_reasoning) > 0
+                                has_cost = m_act_f > 0 or m_est_f > 0
+                                if not has_tokens and not has_cost:
+                                    continue
+
+                                provider = self._infer_provider(model_name)
+                                if m_act_f > 0:
+                                    cost = m_act_f
+                                    billing = usage_billing_fixed(m_act_f)
+                                elif m_est_f > 0:
+                                    cost = m_est_f
+                                    billing = usage_billing_fixed(m_est_f)
+                                else:
+                                    provider_model = f"{provider}/{model_name}" if provider else model_name
+                                    cost = self.pricing_db.get_cost(provider_model, m_input, m_output, m_cache_r, m_cache_w)
+                                    if cost == 0.0 and provider:
+                                        cost = self.pricing_db.get_cost(model_name, m_input, m_output, m_cache_r, m_cache_w)
+                                    billing = usage_billing_pricing(
+                                        [provider_model] + ([model_name] if provider else []),
+                                        input_tokens=m_input,
+                                        output_tokens=m_output,
+                                        cache_read=m_cache_r,
+                                        cache_write=m_cache_w,
+                                    )
+
+                                out.append({
+                                    "source": self.source_name,
+                                    "model": model_name,
+                                    "provider": provider,
+                                    "input": m_input,
+                                    "output": m_output,
+                                    "cacheRead": m_cache_r,
+                                    "cacheWrite": m_cache_w,
+                                    "reasoning": m_reasoning,
+                                    "cost": cost,
+                                    "timestamp": ts_ms,
+                                    "messageCount": msg_count_val,
+                                    "entry_id": f"hermes:{row_id}:{model_name}",
+                                    "_billing": billing,
+                                })
+                        else:
+                            input_t = self._i(input_t)
+                            output_t = self._i(output_t)
+                            cache_r = self._i(cache_r)
+                            cache_w = self._i(cache_w)
+                            reasoning = self._i(reasoning)
+
+                            actual_cost_f = float(actual_cost or 0.0)
+                            estimated_cost_f = float(estimated_cost or 0.0)
+
+                            # Skip rows with no tokens AND no recorded cost
+                            has_tokens = (input_t + output_t + cache_r + cache_w + reasoning) > 0
+                            has_cost = actual_cost_f > 0 or estimated_cost_f > 0
+                            if not has_tokens and not has_cost:
+                                continue
+
+                            provider = str(billing_provider or "").strip() or self._infer_provider(str(sess_model or ""))
+                            if actual_cost_f > 0:
+                                cost = actual_cost_f
+                                # Hermes' own subscription-aware number; never repriced.
+                                billing = usage_billing_fixed(actual_cost_f)
+                            elif estimated_cost_f > 0:
+                                cost = estimated_cost_f
+                                billing = usage_billing_fixed(estimated_cost_f)
+                            else:
+                                # Try provider/model first, then bare model
+                                provider_model = f"{provider}/{sess_model}" if provider else str(sess_model or "")
+                                cost = self.pricing_db.get_cost(provider_model, input_t, output_t, cache_r, cache_w)
+                                if cost == 0.0 and provider:
+                                    cost = self.pricing_db.get_cost(str(sess_model or ""), input_t, output_t, cache_r, cache_w)
+                                # Same ordered candidates, so a later provider-specific
+                                # rate still shadows the bare key on a reprice.
+                                billing = usage_billing_pricing(
+                                    [provider_model] + ([str(sess_model or "")] if provider else []),
+                                    input_tokens=input_t,
+                                    output_tokens=output_t,
+                                    cache_read=cache_r,
+                                    cache_write=cache_w,
+                                )
+
+                            out.append({
+                                "source": self.source_name,
+                                "model": str(sess_model or "unknown"),
+                                "provider": provider,
+                                "input": input_t,
+                                "output": output_t,
+                                "cacheRead": cache_r,
+                                "cacheWrite": cache_w,
+                                "reasoning": reasoning,
+                                "cost": cost,
+                                "timestamp": ts_ms,
+                                # Hermes rows are session-level aggregates: one
+                                # entry represents N messages. Propagate the count
+                                # so compute.py credits sessions correctly instead
+                                # of treating each row as a single message.
+                                "messageCount": msg_count_val,
+                                "entry_id": f"hermes:{row_id}",
+                                "_billing": billing,
+                            })
                     except Exception:
                         continue
             except Exception:

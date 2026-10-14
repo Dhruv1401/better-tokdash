@@ -7,8 +7,8 @@ from tokdash.pricing import PricingDatabase
 from tokdash.sources.coding_tools import BaseParser, HermesParser, _sig_cache
 
 
-def _create_hermes_db(db_path: Path, rows: list) -> None:
-    """Create a minimal Hermes state.db with the given session rows."""
+def _create_hermes_db(db_path: Path, rows: list, usage_rows: list = None) -> None:
+    """Create a minimal Hermes state.db with the given session rows and optional usage rows."""
     conn = sqlite3.connect(str(db_path))
     cur = conn.cursor()
     cur.execute(
@@ -33,8 +33,67 @@ def _create_hermes_db(db_path: Path, rows: list) -> None:
         "INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         rows,
     )
+    if usage_rows is not None:
+        cur.execute(
+            """
+            CREATE TABLE session_model_usage (
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                model TEXT NOT NULL,
+                billing_provider TEXT NOT NULL DEFAULT '',
+                billing_base_url TEXT NOT NULL DEFAULT '',
+                billing_mode TEXT NOT NULL DEFAULT '',
+                task TEXT NOT NULL DEFAULT '',
+                api_call_count INTEGER NOT NULL DEFAULT 0,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+                estimated_cost_usd REAL NOT NULL DEFAULT 0,
+                actual_cost_usd REAL NOT NULL DEFAULT 0,
+                cost_status TEXT,
+                cost_source TEXT,
+                first_seen REAL,
+                last_seen REAL,
+                PRIMARY KEY (session_id, model, billing_provider, billing_base_url, billing_mode, task)
+            )
+            """
+        )
+        cur.executemany(
+            "INSERT INTO session_model_usage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            usage_rows,
+        )
     conn.commit()
     conn.close()
+
+
+def _default_usage_row(
+    session_id="sess-001",
+    model="claude-3-5-sonnet",
+    billing_provider="anthropic",
+    billing_base_url="",
+    billing_mode="",
+    task="",
+    api_call_count=1,
+    input_tokens=1000,
+    output_tokens=100,
+    cache_read_tokens=0,
+    cache_write_tokens=0,
+    reasoning_tokens=0,
+    estimated_cost_usd=0.0,
+    actual_cost_usd=0.0,
+    cost_status=None,
+    cost_source=None,
+    first_seen=None,
+    last_seen=None,
+):
+    return (
+        session_id, model, billing_provider, billing_base_url, billing_mode,
+        task, api_call_count, input_tokens, output_tokens, cache_read_tokens,
+        cache_write_tokens, reasoning_tokens, estimated_cost_usd, actual_cost_usd,
+        cost_status, cost_source, first_seen, last_seen,
+    )
+
 
 
 def _default_row(
@@ -293,3 +352,222 @@ def test_hermes_parser_started_at_ms_passthrough(monkeypatch, tmp_path):
     entries = parser.collect(None, None)
     assert len(entries) == 1
     assert entries[0]["timestamp"] == int(ts_ms)
+
+
+def test_hermes_parser_multi_model_session(monkeypatch, tmp_path):
+    """A session with multiple models in session_model_usage should produce
+    multiple entries, one per model, with correct per-model token counts."""
+    hermes_dir = tmp_path / ".hermes"
+    hermes_dir.mkdir()
+    sess_row = _default_row(
+        row_id="sess-multi",
+        model="gpt-4o",
+        billing_provider="openai",
+        message_count=7,
+        input_tokens=5000,
+        output_tokens=400,
+        actual_cost=0.025,
+    )
+    usage_rows = [
+        _default_usage_row(
+            session_id="sess-multi",
+            model="claude-3-5-sonnet",
+            billing_provider="anthropic",
+            input_tokens=3000,
+            output_tokens=250,
+            cache_read_tokens=100,
+            cache_write_tokens=50,
+            reasoning_tokens=20,
+            actual_cost_usd=0.015,
+        ),
+        _default_usage_row(
+            session_id="sess-multi",
+            model="gpt-4o",
+            billing_provider="openai",
+            input_tokens=2000,
+            output_tokens=150,
+            cache_read_tokens=50,
+            cache_write_tokens=25,
+            reasoning_tokens=10,
+            actual_cost_usd=0.010,
+        ),
+    ]
+    _create_hermes_db(hermes_dir / "state.db", [sess_row], usage_rows)
+
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+    _sig_cache.clear()
+    BaseParser._entry_cache.clear()
+
+    parser = HermesParser(PricingDatabase())
+    entries = parser.collect(None, None)
+
+    assert len(entries) == 2
+    by_model = {e["model"]: e for e in entries}
+    assert "claude-3-5-sonnet" in by_model
+    assert "gpt-4o" in by_model
+
+    c = by_model["claude-3-5-sonnet"]
+    assert c["source"] == "hermes"
+    assert c["provider"] == "anthropic"
+    assert c["input"] == 3000
+    assert c["output"] == 250
+    assert c["cacheRead"] == 100
+    assert c["cacheWrite"] == 50
+    assert c["reasoning"] == 20
+    assert abs(c["cost"] - 0.015) < 1e-9
+    assert c["messageCount"] == 7
+    assert c["entry_id"] == "hermes:sess-multi:claude-3-5-sonnet"
+
+    g = by_model["gpt-4o"]
+    assert g["source"] == "hermes"
+    assert g["provider"] == "openai"
+    assert g["input"] == 2000
+    assert g["output"] == 150
+    assert g["cacheRead"] == 50
+    assert g["cacheWrite"] == 25
+    assert g["reasoning"] == 10
+    assert abs(g["cost"] - 0.010) < 1e-9
+    assert g["messageCount"] == 7
+    assert g["entry_id"] == "hermes:sess-multi:gpt-4o"
+
+
+def test_hermes_parser_multi_model_aggregation(monkeypatch, tmp_path):
+    """Multiple session_model_usage rows for the same (session_id, model)
+    but different tasks should be summed into one entry."""
+    hermes_dir = tmp_path / ".hermes"
+    hermes_dir.mkdir()
+    sess_row = _default_row(row_id="sess-agg", model="claude-3-5-sonnet", message_count=4)
+    usage_rows = [
+        _default_usage_row(
+            session_id="sess-agg",
+            model="claude-3-5-sonnet",
+            task="main-agent",
+            billing_provider="anthropic",
+            input_tokens=1000,
+            output_tokens=100,
+            cache_read_tokens=10,
+            cache_write_tokens=5,
+            reasoning_tokens=2,
+            actual_cost_usd=0.005,
+            estimated_cost_usd=0.004,
+        ),
+        _default_usage_row(
+            session_id="sess-agg",
+            model="claude-3-5-sonnet",
+            task="subtask-reviewer",
+            billing_provider="anthropic",
+            input_tokens=2000,
+            output_tokens=200,
+            cache_read_tokens=20,
+            cache_write_tokens=10,
+            reasoning_tokens=4,
+            actual_cost_usd=0.010,
+            estimated_cost_usd=0.008,
+        ),
+    ]
+    _create_hermes_db(hermes_dir / "state.db", [sess_row], usage_rows)
+
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+    _sig_cache.clear()
+    BaseParser._entry_cache.clear()
+
+    parser = HermesParser(PricingDatabase())
+    entries = parser.collect(None, None)
+
+    assert len(entries) == 1
+    e = entries[0]
+    assert e["model"] == "claude-3-5-sonnet"
+    assert e["provider"] == "anthropic"
+    assert e["input"] == 3000
+    assert e["output"] == 300
+    assert e["cacheRead"] == 30
+    assert e["cacheWrite"] == 15
+    assert e["reasoning"] == 6
+    assert abs(e["cost"] - 0.015) < 1e-9
+    assert e["messageCount"] == 4
+    assert e["entry_id"] == "hermes:sess-agg:claude-3-5-sonnet"
+
+
+def test_hermes_parser_no_session_model_usage_table(monkeypatch, tmp_path):
+    """When session_model_usage table doesn't exist, fall back to current behavior (sessions table only)."""
+    hermes_dir = tmp_path / ".hermes"
+    hermes_dir.mkdir()
+    _create_hermes_db(
+        hermes_dir / "state.db",
+        [_default_row(row_id="sess-no-table", model="MiniMax-M2.7", actual_cost=0.002)],
+    )
+
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+    _sig_cache.clear()
+    BaseParser._entry_cache.clear()
+
+    parser = HermesParser(PricingDatabase())
+    entries = parser.collect(None, None)
+
+    assert len(entries) == 1
+    e = entries[0]
+    assert e["model"] == "MiniMax-M2.7"
+    assert e["entry_id"] == "hermes:sess-no-table"
+    assert e["input"] == 7000
+    assert e["output"] == 47
+    assert abs(e["cost"] - 0.002) < 1e-9
+
+
+def test_hermes_parser_multi_model_cost_precedence(monkeypatch, tmp_path):
+    """Cost precedence should work per-model: actual > estimated > pricing DB."""
+    hermes_dir = tmp_path / ".hermes"
+    hermes_dir.mkdir()
+    sess_row = _default_row(row_id="sess-cost-prec", model="kimi-k2.5")
+    usage_rows = [
+        # Model 1: actual > 0 and estimated > 0 -> uses actual
+        _default_usage_row(
+            session_id="sess-cost-prec",
+            model="gpt-4o",
+            billing_provider="openai",
+            input_tokens=1000,
+            output_tokens=100,
+            actual_cost_usd=0.02,
+            estimated_cost_usd=0.05,
+        ),
+        # Model 2: actual == 0, estimated > 0 -> uses estimated
+        _default_usage_row(
+            session_id="sess-cost-prec",
+            model="claude-3-5-sonnet",
+            billing_provider="anthropic",
+            input_tokens=1000,
+            output_tokens=100,
+            actual_cost_usd=0.0,
+            estimated_cost_usd=0.03,
+        ),
+        # Model 3: actual == 0, estimated == 0 -> uses pricing DB
+        _default_usage_row(
+            session_id="sess-cost-prec",
+            model="kimi-k2.5",
+            billing_provider="moonshotai",
+            input_tokens=1000,
+            output_tokens=100,
+            actual_cost_usd=0.0,
+            estimated_cost_usd=0.0,
+        ),
+    ]
+    _create_hermes_db(hermes_dir / "state.db", [sess_row], usage_rows)
+
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+    _sig_cache.clear()
+    BaseParser._entry_cache.clear()
+
+    parser = HermesParser(PricingDatabase())
+    entries = parser.collect(None, None)
+
+    assert len(entries) == 3
+    by_model = {e["model"]: e for e in entries}
+
+    # Model 1: actual cost took precedence over estimated
+    assert abs(by_model["gpt-4o"]["cost"] - 0.02) < 1e-9
+
+    # Model 2: estimated cost used when actual is 0
+    assert abs(by_model["claude-3-5-sonnet"]["cost"] - 0.03) < 1e-9
+
+    # Model 3: pricing DB used when both actual and estimated are 0
+    assert by_model["kimi-k2.5"]["cost"] > 0
+

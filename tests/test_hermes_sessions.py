@@ -82,10 +82,69 @@ def _row(row_id, model, provider, started_at, inp, out, cr, cw, reason=0,
             reason, est, actual, title)
 
 
-def _write_db(home: Path, rows, messages=()):
+USAGE_SCHEMA = """
+CREATE TABLE session_model_usage (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    billing_provider TEXT NOT NULL DEFAULT '',
+    billing_base_url TEXT NOT NULL DEFAULT '',
+    billing_mode TEXT NOT NULL DEFAULT '',
+    task TEXT NOT NULL DEFAULT '',
+    api_call_count INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+    estimated_cost_usd REAL NOT NULL DEFAULT 0,
+    actual_cost_usd REAL NOT NULL DEFAULT 0,
+    cost_status TEXT,
+    cost_source TEXT,
+    first_seen REAL,
+    last_seen REAL,
+    PRIMARY KEY (session_id, model, billing_provider, billing_base_url, billing_mode, task)
+);
+"""
+
+
+def _usage_row(
+    session_id="sess-001",
+    model="claude-3-5-sonnet",
+    billing_provider="anthropic",
+    billing_base_url="",
+    billing_mode="",
+    task="",
+    api_call_count=1,
+    input_tokens=1000,
+    output_tokens=100,
+    cache_read_tokens=0,
+    cache_write_tokens=0,
+    reasoning_tokens=0,
+    estimated_cost_usd=0.0,
+    actual_cost_usd=0.0,
+    cost_status=None,
+    cost_source=None,
+    first_seen=None,
+    last_seen=None,
+):
+    return (
+        session_id, model, billing_provider, billing_base_url, billing_mode,
+        task, api_call_count, input_tokens, output_tokens, cache_read_tokens,
+        cache_write_tokens, reasoning_tokens, estimated_cost_usd, actual_cost_usd,
+        cost_status, cost_source, first_seen, last_seen,
+    )
+
+
+def _write_db(home: Path, rows, messages=(), usage_rows=None):
     db = home / "state.db"
     conn = sqlite3.connect(str(db))
     conn.executescript(SCHEMA)
+    if usage_rows is not None:
+        conn.executescript(USAGE_SCHEMA)
+        conn.executemany(
+            "INSERT INTO session_model_usage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            usage_rows,
+        )
     conn.executemany(
         "INSERT INTO sessions (id, model, billing_provider, started_at, message_count,"
         " input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,"
@@ -476,3 +535,65 @@ def test_foreign_db_first_does_not_break_later_detail(monkeypatch, tmp_path):
 
     assert detail.get("messages"), "detail from the later database must still resolve"
     assert detail["messages"][0]["role"] == "user"
+
+
+def test_hermes_sessions_multi_model(monkeypatch, tmp_path):
+    """A session with multiple models should produce multiple turns."""
+    home = _home(tmp_path)
+    sess_row = _row("s-multi", "gpt-4o", "openai", 1779395293.0,
+                    3000, 300, 0, 0, title="Multi Model Session", msg_count=5)
+    usage = [
+        _usage_row("s-multi", "claude-3-5-sonnet", "anthropic",
+                   input_tokens=1000, output_tokens=100, actual_cost_usd=0.005),
+        _usage_row("s-multi", "gpt-4o", "openai",
+                   input_tokens=2000, output_tokens=200, actual_cost_usd=0.010),
+    ]
+    _write_db(home, [sess_row], usage_rows=usage)
+    _patch_env(monkeypatch, home)
+
+    raw = _hermes_sessions()
+    assert "s-multi" in raw
+    session = raw["s-multi"]
+    assert session["display_name"] == "Multi Model Session"
+    assert session["message_count"] == 5
+
+    turns = session["turns"]
+    assert len(turns) == 2
+
+    t1 = turns[0]
+    assert t1["turn_index"] == 1
+    assert t1["model"] == "claude-3-5-sonnet"
+    assert t1["_event_key"] == "hermes:s-multi:claude-3-5-sonnet"
+    assert t1["tokens_out"] == 100
+    assert abs(t1["cost"] - 0.005) < 1e-9
+
+    t2 = turns[1]
+    assert t2["turn_index"] == 2
+    assert t2["model"] == "gpt-4o"
+    assert t2["_event_key"] == "hermes:s-multi:gpt-4o"
+    assert t2["tokens_out"] == 200
+    assert abs(t2["cost"] - 0.010) < 1e-9
+
+    # Parity check
+    assert _turn_sums(raw)["out"] == _entry_sums(_parser_entries(home))["out"] == 300
+
+
+def test_hermes_sessions_no_session_model_usage(monkeypatch, tmp_path):
+    """Fallback when session_model_usage table doesn't exist."""
+    home = _home(tmp_path)
+    sess_row = _row("s-single", "deepseek-chat", "deepseek", 1779395293.0,
+                    500, 50, 0, 0, title="Single Model Session", actual=0.001)
+    _write_db(home, [sess_row])  # No usage_rows -> table not created
+    _patch_env(monkeypatch, home)
+
+    raw = _hermes_sessions()
+    assert "s-single" in raw
+    session = raw["s-single"]
+    assert len(session["turns"]) == 1
+    turn = session["turns"][0]
+    assert turn["turn_index"] == 1
+    assert turn["model"] == "deepseek-chat"
+    assert turn["_event_key"] == "hermes:s-single"
+    assert turn["tokens_out"] == 50
+    assert abs(turn["cost"] - 0.001) < 1e-9
+
