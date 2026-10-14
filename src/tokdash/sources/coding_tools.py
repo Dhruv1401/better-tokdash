@@ -3561,9 +3561,9 @@ class HermesParser(BaseParser):
         mode="source_replace",
         reason="Hermes is DB-backed; current safe cache unit is the whole source until DB-native incremental sync is added.",
     )
-    # 1: session-level rows keyed on the Hermes row id, actual/estimated cost
-    #    kept as fixed, otherwise priced provider-qualified then bare.
-    persistent_parser_version = 1
+    # 2: session_model_usage for per-model attribution (Issue #238), first_seen
+    #    ordering, messageCount fix.
+    persistent_parser_version = 2
 
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)

@@ -91,6 +91,7 @@ from .usage_store import (
     parser_code_signature,
     persistent_usage_db_enabled,
     raise_if_usage_db_incompatible,
+    usage_billing_pricing,
 )
 
 
@@ -3428,19 +3429,30 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
 
                                 provider = HermesParser._infer_provider(model_name)
                                 full_model = f"{provider}/{model_name}" if provider else model_name
-                                bill = _billing_record(
-                                    full_model,
-                                    "split-cache-write",
-                                    input_tokens=m_in,
-                                    output_tokens=m_out,
-                                    cache_read=m_cr,
-                                    cache_write=m_cw,
-                                    fixed_cost=(
-                                        m_act_f if m_act_f > 0
-                                        else m_est_f if m_est_f > 0
-                                        else None
-                                    ),
+                                fixed_cost_val = (
+                                    m_act_f if m_act_f > 0
+                                    else m_est_f if m_est_f > 0
+                                    else None
                                 )
+                                if fixed_cost_val is not None:
+                                    bill = _billing_record(
+                                        full_model,
+                                        "split-cache-write",
+                                        input_tokens=m_in,
+                                        output_tokens=m_out,
+                                        cache_read=m_cr,
+                                        cache_write=m_cw,
+                                        fixed_cost=fixed_cost_val,
+                                    )
+                                else:
+                                    candidates = [full_model] + ([model_name] if provider else [])
+                                    bill = usage_billing_pricing(
+                                        candidates,
+                                        input_tokens=m_in,
+                                        output_tokens=m_out,
+                                        cache_read=m_cr,
+                                        cache_write=m_cw,
+                                    )
                                 # Use first_seen as timestamp when available, fall back to session start
                                 m_first = m_data.get("first_seen")
                                 turn_ts = ts_ms
