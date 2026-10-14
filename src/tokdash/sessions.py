@@ -3374,8 +3374,9 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                             m_entry["actual_cost"] += float(u_act or 0.0)
                             fs = float(u_first) if u_first is not None else None
                             if fs is not None:
-                                if m_entry["first_seen"] is None or fs < m_entry["first_seen"]:
-                                    m_entry["first_seen"] = fs
+                                fs_ms = int(fs * 1000) if fs < 1e12 else int(fs)
+                                if m_entry["first_seen"] is None or fs_ms < m_entry["first_seen"]:
+                                    m_entry["first_seen"] = fs_ms
                     except (OSError, sqlite3.Error):
                         usage_by_session = None
             except (OSError, sqlite3.Error):

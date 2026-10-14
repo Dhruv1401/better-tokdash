@@ -136,7 +136,7 @@ def _live_insight_rows(
             }
         bucket["tokens"] += sum(int(entry.get(field, 0) or 0) for field in _TOKEN_FIELDS)
         bucket["cost"] += float(entry.get("cost", 0.0) or 0.0)
-        bucket["messages"] += int(entry.get("messageCount", 1) or 1)
+        bucket["messages"] += int(entry.get("messageCount", 1) or 0)
         bucket["entries"] += 1
 
     return list(grouped.values()), sorted({str(e.get("source") or "unknown") for e in entries})

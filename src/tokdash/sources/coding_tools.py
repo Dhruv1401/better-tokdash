@@ -3675,11 +3675,12 @@ class HermesParser(BaseParser):
                             m_entry["reasoning"] += self._i(u_reason)
                             m_entry["estimated_cost"] += float(u_est or 0.0)
                             m_entry["actual_cost"] += float(u_act or 0.0)
-                            # Track earliest first_seen for chronological ordering
+                            # Track earliest first_seen (normalized to ms) for ordering
                             fs = float(u_first) if u_first is not None else None
                             if fs is not None:
-                                if m_entry["first_seen"] is None or fs < m_entry["first_seen"]:
-                                    m_entry["first_seen"] = fs
+                                fs_ms = int(fs * 1000) if fs < 1e12 else int(fs)
+                                if m_entry["first_seen"] is None or fs_ms < m_entry["first_seen"]:
+                                    m_entry["first_seen"] = fs_ms
                 except Exception:
                     usage_by_session = None
 
