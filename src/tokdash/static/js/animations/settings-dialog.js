@@ -20,6 +20,8 @@
  * always there, and their handlers are never touched.
  */
 
+import { placeThemeSwitcher } from './theme-switcher.js';
+
 const SCROLL_LOCK_CLASS = 'settings-dialog-open';
 // The width the scrollbar was taking, put back on the page so locking the scroll
 // does not reflow the topbar six pixels to the right.
@@ -151,6 +153,10 @@ export function openSettingsDialog({ opener = null } = {}) {
   if (!backdrop.open) {
     backdrop.removeAttribute('hidden');
     backdrop.showModal();
+    // The theme grid shares this dialog and measured zero while it was hidden;
+    // now that it has a box, put its selection ring on the chosen tile before
+    // the open is painted. No-op until the bundle has mounted the grid.
+    placeThemeSwitcher();
   }
   lockPage();
   syncOpener(true);

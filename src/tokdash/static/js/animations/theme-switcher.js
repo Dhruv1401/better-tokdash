@@ -79,6 +79,22 @@ function visibleTiles() {
   return state.tiles;
 }
 
+/**
+ * Place the selection ring now.
+ *
+ * The grid lives inside the settings `<dialog>`, which is still hidden when the
+ * bundle mounts — every tile measures zero there, so the ring parks on a
+ * coordinate it cannot use until the panel opens. The surface that reveals the
+ * grid calls this the moment it does, so the ring is already on the selected
+ * tile the first time the panel is shown, instead of waiting for a
+ * ResizeObserver delivery: that needs a rendering frame, and in a tab that is
+ * not painting it never arrives, which is exactly when a restored dashboard
+ * first opens the panel.
+ */
+export function placeThemeSwitcher() {
+  placeIndicator();
+}
+
 function activeTile() {
   if (!state) return null;
   return state.tiles.find((tile) => tile.dataset.theme === state.theme) || null;
@@ -234,9 +250,9 @@ export function mountThemeSwitcher(root, { select = null } = {}) {
     if (tile) commit(tile.dataset.theme);
   });
 
-  // The panel is hidden on first paint, so every tile measures zero. Re-place the
-  // ring whenever the grid gains a real box: opening the panel, widening it, or a
-  // font swap that reflows the labels.
+  // The panel is hidden on first paint, so every tile measures zero. Placement
+  // on open is the revealer's call (see `placeThemeSwitcher`); a ResizeObserver
+  // then covers every later size change — widening, a font reflow.
   if (typeof ResizeObserver === 'function') {
     state.observer = new ResizeObserver(placeIndicator);
     state.observer.observe(root);

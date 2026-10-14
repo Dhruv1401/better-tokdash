@@ -11781,16 +11781,58 @@
 
     const VALID_STYLE_THEMES = [...(THEME_CONFIG.validStyleThemes || ['classic', 'elevated'])];
 
-    function getDefaultStyleTheme() {
-      const stored = localStorage.getItem('tokdash-style-theme');
-      if (VALID_STYLE_THEMES.includes(stored)) return stored;
-      return 'paper';
+    // ---- One owner for the user's theme choice ------------------------------
+    // The style they picked (one of the 17) and the colour mode they chose —
+    // 'dark', 'light', or 'auto' when they never made a choice — are one
+    // preference stored as one JSON value under one key. This used to be split
+    // across a plain `tokdash-theme` (the mode) and `tokdash-style-theme` (the
+    // style), so neither key owned the whole choice. The legacy pair is read
+    // once, folded in, and the legacy key removed.
+    const THEME_PREF_KEY = 'tokdash-theme';
+    const LEGACY_STYLE_KEY = 'tokdash-style-theme';
+
+    function readStoredThemeValue(key) {
+      try { return localStorage.getItem(key); } catch (_error) { return null; }
     }
 
-    function getDefaultTheme() {
-      const stored = localStorage.getItem('tokdash-theme');
-      if (stored === 'dark' || stored === 'light') return stored;
-      return getAutoTheme();
+    function readThemePreference() {
+      const raw = readStoredThemeValue(THEME_PREF_KEY);
+      let parsed = null;
+      if (raw !== null) {
+        try { parsed = JSON.parse(raw); } catch (_error) { parsed = null; }
+      }
+      const stored = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      let style = VALID_STYLE_THEMES.includes(stored.style) ? stored.style : null;
+      let mode = stored.mode === 'dark' || stored.mode === 'light' || stored.mode === 'auto' ? stored.mode : null;
+      // A pre-merge install wrote the bare mode string into this same key.
+      if (!mode && (raw === 'dark' || raw === 'light')) mode = raw;
+      const legacyStyle = readStoredThemeValue(LEGACY_STYLE_KEY);
+      if (!style && VALID_STYLE_THEMES.includes(legacyStyle)) style = legacyStyle;
+      return {
+        style: style || 'paper',
+        mode: mode || 'auto',
+        // Fold the legacy pair in, and rewrite anything the parser could not read,
+        // so exactly one key ends up owning both halves.
+        migrated: legacyStyle !== null || (raw !== null && (parsed === null || typeof parsed !== 'object')),
+      };
+    }
+
+    function writeThemePreference(patch = {}) {
+      const current = readThemePreference();
+      const next = {
+        style: VALID_STYLE_THEMES.includes(patch.style) ? patch.style : current.style,
+        mode: patch.mode === 'dark' || patch.mode === 'light' || patch.mode === 'auto' ? patch.mode : current.mode,
+      };
+      try {
+        localStorage.setItem(THEME_PREF_KEY, JSON.stringify(next));
+        localStorage.removeItem(LEGACY_STYLE_KEY);
+      } catch (_error) { /* storage unavailable: the choice simply does not persist */ }
+      return next;
+    }
+
+    /** True while the user has never picked a colour mode: follow the system. */
+    function themeModeIsAuto() {
+      return readThemePreference().mode === 'auto';
     }
 
     // The switcher grid is built by the animation bundle, which loads after this
@@ -11817,7 +11859,7 @@
     // Quick toggle for the header button (defined inline; js/main.js is not loaded)
     function toggleThemeQuick() {
       const next = isDark() ? 'light' : 'dark';
-      localStorage.setItem('tokdash-theme', next);
+      writeThemePreference({ mode: next });
       applyTheme(next);
       rerenderPresentation();
     }
@@ -24979,8 +25021,10 @@
       } catch (_) { /* fail-soft: the dashboard must never depend on this */ }
     }
 
-    applyStyleTheme(getDefaultStyleTheme());
-    applyTheme(getDefaultTheme());
+    const bootTheme = readThemePreference();
+    applyStyleTheme(bootTheme.style);
+    applyTheme(bootTheme.mode === 'auto' ? getAutoTheme() : bootTheme.mode);
+    if (bootTheme.migrated) writeThemePreference({});
     applyI18n();
     initServerSettings();
     initQuotaRangeSelect();
@@ -24992,14 +25036,14 @@
 
     document.getElementById('styleThemeSelect').addEventListener('change', (event) => {
       const next = event.target.value || 'paper';
-      localStorage.setItem('tokdash-style-theme', next);
+      writeThemePreference({ style: next });
       applyStyleTheme(next);
       rerenderPresentation();
     });
 
     document.getElementById('themeToggle').addEventListener('click', () => {
       const next = isDark() ? 'light' : 'dark';
-      localStorage.setItem('tokdash-theme', next);
+      writeThemePreference({ mode: next });
       applyTheme(next);
       rerenderPresentation();
     });
@@ -25007,20 +25051,18 @@
     const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
     if (themeMedia && typeof themeMedia.addEventListener === 'function') {
       themeMedia.addEventListener('change', () => {
-        if (!localStorage.getItem('tokdash-theme')) {
-          applyTheme(getAutoTheme());
-          rerenderPresentation();
-        }
+        if (!themeModeIsAuto()) return;
+        applyTheme(getAutoTheme());
+        rerenderPresentation();
       });
     }
 
     setInterval(() => {
-      if (!localStorage.getItem('tokdash-theme')) {
-        const autoTheme = getAutoTheme();
-        if ((autoTheme === 'dark') !== isDark()) {
-          applyTheme(autoTheme);
-          rerenderPresentation();
-        }
+      if (!themeModeIsAuto()) return;
+      const autoTheme = getAutoTheme();
+      if ((autoTheme === 'dark') !== isDark()) {
+        applyTheme(autoTheme);
+        rerenderPresentation();
       }
     }, 5 * 60 * 1000);
 
