@@ -28,13 +28,8 @@ I18N_LANGS = ("en", "zh", "ja", "ko", "es", "pt")
 # Kana and Han, for the copy rules that only apply where words carry no spaces.
 CJK = r"[぀-ヿ一-鿿]"
 
-# Every line that makes a claim about one machine: whose midnight starts a day
-# and whose tokdash counted. Both take the selected server's name rather than
-# assuming local. The card's range line used to be on this list; the cosyncing
-# review cut its "on {machine}" clause. The agent table's folded "other tools"
-# row left with the fold, so it no longer makes one either.
+# The source line names the selected server whose tokdash counted the usage.
 MACHINE_KEYS = (
-    "usageReportFooterDays",
     "usageReportFooterSrc",
 )
 
@@ -121,10 +116,17 @@ def test_report_tab_has_a_content_panel_and_one_lazy_load_branch() -> None:
         source.index("function activateDashboardTab(tab) {") :
         source.index("function openOverviewProfile() {")
     ]
-    assert "if (tab === 'report' && !usageReportState.loaded) loadUsageReport();" in activate
+    assert "if (tab === 'report' && !usageReportState.loaded) {" in activate
+    assert "loadUsageReport();" in activate
     # Loaded once and not re-fetched on every switch, like the pricing tab: the
     # period switcher, the server picker and Retry are what ask the server again.
-    assert activate.count("loadUsageReport()") == 1
+    assert activate.count("loadUsageReport();") == 1
+    # The page going away is a dispatch decision too. What was in flight belongs to
+    # a view the reader left, and its callback queues more work behind it.
+    assert "usageReportRetirePending()" in activate
+    assert "usageReportState.active = tab === 'report';" in activate
+    assert activate.index("usageReportState.active = tab === 'report';") < activate.index("loadUsageReport();")
+    assert "usageReportSpeedSetSubtab" not in activate
 
 
 def test_report_panels_are_painted_from_the_theme_token() -> None:
@@ -250,6 +252,12 @@ def test_report_is_single_server_and_prints_which_one() -> None:
 @pytest.mark.parametrize(
     ("today", "period", "expected", "calendar"),
     [
+        (
+            "2028-02-29",
+            "day",
+            {"from": "2028-02-29", "to": "2028-02-29", "length": 1, "elapsed": 1},
+            {"first": "2028-02-29", "last": "2028-02-29"},
+        ),
         # Mid-week: the week runs back to Monday, the month to the 1st.
         (
             "2026-09-03",
@@ -344,7 +352,7 @@ def test_an_elapsed_window_never_exceeds_the_period_it_claims(tmp_path: Path) ->
     body += """
 usageReportToday = () => new Date(process.argv[2] + 'T12:00:00');
 const out = [];
-for (const period of ['week', 'month', 'year']) {
+for (const period of ['day', 'week', 'month', 'year']) {
   const windows = usageReportWindows(period);
   out.push({
     period,
@@ -358,6 +366,7 @@ process.stdout.write(JSON.stringify(out));
         _run_node(tmp_path, "usage-report-span.js", body, "2026-09-03")
     )
     assert {row["period"]: row for row in rows} == {
+        "day": {"period": "day", "elapsed": 1, "length": 1},
         "week": {"period": "week", "elapsed": 4, "length": 7},
         "month": {"period": "month", "elapsed": 3, "length": 30},
         "year": {"period": "year", "elapsed": 246, "length": 365},
@@ -374,7 +383,7 @@ def test_back_steps_whole_periods(tmp_path: Path) -> None:
     body += """
 usageReportToday = () => new Date('2026-09-07T12:00:00');
 const out = [];
-for (const period of ['week', 'month', 'year']) {
+for (const period of ['day', 'week', 'month', 'year']) {
   for (const back of [0, 1, 2]) {
     const w = usageReportWindows(period, back);
     out.push({ period, back, from: w.date_from, to: w.date_to,
@@ -386,6 +395,8 @@ process.stdout.write(JSON.stringify(out));
 """
     rows = json.loads(_run_node(tmp_path, "usage-report-back.js", body))
     by = {(row["period"], row["back"]): row for row in rows}
+    for back, day in enumerate(("2026-09-07", "2026-09-06", "2026-09-05")):
+        assert by[("day", back)] == {"period": "day", "back": back, "from": day, "to": day, "length": 1, "elapsed": 1}
     assert by[("week", 0)]["from"] == "2026-09-07" and by[("week", 0)]["to"] == "2026-09-07"
     assert (by[("week", 1)]["from"], by[("week", 1)]["to"]) == ("2026-08-31", "2026-09-06")
     assert (by[("week", 2)]["from"], by[("week", 2)]["to"]) == ("2026-08-24", "2026-08-30")
@@ -394,6 +405,67 @@ process.stdout.write(JSON.stringify(out));
     for row in rows:
         if row["back"] > 0:
             assert row["elapsed"] == row["length"], f"{row}: a past window must be the whole period"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+@pytest.mark.parametrize(
+    ("today", "back", "expected"),
+    [
+        ("2026-01-01", 1, "2025-12-31"),
+        ("2028-03-01", 1, "2028-02-29"),
+        ("2026-10-26", 1, "2026-10-25"),
+        ("2026-03-30", 1, "2026-03-29"),
+    ],
+)
+def test_day_navigation_crosses_calendar_and_clock_boundaries(
+    tmp_path: Path, today: str, back: int, expected: str
+) -> None:
+    body = "process.env.TZ = 'Europe/London';\n"
+    body += "\n".join(_extract_js_function(_source(), signature) for signature in HELPERS)
+    body += f"""
+usageReportToday = () => new Date('{today}T12:00:00');
+process.stdout.write(JSON.stringify(usageReportWindows('day', {back})));
+"""
+    assert json.loads(_run_node(tmp_path, "report-day-boundary.js", body)) == {
+        "date_from": expected,
+        "date_to": expected,
+    }
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_duration_units_are_localized_across_languages_and_language_switches(tmp_path: Path) -> None:
+    source = _source()
+    locales = re.search(r"const LANG_LOCALES = \{[^\n]+\};", source)
+    assert locales
+    body = locales.group(0) + "\nlet currentLang = 'en'; const durationUnitFormatters = new Map();\n"
+    for signature in (
+        "function langLocale(lang = currentLang) {",
+        "function formatDurationUnit(unit, value) {",
+        "function formatDurationUnits(ms) {",
+    ):
+        body += _extract_js_function(source, signature) + "\n"
+    body += """
+const durations = [0, 45000, 5 * 60000, (7 * 60 + 39) * 60000, 24 * 3600000, 65 * 3600000, 8 * 86400000, 34 * 86400000];
+const out = {};
+for (const lang of Object.keys(LANG_LOCALES)) {
+  currentLang = lang;
+  out[lang] = durations.map(formatDurationUnits);
+}
+// A cached formatter must still follow the language after switching back.
+currentLang = 'en';
+out.enAgain = durations.map(formatDurationUnits);
+process.stdout.write(JSON.stringify(out));
+"""
+    report = json.loads(_run_node(tmp_path, "report-localized-time.js", body))
+    assert report.pop("enAgain") == report["en"]
+    assert report == {
+        "en": ["—", "45 seconds", "5 minutes", "7 hours 39 minutes", "1 day", "2 days 17 hours", "1 week 1 day", "1 month 4 days"],
+        "zh": ["—", "45秒钟", "5分钟", "7小时39分钟", "1天", "2天17小时", "1周1天", "1个月4天"],
+        "ja": ["—", "45秒", "5分", "7時間39分", "1日", "2日17時間", "1週間1日", "1か月4日"],
+        "ko": ["—", "45초", "5분", "7시간 39분", "1일", "2일 17시간", "1주 1일", "1개월 4일"],
+        "es": ["—", "45 segundos", "5 minutos", "7 horas 39 minutos", "1 día", "2 días 17 horas", "1 semana 1 día", "1 mes 4 días"],
+        "pt": ["—", "45 segundos", "5 minutos", "7 horas 39 minutos", "1 dia", "2 dias 17 horas", "1 semana 1 dia", "1 mês 4 dias"],
+    }
 
 
 def test_the_report_tab_swaps_quick_ranges_for_period_chips() -> None:
@@ -656,10 +728,24 @@ def test_the_server_warms_the_exact_facet_string_the_tab_asks_for() -> None:
     assert match.group(1) == api.REPORT_FACETS
 
 
+def _loader_program(block: str) -> str:
+    """The loader as the page defines it, with the one helper it now asks first.
+
+    `usageReportSummaryWanted` is not stubbed: whether the two slow requests are
+    owed is exactly what these tests are about, so a stub would be the assertion.
+    """
+    return (LOADER_HARNESS
+            .replace("__SUMMARY_WANTED__", _extract_js_function(
+                block, "function usageReportSummaryWanted() {"))
+            .replace("__LOADER__", _extract_js_function(
+                block, "async function loadUsageReport(options = {}) {")))
+
+
 LOADER_HARNESS = """
 const usageReportState = {
   loading: false, loaded: false, error: null, model: null,
   period: 'month', back: 0, serverId: 'local', staleReread: false,
+  active: true, summaryKey: '', summaryLoading: false, usagePayload: null,
 };
 const calls = [];
 let responder = () => null;
@@ -669,13 +755,31 @@ function usageReportRenderLoading() { calls.push('renderLoading'); }
 function usageReportServer() { return { id: 'local', label: 'local' }; }
 function usageReportLoadVersion() {}
 function usageReportWindows() { return { date_from: '2026-09-01', date_to: '2026-09-05' }; }
+function usageReportSummaryKey() { return 'local|2026-09-01|2026-09-05'; }
 function usageReportBuildModel(args) { return { notices: {}, args }; }
 function usageReportRenderPartial() { calls.push('partial'); }
 function usageReportRender() { calls.push('render'); }
-function usageReportScheduleStaleReread() {}
+function usageReportScheduleStaleReread() { calls.push('scheduleStale'); }
+// The speed view rides the same window, so the loader invalidates it. These stubs
+// keep this harness about the loader's own control flow; the speed table is tested in
+// tests/test_output_speed_frontend.py.
+const document = { hidden: false };
+const usageReportSpeedState = { subtab: 'summary' };
+function usageReportSpeedInvalidate() { calls.push('speedInvalidate'); }
+// The real function's first line is its own visibility gate, tested in
+// tests/test_output_speed_frontend.py; this stub keeps just the part this harness
+// reads -- that the summary subtab ends up with no speed request at all.
+function usageReportLoadSpeed() {
+  if (usageReportSpeedState.subtab === 'speed') calls.push('loadSpeed');
+}
+function usageReportEnsureSummary() { calls.push('ensureSummary'); }
 function usageReportApplyPendingChoice() {}
-function fetchJsonWithRetry() { return Promise.resolve(responder()); }
+function fetchJsonWithRetry(server, url) {
+  calls.push('fetch:' + String(url).split('?')[0]);
+  return Promise.resolve(responder());
+}
 const USAGE_REPORT_FACETS = 'daily';
+__SUMMARY_WANTED__
 __LOADER__
 (async () => {
   const out = {};
@@ -691,6 +795,26 @@ __LOADER__
   await loadUsageReport();
   out.recovered = calls.includes('render');
   out.loadingAtRest = usageReportState.loading;
+
+  // On the summary subtab the slow pair is asked for, and speed is not.
+  out.summaryCalls = calls.slice();
+
+  // On the speed subtab, neither: the pair is the panel they are not looking at,
+  // and speed waits for the request that synchronises the logs.
+  calls.length = 0;
+  usageReportState.loaded = false;
+  usageReportState.active = false;
+  await loadUsageReport({ refresh: true });
+  out.speedCalls = calls.slice();
+  out.summaryKeyWhileDeferred = usageReportState.summaryKey;
+
+  // A load already in flight when the reader left: same deferral, same reason. The
+  // page cannot show the answer, and `usageReportResumePending` asks on the way back.
+  calls.length = 0;
+  usageReportState.active = true;
+  usageReportState.active = false;
+  await loadUsageReport();
+  out.leftMidFlightCalls = calls.slice();
   process.stdout.write(JSON.stringify(out));
 })();
 """
@@ -753,7 +877,10 @@ def test_the_warmers_windows_match_the_tabs_own_across_years(tmp_path: Path) -> 
 
 
 SCHEDULE_HARNESS = """
-const usageReportState = { staleTimer: null, loadToken: 3, back: 0 };
+const usageReportState = {
+  staleTimer: null, staleReread: null, loadToken: 3, back: 0, active: true,
+};
+const document = { hidden: false };
 let nextId = 1;
 const armed = new Map();
 const cleared = [];
@@ -764,15 +891,18 @@ function usageReportSilentReread(token, period, back, serverId) { reread.push([t
 const USAGE_REPORT_STALE_REREAD_MS = 12000;
 __SERVED__
 __SCHEDULE__
+__ARM__
+__FIRE__
 const fresh = { response_cache: { status: 'hit' } };
 const stale = { response_cache: { status: 'stale' } };
 const bare = {};                       // a route that serves no cache metadata
 const server = { id: 'local' };
 const out = {};
 
-// Nothing stale: nothing armed.
+// Nothing stale: nothing armed, and nothing left waiting to be armed later.
 usageReportScheduleStaleReread([fresh, fresh, fresh], 'month', 0, server);
 out.allFresh = armed.size;
+out.intentWhenFresh = usageReportState.staleReread;
 
 // A route with no metadata must not be guessed at.
 usageReportScheduleStaleReread([bare, bare, bare], 'month', 0, server);
@@ -789,9 +919,17 @@ usageReportScheduleStaleReread([fresh, fresh, stale], 'month', 0, server);
 out.afterSecond = { armed: armed.size, clearedFirst: cleared.includes(firstId) };
 out.delay = armed.get(usageReportState.staleTimer).ms;
 
-// Firing it hands the silent path the token captured at schedule time.
+// The timer goes off with the page out of sight: nothing is read, and the reason
+// for reading it is not thrown away.
+document.hidden = true;
 armed.get(usageReportState.staleTimer).fn();
+out.whileHidden = { reread: reread.length, waiting: !!usageReportState.staleReread };
+
+// The reader comes back, and the re-read they left behind runs.
+document.hidden = false;
+usageReportFireStaleReread();
 out.fired = reread;
+out.intentAfterFire = usageReportState.staleReread;
 out.handleCleared = usageReportState.staleTimer === null;
 process.stdout.write(JSON.stringify(out));
 """
@@ -813,17 +951,24 @@ def test_only_one_stale_reread_is_ever_armed(tmp_path: Path) -> None:
             block, "function usageReportServedStale(payload) {"))
         .replace("__SCHEDULE__", _extract_js_function(
             block, "function usageReportScheduleStaleReread(payloads, period, back, server) {"))
+        .replace("__ARM__", _extract_js_function(block, "function usageReportArmStaleReread() {"))
+        .replace("__FIRE__", _extract_js_function(block, "function usageReportFireStaleReread() {"))
     )
     out = json.loads(_run_node(tmp_path, "usage-report-schedule.js", body))
 
     assert out["allFresh"] == 0, "nothing stale, nothing to re-read"
+    assert out["intentWhenFresh"] is None, "a fresh report left a re-read waiting"
     assert out["noMetadata"] == 0, "a route that says nothing is treated as fresh"
     assert out["slowPairStale"] == 1, (
         "a stale insights/active-time must arm the re-read even when usage is fresh"
     )
     assert out["afterSecond"] == {"armed": 1, "clearedFirst": True}, "timers stacked"
     assert out["delay"] == 12000
+    assert out["whileHidden"] == {"reread": 0, "waiting": True}, (
+        "a re-read fired at a hidden page, or its intent was discarded with it"
+    )
     assert out["fired"] == [[3, "month", 0, "local"]], "the token is captured at schedule time"
+    assert out["intentAfterFire"] is None, "a re-read that ran stays queued"
     assert out["handleCleared"] is True
 
 
@@ -922,14 +1067,262 @@ def test_an_empty_200_does_not_wedge_the_report_tab(tmp_path: Path) -> None:
     against the source, because the bug is control flow, not a string.
     """
     block = _report_block(_source())
-    loader = _extract_js_function(block, "async function loadUsageReport(options = {}) {")
-    body = LOADER_HARNESS.replace("__LOADER__", loader)
-    out = json.loads(_run_node(tmp_path, "usage-report-loader.js", body))
+    out = json.loads(_run_node(tmp_path, "usage-report-loader.js", _loader_program(block)))
 
     assert out["afterNull"]["loading"] is False, "an empty 200 left the tab wedged"
     assert out["afterNull"]["loaded"] is True
     assert out["recovered"] is True, "the tab refused every load after the first failure"
     assert out["loadingAtRest"] is False
+
+
+def test_leaving_report_defers_summary_and_never_dispatches_speed(tmp_path: Path) -> None:
+    block = _report_block(_source())
+    out = json.loads(_run_node(tmp_path, "usage-report-defer.js", _loader_program(block)))
+    summary, deferred = out["summaryCalls"], out["speedCalls"]
+    assert "fetch:/api/usage" in summary and "fetch:/api/insights" in summary
+    assert "fetch:/api/active-time" in summary
+    assert "loadSpeed" not in summary
+    assert "fetch:/api/usage" in deferred
+    assert "fetch:/api/insights" not in deferred and "fetch:/api/active-time" not in deferred
+    assert "loadSpeed" not in deferred
+    assert out["summaryKeyWhileDeferred"] == "", (
+        "a deferred summary must not record itself as answered"
+    )
+
+    left = out["leftMidFlightCalls"]
+    assert "fetch:/api/usage" in left, "the load the reader started is not abandoned"
+    assert "fetch:/api/insights" not in left and "fetch:/api/active-time" not in left, (
+        f"a load continued into the expensive half after the page was left: {left}"
+    )
+
+
+SUMMARY_RACE_HARNESS = """
+const usageReportState = {
+  loading: false, loaded: false, error: null, model: null,
+  period: 'month', back: 0, serverId: 'local', staleTimer: null, staleReread: null,
+  loadToken: 0, summaryToken: 0, summaryKey: '', summaryLoading: false,
+  usagePayload: null, active: true,
+};
+const document = { hidden: false };
+const usageReportSpeedState = { subtab: 'summary' };
+// One cursor is the whole window. Moving it is what a period chip does, and the
+// pair's loader reads the key off it when it publishes rather than when it asks.
+let CURRENT = '2026-09-01';
+const RANGES = {
+  '2026-09-01': { date_from: '2026-09-01', date_to: '2026-09-05' },
+  '2026-09-08': { date_from: '2026-09-08', date_to: '2026-09-12' },
+  '2026-10-01': { date_from: '2026-10-01', date_to: '2026-10-05' },
+};
+function usageReportWindows() { return RANGES[CURRENT]; }
+function usageReportServer() { return { id: 'local' }; }
+function usageReportBuildModel(args) {
+  // The hero's marker is what tells a pair that answered for the current window
+  // out of one that answered for a payload that window has since replaced.
+  return {
+    tag: `${args.dateFrom}..${args.dateTo}`,
+    hero: args.usage?.marker ?? null,
+    scan: args.insights?.facets || '',
+  };
+}
+function usageReportWire() {}
+function usageReportRenderControls() {}
+function usageReportRenderLoading() {}
+function usageReportRenderPartial() {}
+function usageReportRender() {}
+function usageReportScheduleStaleReread() {}
+function usageReportApplyPendingChoice() {}
+function usageReportLoadVersion() {}
+function usageReportSpeedInvalidate() {}
+function usageReportLoadSpeed() {}
+const USAGE_REPORT_FACETS = 'daily';
+// The two slow requests are parked until the test releases the window they were
+// asked for, which is the only way to reproduce a round trip that outlives it.
+// The release keys off the dates in the URL, so a request that failed to carry
+// its window would strand here rather than pass by accident.
+const parked = [];
+let usageSerial = 0;
+function fetchJsonWithRetry(server, url) {
+  const path = String(url).split('?')[0];
+  if (path === '/api/usage') return Promise.resolve({ ok: true, marker: 'hero-' + (usageSerial += 1) });
+  const from = (/date_from=([^&]*)/.exec(String(url)) || [])[1] || '';
+  return new Promise((resolve) => {
+    parked.push({ from, resolve: () => resolve({ facets: 'facet-scan@' + from }) });
+  });
+}
+const pump = () => new Promise((resolve) => setTimeout(resolve, 0));
+// `first` and `last` pick which of two same-window pairs answers: a load and a
+// pair already in flight ask for the same dates, and only the order tells them
+// apart.
+async function settle(from, take) {
+  const indices = [];
+  for (let index = 0; index < parked.length; index += 1) {
+    if (parked[index].from === from) indices.push(index);
+  }
+  let chosen = indices;
+  if (take === 'first') chosen = indices.slice(0, 2);
+  if (take === 'last') chosen = indices.slice(-2);
+  const mine = chosen.map((index) => parked[index]);
+  for (let index = chosen.length - 1; index >= 0; index -= 1) parked.splice(chosen[index], 1);
+  mine.forEach((entry) => entry.resolve());
+  for (let index = 0; index < 16; index += 1) await pump();
+  return mine.length;
+}
+__SUMMARY_WANTED__
+__SUMMARY_KEY__
+__ENSURE_SUMMARY__
+__LOADER__
+(async () => {
+  const out = {};
+  const tag = () => usageReportState.model?.tag ?? null;
+
+  // Control: a pair that lands with its window still up must publish, or the
+  // two guards below could both be satisfied by never publishing at all.
+  let load = loadUsageReport();
+  for (let index = 0; index < 8; index += 1) await pump();
+  out.controlReleased = await settle('2026-09-01');
+  await load;
+  out.control = tag();
+
+  // A pair asked for window A while the reader was on the speed subtab; they
+  // move to window B; only then does A's answer arrive.
+  usageReportState.active = false;
+  CURRENT = '2026-09-01';
+  usageReportState.period = 'month';
+  load = loadUsageReport();
+  for (let index = 0; index < 8; index += 1) await pump();
+  await load;
+  out.deferredKey = usageReportState.summaryKey;
+  usageReportState.active = true;
+  usageReportEnsureSummary();
+  for (let index = 0; index < 8; index += 1) await pump();
+  out.inFlightForA = parked.length;
+  out.loadingA = usageReportState.summaryLoading;
+
+  CURRENT = '2026-09-08';
+  usageReportState.period = 'week';
+  load = loadUsageReport();
+  for (let index = 0; index < 8; index += 1) await pump();
+  out.windowBReleased = await settle('2026-09-08');
+  await load;
+  out.windowB = tag();
+
+  out.lateAReleased = await settle('2026-09-01');
+  out.afterLateAnswer = { tag: tag(), summaryLoading: usageReportState.summaryLoading };
+
+  // The window moving by a path that never starts a load: nothing bumped the
+  // pair's token, so only the window the answer is for can catch it.
+  usageReportState.summaryKey = '';
+  usageReportState.model = { tag: 'KEEP-ME' };
+  CURRENT = '2026-09-08';
+  usageReportState.period = 'week';
+  usageReportEnsureSummary();
+  for (let index = 0; index < 8; index += 1) await pump();
+  out.inFlightForKeyCase = parked.length;
+  CURRENT = '2026-10-01';
+  usageReportState.period = 'year';
+  out.movedReleased = await settle('2026-09-08');
+  out.afterWindowMove = {
+    tag: tag(), summaryLoading: usageReportState.summaryLoading,
+    summaryKey: usageReportState.summaryKey,
+  };
+
+  // The window the reader is actually on is still owed its figures.
+  usageReportEnsureSummary();
+  for (let index = 0; index < 8; index += 1) await pump();
+  out.reaskedFor = parked.map((entry) => entry.from);
+
+  // A Refresh re-reads the window already on screen, so the pair in flight was
+  // asked against the hero this load replaces. Neither the dates nor the server
+  // have moved, so only the pair's own token can retire it.
+  parked.length = 0;
+  CURRENT = '2026-10-01';
+  usageReportState.period = 'year';
+  usageReportState.summaryKey = '';
+  usageReportState.summaryLoading = false;
+  usageReportState.model = { tag: '2026-10-01..2026-10-05', hero: 'before', scan: '' };
+  usageReportState.usagePayload = { ok: true, marker: 'hero-stale' };
+  usageReportEnsureSummary();
+  for (let index = 0; index < 8; index += 1) await pump();
+  out.inFlightForRefresh = parked.length;
+  load = loadUsageReport({ refresh: true });
+  for (let index = 0; index < 8; index += 1) await pump();
+  out.refreshReleased = await settle('2026-10-01', 'last');
+  await load;
+  out.afterRefresh = { tag: tag(), hero: usageReportState.model?.hero ?? null };
+  out.staleReleased = await settle('2026-10-01', 'first');
+  out.afterStalePair = {
+    tag: tag(), hero: usageReportState.model?.hero ?? null,
+    summaryLoading: usageReportState.summaryLoading,
+  };
+  process.stdout.write(JSON.stringify(out));
+})();
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_a_deferred_summary_cannot_answer_for_a_window_that_moved(tmp_path: Path) -> None:
+    """The Summary pair is the half of a load that can outlive it.
+
+    Its callback builds a whole model rather than merging one figure in, so an
+    answer for the window being replaced finishes by overwriting the new window's
+    model with the old window's facet scan: last month's rankings under this
+    month's title, with nothing else about the page visibly wrong.
+
+    Two guards cover two different paths. An explicit load retires the pair with
+    its token; an answer whose window moved by a path that never started a load
+    is caught only by the window it was asked for. Both run here rather than
+    being asserted as text, because the bad publish looks exactly like a good one.
+    """
+    block = _report_block(_source())
+    body = (
+        SUMMARY_RACE_HARNESS
+        .replace("__SUMMARY_WANTED__", _extract_js_function(
+            block, "function usageReportSummaryWanted() {"))
+        .replace("__SUMMARY_KEY__", _extract_js_function(
+            block, "function usageReportSummaryKey() {"))
+        .replace("__ENSURE_SUMMARY__", _extract_js_function(
+            block, "function usageReportEnsureSummary() {"))
+        .replace("__LOADER__", _extract_js_function(
+            block, "async function loadUsageReport(options = {}) {"))
+    )
+    out = json.loads(_run_node(tmp_path, "usage-report-summary-race.js", body))
+
+    assert out["control"] == "2026-09-01..2026-09-05", out
+    assert out["controlReleased"] == 2, "the control pair did not actually go out"
+
+    assert out["deferredKey"] == "", "the summary was recorded as answered while deferred"
+    assert out["inFlightForA"] == 2 and out["loadingA"] is True, out
+    assert out["windowB"] == "2026-09-08..2026-09-12", out
+    assert out["lateAReleased"] == 2, "window A's pair never went out"
+    assert out["afterLateAnswer"]["tag"] == "2026-09-08..2026-09-12", (
+        "a summary answer for the replaced window overwrote the new one"
+    )
+    assert out["afterLateAnswer"]["summaryLoading"] is False, (
+        "the discarded pair kept its in-flight guard: that subtab would never ask again"
+    )
+
+    assert out["inFlightForKeyCase"] == 2, out
+    assert out["movedReleased"] == 2, out
+    assert out["afterWindowMove"]["tag"] == "KEEP-ME", (
+        "the pair published for a window the page is no longer on"
+    )
+    assert out["afterWindowMove"]["summaryLoading"] is False, out
+    assert out["afterWindowMove"]["summaryKey"] == "", (
+        "a window that was never answered recorded itself as answered"
+    )
+    assert out["reaskedFor"] == ["2026-10-01", "2026-10-01"], (
+        "the window the reader is actually on is not owed its figures"
+    )
+
+    # Same window, older hero: the refresh must keep the figures it just read.
+    assert out["inFlightForRefresh"] == 2, out
+    assert out["afterRefresh"]["tag"] == "2026-10-01..2026-10-05", out
+    assert out["afterRefresh"]["hero"] not in ("hero-stale", "before"), out
+    assert out["staleReleased"] == 2, "the pair in flight for that window never went out"
+    assert out["afterStalePair"]["hero"] == out["afterRefresh"]["hero"], (
+        "a pair asked against the previous hero overwrote the refresh's figures"
+    )
+    assert out["afterStalePair"]["summaryLoading"] is False, out
 
 
 def test_a_report_served_from_a_stale_entry_reads_again_once() -> None:
@@ -962,7 +1355,9 @@ def test_a_report_served_from_a_stale_entry_reads_again_once() -> None:
     )
 
     # A queued re-read describes the window an explicit load is replacing.
-    assert "clearTimeout(usageReportState.staleTimer)" in schedule
+    arm = _extract_js_function(block, "function usageReportArmStaleReread() {")
+    assert "clearTimeout(usageReportState.staleTimer)" in arm
+    assert "usageReportArmStaleReread()" in schedule
     assert "clearTimeout(usageReportState.staleTimer)" in loader
     assert "usageReportState.loadToken += 1" in loader
 
@@ -1038,7 +1433,6 @@ def test_the_first_paint_renders_only_what_usage_answers() -> None:
     assert "usageReportRenderHeroActivity(model)" in hero
     assert "usageReportRenderHero(model)" in full
     for absent in (
-        "usageReportRenderSentence",
         "usageReportRenderHeat",
         "usageReportRenderPodium",
         "usageReportRenderWhen",
@@ -1063,8 +1457,7 @@ def test_an_unknown_count_prints_a_dash_everywhere_it_is_read() -> None:
     hero = _extract_js_function(block, "function usageReportRenderHeroActivity(model) {")
     assert "empty || !model.streaks" in hero
     assert "String(model.streaks.active_days)" in hero, "the zero fallback is gone"
-    sentence = _extract_js_function(block, "function usageReportRenderSentence(model) {")
-    assert "sessions: usageReportFigure(model.sessions, formatNumber)" in sentence
+    assert "usageReportFigure(model.sessions, formatNumber)" in hero
     card = _extract_js_function(block, "function usageReportCardModel(model, tier, mode, overrides) {")
     assert "sessions: usageReportFigure(model.sessions, formatNumber)" in card
     assert "const streaks = model.streaks || null;" in card, "a zero-filled streak block prints 0 of N"
@@ -1115,6 +1508,17 @@ def test_report_copy_keys_are_prefixed_and_shared_across_languages() -> None:
         assert not missing, f"{language} is missing {sorted(missing)}"
 
 
+def test_report_translations_keep_the_same_placeholders() -> None:
+    source = _source()
+    english = _i18n_report_copy(source, "en")
+    for language in I18N_LANGS:
+        copy = _i18n_report_copy(source, language)
+        for key, value in english.items():
+            expected = set(re.findall(r"\{(\w+)\}", value))
+            actual = set(re.findall(r"\{(\w+)\}", copy[key]))
+            assert actual == expected, f"{language}.{key}: {actual} != {expected}"
+
+
 def test_every_line_that_names_a_machine_names_the_selected_one() -> None:
     """The report is single-server, and these lines used to be fixed strings
     about "this machine": read from a remote server, the footer and the exported
@@ -1122,7 +1526,7 @@ def test_every_line_that_names_a_machine_names_the_selected_one() -> None:
     """
     source = _source()
     block = _report_block(source)
-    assert "t('usageReportFooterDays', { machine })" in block
+    assert "t('usageReportFooterSrc', { n: sources, machine," in block
     footer = _extract_js_function(block, "function usageReportRenderFooter(model) {")
     assert "const machine = usageReportMachineName();" in footer
     # Only the nickname fallback may still spell the phrase out.
@@ -1230,11 +1634,11 @@ def test_no_night_window_is_hardcoded_in_the_page() -> None:
         assert hours not in block, hours
 
 
-def test_the_project_surface_prints_every_reconciliation_component() -> None:
-    """Spec 5.2: the facet's own unattributed bucket is not the whole gap."""
+def test_the_report_removes_the_repeated_project_and_footer_copy() -> None:
+    """The ranking keeps missing-data notices without the decorative footnotes."""
     block = _report_block(_source())
-    assert "usageReportPodiumProjectNote" in block
-    assert "usageReportProjectGroupNote" in block
+    for key in ("usageReportPodiumProjectNote", "usageReportProjectGroupNote", "usageReportFooterDays", "usageReportFooterCost", "usageReportFooterActive", "usageReportSentence"):
+        assert key not in _source()
     assert "usageReportMissingProjects" in block
 
 
@@ -1354,6 +1758,7 @@ CARD_SIGNATURES = (
     "function usageReportThemeTokens(theme, dark) {",
     "function usageReportCardPalette(mode) {",
     "const USAGE_REPORT_TIER_ACCENT = {",
+    "function usageReportFontFamily(mono = false) {",
     "function usageReportCardFont(size, weight, mono) {",
     "function usageReportTextWidth(text, font) {",
     "function usageReportWrapText(text, font, maxWidth) {",
@@ -1405,6 +1810,7 @@ def _card_harness(source: str) -> str:
 const DEFAULT_HEAT_COLORS_LIGHT = ['#EEF2F7','#E0E7FF','#C7D2FE','#A5B4FC','#60A5FA','#3B82F6','#2563EB','#1E40AF'];
 const DEFAULT_HEAT_COLORS_DARK = ['#172033','#1E293B','#1D4ED8','#2563EB','#3B82F6','#60A5FA','#93C5FD','#BFDBFE'];
 const currentLang = 'en';
+let fontTokensUnderTest = __FONT_TOKENS__;
 const usageReportState = { includeCost: false, nickname: 'wsl-box', version: '2.5.1' };
 let serverUnderTest = { id: 'local', label: 'Local', baseUrl: '' };
 const usageReportServer = () => serverUnderTest;
@@ -1414,13 +1820,17 @@ function t(key, vars) {
   Object.keys(vars || {}).forEach((name) => { out = out.split('{' + name + '}').join(String(vars[name])); });
   return out;
 }
-const document = { createElement: () => ({ getContext: () => ({
+const document = { documentElement: { dataset: {} }, createElement: () => ({ getContext: () => ({
   font: '400 10px sans-serif',
   measureText(text) {
     const size = parseFloat(String(this.font).split(' ')[1]) || 10;
     return { width: String(text).length * size * 0.55 };
   },
 }) }) };
+function getComputedStyle(element) {
+  if (element !== document.documentElement) throw new Error('expected root font tokens');
+  return { getPropertyValue: (name) => fontTokensUnderTest[name] || '' };
+}
 const parseDateKey = (value) => new Date(value + 'T00:00:00');
 const formatTokenCount = (n) => (Number(n) >= 1e6 ? (Number(n) / 1e6).toFixed(1) + 'M' : String(n));
 const formatNumber = (n) => String(n);
@@ -1433,12 +1843,18 @@ const usageReportToolLabel = (tool) => String(tool);
 const usageReportShare = (f) => (Number(f) * 100).toFixed(1) + '%';
 """
     prelude = prelude.replace("__COPY__", json.dumps(_i18n_english_copy(source), ensure_ascii=False))
+
+    def resolve_font(name: str) -> str:
+        value = re.search(rf"^\s*{name}:([^;]+);", source, re.MULTILINE).group(1).strip()
+        return re.sub(r"var\((--font[\w-]+)\)", lambda match: resolve_font(match.group(1)), value)
+
+    prelude = prelude.replace("__FONT_TOKENS__", json.dumps({
+        name: resolve_font(name) for name in ("--font-sans", "--font-mono")
+    }))
     constants = "\n".join(
         line + "\n"
         for line in source.splitlines()
-        if line.strip().startswith(
-            ('const USAGE_REPORT_SANS = ', 'const USAGE_REPORT_MONO = ', 'const usageReportMeasureCtx = ')
-        )
+        if line.strip().startswith('const usageReportMeasureCtx = ')
     )
     return (
         prelude
@@ -1511,6 +1927,45 @@ def _card_audit(tmp_path: Path, extra: str = "") -> dict:
     source = _source()
     body = _card_harness(source) + CARD_FIXTURE + extra
     return json.loads(_run_node(tmp_path, "usage-report-cards.js", body))
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_share_card_fonts_follow_language_style_changes(tmp_path: Path) -> None:
+    report = _card_audit(tmp_path, """
+const out = [];
+for (const region of ['SC', 'JP', 'KR', 'SC']) {
+  fontTokensUnderTest = {
+    '--font-sans': '"Test Sans ' + region + '"',
+    '--font-mono': '"Test Mono ' + region + '"',
+  };
+  const card = usageReportBuildCard(busy, 'green', 'light');
+  out.push({
+    sans: usageReportCardFont(16, 700, false),
+    mono: usageReportCardFont(16, 500, true),
+    fonts: card.ops.filter(op => op.k === 'text').map(op => op.font),
+  });
+}
+process.stdout.write(JSON.stringify(out));
+""")
+    for region, snapshot in zip(("SC", "JP", "KR", "SC"), report):
+        assert snapshot["sans"] == f'700 16px "Test Sans {region}"'
+        assert snapshot["mono"] == f'500 16px "Test Mono {region}"'
+        assert snapshot["fonts"]
+        assert all(f' {region}"' in font for font in snapshot["fonts"])
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_share_cards_wait_for_current_font_loads_after_switching_language(tmp_path: Path) -> None:
+    body = "const document = { fonts: { ready: Promise.resolve('initial') } };\n"
+    body += _extract_js_function(_source(), "function usageReportCardFonts() {")
+    body += """
+const first = usageReportCardFonts();
+document.fonts.ready = Promise.resolve('new language');
+const second = usageReportCardFonts();
+process.stdout.write(JSON.stringify({ fresh: first !== second, current: second === document.fonts.ready }));
+"""
+    report = json.loads(_run_node(tmp_path, "share-font-ready.js", body))
+    assert report == {"fresh": True, "current": True}
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
@@ -1591,6 +2046,32 @@ process.stdout.write(JSON.stringify({
     assert report["hero"][0]["text"] == "60123.5M" and report["hero"][0]["fill"] == report["primary"]
     assert report["hero"][1]["text"] == " · $39412.55" and report["hero"][1]["fill"] == report["cost"]
     assert report["cost"] != report["primary"], "the cost must not read as more tokens"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_day_share_cards_use_one_date_and_omit_the_daily_map(tmp_path: Path) -> None:
+    report = _card_audit(
+        tmp_path,
+        """
+const day = { ...busy, period: 'day', range: { from: '2026-09-03', to: '2026-09-03' }, elapsed: 1,
+  cells: [{ date: '2026-09-03', tokens: 1e6, level: 7, future: false }] };
+const out = {};
+for (const tier of ['green', 'amber']) {
+  const card = usageReportBuildCard(day, tier, 'light');
+  out[tier] = {
+    overflow: card.used - card.budget,
+    texts: card.ops.filter((op) => op.k === 'text').map((op) => op.text),
+    heat: card.ops.filter((op) => op.k === 'rect' && op.w === op.h && op.w >= 8).length,
+  };
+}
+process.stdout.write(JSON.stringify(out));
+""",
+    )
+    for card in report.values():
+        assert card["overflow"] <= 0
+        assert card["heat"] == 0
+        assert card["texts"].count("2026-09-03") == 1
+        assert not any("2026-09-03 – 2026-09-03" in text for text in card["texts"])
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
@@ -1761,18 +2242,18 @@ process.stdout.write(JSON.stringify(out));
     assert report["year"]["rightEdge"] == pytest.approx(336, abs=0.01), "the year map no longer reaches the content edge"
 
 
-def test_the_page_drops_the_week_grid_and_centres_the_month() -> None:
-    """Same call on the report page: the week view's day map is one stretched
-    row of seven cells, so it is dropped (legend too); the month view takes
-    the Stats presentation -- fixed 24px squares, centred, never stretched."""
+def test_the_page_hides_the_day_and_week_card_and_centres_the_month() -> None:
+    """Short windows hide the whole daily card; months retain the square grid."""
     source = _source()
     heat = _extract_js_function(source, "function usageReportRenderHeat(model) {")
     week = heat[heat.index("model.period === 'week'") :]
     assert "usageReportLegend').replaceChildren()" in week
-    assert "usageReportRenderStreak(model);" in week
+    assert "usageReportStreak'), ''" in week
     assert week.index("return;") < heat.index("model.period !== 'year'") - heat.index("model.period === 'week'"), (
         "the week branch must return before the month/year grids are built"
     )
+    controls = _extract_js_function(source, "function usageReportRenderControls() {")
+    assert "getElementById('usageReportDaysPanel').hidden = ['day', 'week'].includes(usageReportState.period)" in controls
     month_rule = next(line for line in source.splitlines() if line.strip().startswith(".usage-report-month {"))
     assert "repeat(7, 24px)" in month_rule
     assert "width: max-content" in month_rule and "margin: 0 auto" in month_rule

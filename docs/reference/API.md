@@ -4,8 +4,10 @@ Tokdash exposes a local HTTP API (FastAPI) for querying token usage, costs, and 
 
 - **Default bind:** `127.0.0.1:55423`
 - **Start:** `tokdash serve --bind 127.0.0.1 --port 55423`
-- **OpenAPI schema:** `GET /openapi.json`
-- **Interactive docs:** `GET /docs` (Swagger UI), `GET /redoc`
+- **OpenAPI schema:** `GET /openapi.json` (feed it to any OpenAPI viewer or client generator)
+- **Interactive docs:** none. Tokdash doesn't serve `/docs` (Swagger UI) or `/redoc`, because
+  both load their scripts from a third-party CDN onto the dashboard's origin. This page is
+  the reference.
 
 All endpoints return JSON. The API is unauthenticated and intended to bind to loopback
 only. **State-changing requests are gated** (loopback bind + Host/Origin allowlist +
@@ -36,6 +38,12 @@ per-session token); see [`docs/SECURITY.md`](../SECURITY.md) and `PUT /api/prici
 | `GET` | `/api/sessions` | List sessions for a given tool |
 | `GET` | `/api/session` | Detailed turns for a single session |
 | `GET` | `/api/active-time` | Estimated active time across every session tool |
+| `GET` | `/api/output-speed` | Measured model throughput (per stream and combined), its trend over time, and within-model hour-of-day comparison |
+| `POST` | `/api/session-speeds` | Cache-only, selected-range speed summaries for up to 50 sessions |
+| `GET` | `/api/session-speed` | One session's response timeline and model-specific aggregates |
+| `POST` | `/api/output-speed/ensure` | Request timing builds for a bounded batch of sessions |
+| `GET` | `/api/output-speed/jobs/{job_id}` | Read one timing build's state and progress |
+| `GET` | `/api/output-speed/jobs/{job_id}/events` | Observe that timing build through server-sent events |
 | `GET` | `/api/codex/sessions` | Convenience wrapper: Codex sessions |
 | `GET` | `/api/codex/session` | Convenience wrapper: single Codex session |
 | `GET` | `/api/openclaw` | OpenClaw model breakdown |
@@ -435,6 +443,7 @@ Aggregated token usage and cost across all configured tools.
 | `total_tokens` | int | Total tokens across all tools |
 | `total_cost` | float | Total cost in USD |
 | `total_messages` | int | Total assistant/user message count |
+| `sparkline` | object\|null | Matching local-time buckets from the same aggregation as the totals; hourly for one calendar day, daily for 2–31 days, monthly for 32–366 days, `null` for longer or unsupported windows |
 | `by_tool` | object | Per-tool aggregates: `{ tool_name: { tokens, cost } }` |
 | `apps` | object | Per-app detailed breakdown (includes `tokens_in`, `tokens_out`, `tokens_cache`, `cost`, `messages`, `models[]`) |
 | `coding_apps` | object | Same shape as `apps`, filtered to coding tools (excludes browser/research tools) |
@@ -465,6 +474,32 @@ said. Tokens and cost usually rank models the same way over a week or a month,
 which is why the mismatch was easy to miss; over a year, where a cheaper model
 can out-work a pricier one, they diverge. For the spend ranking beyond the top
 five, sort `combined_models` client-side.
+
+`sparkline` has `{granularity: "hour"|"day"|"month", buckets: [...]}`. Each sparse bucket
+contains `key` (`YYYY-MM-DDTHH`, `YYYY-MM-DD`, or `YYYY-MM`), `tokens`, unrounded `cost`,
+`messages`, `input` (including cache writes), `cache` (cache reads), and `models`
+(canonical model name to tokens). It uses the headline's pricing and message
+counting rules. Model visibility is evaluated across the selected range: a
+tokenless bucket retains its fees and messages when that model has visible
+token usage elsewhere in the range. A missing bucket at or before `timestamp`
+means zero recorded usage; a future bucket is unknown. Hourly responses also provide `keys` listing
+the clock hours that exist on that date. Repeated hours are combined; an hour
+skipped by a clock change is unavailable. Cache rate is `cache / (input + cache)`;
+no prompt input is unavailable. The Overview's hourly cache-rate sparkline draws
+smooth dashed bridges across one or two known zero-prompt hours between measured
+anchors. This only changes the drawing: those hours remain unavailable, measured
+counts and the token-weighted headline stay unchanged, and unknown coverage,
+skipped clock hours, longer gaps and future hours remain blank.
+Monthly buckets contain only the selected portion
+of each local calendar month; a 366-day window has at most 13 buckets. The
+current month is partial, and leap days and clock changes retain real elapsed
+time for agent durations.
+The Overview fixes the Top Model for the whole range and plots that model's
+bucket tokens. These buckets do not depend on the annual Stats snapshot, and
+travel in the existing cached response without another API call or source scan.
+Displayed range costs use decimal half-even cent rounding after an eight-decimal
+normalization of binary summation noise. Model and bucket costs stay unrounded;
+changing the grouping resolution cannot flip an exact half-cent total.
 
 **Per-app object shape**
 
@@ -605,6 +640,227 @@ one.
 
 ---
 
+## `GET /api/output-speed`
+
+Reads the separate disposable `output_speed.sqlite3` timing cache. A cold or stale
+request queues a resource-bounded worker process and returns immediately with
+build metadata and any last-good rows. Native SQLite inputs remain read-only. It serves the standalone
+**Model output speed** page under **Intelligence**, using the dashboard's top date
+range controls. Opening Overview or Usage Report does not request this endpoint.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `view` | `across-models` | `across-models`, `trend` or `time-of-day` |
+| `period` | `year` | Standard period resolver, unless explicit dates are provided |
+| `date_from`, `date_to` | — | Inclusive date range; supply both as `YYYY-MM-DD` |
+| `source` | — | Optional comparison filter; required for `time-of-day` |
+| `model`, `measurement_kind`, `token_basis` | — | Required with `source` for `time-of-day` |
+| `bucket` | `auto` | `trend` only: `auto`, `hour`, `day`, `week`, `month` or `quarter`. A size the window does not offer falls back to `auto` |
+| `refresh` | `false` | Queue a lightweight usage/ownership synchronization followed by a timing build; avoids full usage-report aggregation |
+| `cache_only` | `false` | Read the published snapshot without queuing work, even if inputs changed; takes precedence over `refresh` |
+
+Across-model responses contain `rows`, grouped by source, normalized model, measurement kind
+and token basis, and `source_status` for tools with usage but no measured speed.
+Each measured row includes additive `speed_tokens`, `speed_ms`, `speed_calls`,
+`output_tok_per_s`, `eligible_calls`, `coverage`, measured timestamps and day counts.
+The rate is `1000 * SUM(speed_tokens) / SUM(speed_ms)`. Rates from individual calls
+are never averaged. Unmeasured throughput is absent or `null`, and empty hours are
+`null`, rather than zero.
+
+That rate is **per stream**: each response contributes its own duration, so responses
+running at the same time never add up. Every row also carries the **combined** rate,
+the output per wall-clock second while at least one of the row's responses was in
+flight: `busy_ms` is the union of the responses' intervals, `combined_tok_per_s` is
+`1000 * SUM(speed_tokens) / busy_ms`, `parallelism` is `SUM(speed_ms) / busy_ms` (so
+combined = per stream × parallelism), and `peak_in_flight` is the most responses
+running at one moment. A response's interval comes from its stored timestamp and
+duration: OpenCode, KiloCode and mimo store the start of their window, the other
+readers the end. Claude Code stores a request's first content-block write, which
+is neither end of a multi-block window, so it also records where each window
+opened and its interval is exact. `models` merges each normalized model across every harness that
+measured it, with `sources`, `measurement_kinds` and `token_bases`, summed
+`speed_tokens`/`speed_ms`/`speed_calls`, `eligible_calls` and `coverage`, and busy time
+taken over all of those harnesses at once. It has no pooled per-stream rate, because
+its harnesses may time responses in different ways.
+
+Trend responses lay the same responses out over time. `offered_buckets` lists the
+sizes the window supports, each with its bucket count: a size is offered when the
+window holds at least two buckets of it, no more than its cap (hourly 36, daily 45,
+weekly 40, monthly 36, quarterly 24) and at least its minimum span (1, 2, 8, 60 and
+184 days). `auto_bucket` is the finest offered size, and `granularity` is the size
+actually used. `buckets` lists them oldest first: Monday-start weeks, calendar months
+and quarters, each clipped to the window (`key`, `from`, `to`, plus `hour` when
+hourly). `series` has one entry per comparison key, with `per_stream`, `combined`,
+`parallelism` and `calls` arrays aligned to `buckets`. `model_series` holds the
+per-model merges, with no `per_stream` array. Each also has `hours`, the same arrays
+over the 24 local hours of the day, from the same read. A bucket's busy time is the
+union of its own responses; empty buckets are `null`.
+
+Each `series` entry, and its `hours`, also has `spread`: `p10`, `p25`, `p50`, `p75`
+and `p90` arrays aligned like `per_stream`. They are duration-weighted quantiles of
+the bucket's per-response rates, the rate below which that share of the bucket's
+generation time ran; `per_stream` is the duration-weighted mean of the same rates,
+so a heavy tail can put it outside its own p10–p90. Rates are taken at the 0.1 tok/s
+the page shows, which leaves each quantile exact at that precision.
+A bucket with fewer than `spread.min_responses` (30) responses has `null` in every
+quantile. `model_series` has no `spread`, since it has no per-stream rate. The
+top-level `spread` names the quantiles, the minimum and the weight (`duration`).
+
+Time-of-day responses include `selected_key`, 24 `hourly` buckets and four
+`six_hour` buckets, with the same totals and coverage fields. Buckets use the
+server's local clock. `days_with_measurements` counts distinct measured dates;
+the observed span does not imply complete logging between its endpoints.
+
+`measurement_generation` names the accounting generation of the latest
+publication. A model view is ready when no timed input has changed since it was
+read. Each input records the usage store's state for its file (or the identity of
+a native database) and the timing contract, so readiness does not depend on the
+requested dates or on usage that landed in other inputs. One model build serves
+every range, and its job is the same for every range. An input written within the
+last `TOKDASH_SPEED_SETTLE_SECONDS` keeps its last timing: the view stays ready,
+counts it in `deferred_inputs`, and reads it once it has gone quiet. `refresh=1`
+reads it at once. A newer reader or contract never waits. Session views keep
+their generation-pinned membership. `cache.publication_revision` increments on
+every publication that changed the published snapshot, including native updates
+at an unchanged accounting generation; a build with nothing to read keeps it.
+Numerators, durations, eligibility and cached
+measurement-date bounds are read in one transaction. `cache` contains `state`
+(`ready`, `building`, `stale`, `error`), `published_generation`,
+`target_usage_generation`, `updated_at`, `job_id`, `completed_inputs`,
+`total_inputs`, `pending_inputs` and `deferred_inputs`; input progress fields are
+present for jobs and count only the inputs the build reads, while cache-only reads
+contain freshness counts. For a model view `pending_inputs` counts changed inputs
+waiting to be read. Last-good rows may accompany stale/error
+states. Pending inputs are distinct from indexed responses lacking telemetry.
+Read failures retain the last successful snapshot; explicit refresh or an input
+change permits retry. An empty measurement range is never used to hide failure.
+
+Primary usage schema **13** removes timing columns/index and redundant cached
+session timing, and repairs legacy `_speed`, `output_speed` and flat timing fields
+in primary usage JSON in bounded batches. It also repairs already-migrated
+schema-12 caches without reparsing missing source logs or changing accounting
+fields. Ordinary ingestion and Overview do not open the derived database
+or invoke timing helpers. Existing primary pages become reusable; migration does
+not automatically compact the SQLite file. Timing reader versions are independent
+of pricing and ordinary parser identities. Derived schema is **4**, speed API
+contract **7**, and measurement contract **3**. Schema 4 adds `speed_start`, where a
+window opened, for readers whose stored timestamp is neither end of it (Claude
+Code); an existing cache gains the column in place, and the worker rebuilds the
+covering report index once at its next publication.
+Publication identity **3** retires older model-window completion markers without
+discarding valid timing rows. Date windows no longer certify anything, and the
+worker drops any a previous version left. An input that never recorded its usage
+state is read once more and records it, reusing its timing when the file is
+unchanged. Session builds check only their own inputs, so they leave a model view
+waiting for the rest; a source-filtered model build likewise reads only its source.
+
+The separate single-flight worker synchronizes lightweight file ownership before
+extracting whole contributing files. It uses canonical `(source, entry_key)`
+ownership, including forks and copies, and atomically replaces only changed
+contributing input populations and memberships. Unrelated published responses
+remain in place. Unchanged native full populations can satisfy a session request
+without staging their history; selected native overlays use the membership index.
+Session completion and errors remain scoped to their inputs. A mixed session batch
+still queues its unaffected sessions when another scope has a suppressed failure.
+For native batches, recorded `session:<id>` failure ownership applies only to that
+session, including when other sessions use the same harness. A `native:all`
+failure applies to that harness's database population. Final validation records
+the input being checked, its attempted signature and the pinned accounting
+generation; transaction/publication errors use job context instead.
+Native DB/WAL identities include path, device, inode, mtime and size;
+SHM is excluded. Native measurement bounds are cached with the index instead of
+scanning native JSON on range changes. A session refresh overlays only that
+session on any stale full native population; unrelated last-good rows and their
+original signatures remain pending. Removed databases retire their rows. A
+verified current full index can satisfy a session request; a stale full index
+cannot suppress that session's bounded read. A model build reads a changed native
+database once it has settled, and that full publication supersedes partial scopes. Native timing
+reader versions are 3; this invalidates only the disposable timing cache.
+Native freshness reconciliation shares one signature snapshot across a source's
+session scopes and filters unchanged unrelated scopes in SQL. Extraction and
+final publication validation still take fresh signatures; final validation
+shares each native source's check across its requested scopes. Model builds stage
+only the inputs they read.
+A scalar covering index serves model/hour
+aggregation without scattered reads of wide response identities. The worker
+upgrades existing derived caches during atomic publication; requests use a linear
+fallback until that index exists. Complete model/hour aggregates are memoized
+by publication revision, API/measurement contract, database instance, all filters,
+date range and local calendar identity. Identical concurrent reads coalesce. The
+process cache retains at most 32 results and 8 MiB of encoded results; freshness,
+pending inputs and failure/job metadata remain current separately. Speed connections
+have a bounded 16 MiB page cache; ordinary accounting does not allocate it. A
+changing input is discarded/pending or
+fails the build; it cannot donate timing to a different accounting snapshot.
+
+Manual speed refresh calls this endpoint with `refresh=1`, then follows its job;
+it does not call `/api/usage?refresh=1`. Date changes only read/ensure speed.
+Visible pages may subscribe to `GET /api/output-speed/jobs/{job_id}/events`
+(server-sent JSON status). `GET /api/output-speed/jobs/{job_id}` returns one status
+snapshot. Status reads validate the owning process creation identity and make a
+crashed worker terminal without another ensure request. A quiet live worker is
+never expired by a progress timeout. Windows uses non-destructive process queries;
+optional memory telemetry is unavailable where `resource` is absent. Navigation
+and hidden documents close subscriptions. There is no global
+speed polling or shared report-compute semaphore on this route.
+
+After a job ends, clients re-read with `cache_only=true`, including automatic
+hourly/group follow-up requests. This read has `job_id: null` and may show a
+stale pinned generation when logs advanced during the build. It never queues a
+replacement job, acquires a publication write lock, or creates an absent derived
+database. Last-good failures remain errors for the affected scope/version/signature;
+unrelated tools and sessions can read and build normally. Explicit opening, range switching
+and manual refresh can request work. Explorer terminal re-reads likewise use the
+cached batch endpoint without immediately re-ensuring the completed row set.
+The UI labels a stale snapshot with no active job as the last successful cached
+snapshot. Loading/pending labels identify active builds or unindexed timing;
+stale data is not presented as an indefinitely running request.
+
+SQLite publication locks on speed reads/build requests return a retryable **503**
+with a Tokdash `detail`, so clients retain route health and use bounded backoff.
+Other direct database request errors remain **500**; a lock is not an empty timing
+range. Worker failures retain their `error` cache metadata and last-good rows.
+
+| Reader | Measurement kind | Ownership and exclusions |
+|---|---|---|
+| Kimi | `server_decode` | Counted usage paired with its verified step-end decode duration; existing reader unchanged |
+| OMP | `post_first_token` | Same assistant record's duration minus TTFT; existing reader unchanged |
+| Codex | `response_window`, `request_window` | The response marker (`token_usage_record`, Codex 0.153+) owns the counted usage snapshot whose usage it matches. The snapshot's running total may trail the marker's by markers no snapshot carried, such as remote compactions. Its window runs from the first model item's start to the last model item's end, minus hosted web-search time inside it. Client tools run alongside the stream or between requests, so they take nothing from it. A response the marker cannot time, one that ends in a tool call or comes from a log before 0.153, is timed from line clocks instead: its output lines pair with the next counted snapshot by order. Where item clocks (0.147+) cover its start, it runs from its first model item's start to its last output line (`response_window`); otherwise it runs from the line that sent its request (`request_window`), so the wait for the first token is included. Each window records where it opened. Collapsed reasoning, unknown items, interruptions, compaction, stream retries, two responses before one snapshot, a first output more than 10 minutes after its request and rates above 3,000 tok/s are excluded |
+| dsh | `response_window` | First explicit assistant chunk to the matching usage chunk in the same stream, after the existing `(turn, step, attempt)` fold and seed boundary. Retry-contaminated steps and unfinished attempts are excluded |
+| Qwen Code | `post_first_token` | Direct assistant `parentUuid` to unique API-telemetry UUID in the same session/agent; duration minus TTFT. Token/model agreement validates the link. Missing telemetry is normal |
+| OpenCode, KiloCode, mimo | `request_window` | Message creation to completion; includes request overhead and awaited tools/retries. Explicit errors, abnormal finishes, absent completion and invalid clocks are excluded; imported mimo messages retain existing exclusion. MiMo `max` ensemble/replay messages are excluded because one clock covers several calls |
+| Claude Code | `post_first_token`, `request_window` | One API request is every assistant entry of one message id (one per content block, stamped when the block finished), timed once on the billed message-id row. When the first block is a thinking block carrying `thinkingDurationMs` (Claude Code 2.1.287+), the window runs from that block's stamp minus its duration (the first token) to the last block. Otherwise it runs from the sending user entry, the nearest prompt or tool result up the `parentUuid` chain past attachments, to the last block: prefill and transport are included, awaited tools are not. Requests without a `stop_reason` (interrupted, or subagent logs written before their final usage), API-error placeholders and `<synthetic>` rows are `incomplete`; a window through an API error or model fallback is `retry_contaminated`; one through another request's response, or a sender outside the transcript, is `ambiguous_pair` or `missing_timing` |
+
+Codex and dsh output counters already include reasoning, as do Claude Code's. Qwen's recorded total-token
+identity establishes whether its candidate counter includes reasoning or stores it
+separately; a positive reasoning counter without that proof stays unmeasured.
+The OpenCode family stores disjoint visible-output and reasoning counters, added once.
+These new readers use `output_including_reasoning`. Measurement kinds and token
+bases remain separate groups, even for the same model.
+
+`source_status` distinguishes `unsupported_reader`, `timing_unavailable`,
+`pending_reprocessing` and `read_failure`. A supported source can report pending
+rows alongside measured rows while a partial reprocess finishes; it is pending
+only for inputs with responses in the requested range, and `usage_rows` then
+counts those responses. An input whose file is gone settles instead of staying
+pending: it keeps its last read under the current reader version, or else its
+responses stay unmeasured. Unsupported readers do not imply that the harness
+itself records no timing. Other tools stay in the picker when their usage
+intersects the range.
+
+Across-model responses also carry `available_measurement_range`, the earliest
+and latest local dates with measured calls anywhere in the cache, or `null` when
+none exist. These bounds are independent of the selected range and do not imply
+continuous coverage. Empty views offer an explicit action to apply those dates
+to the shared top range. The comparison defaults to all measured tools; choosing
+a tool without measurements offers a return to all tools. Response contract and
+cache version: `7`; measurement contract: `3`; usage schema: `13`. Derived schema
+is `4` and publication identity `3`. The separate
+derived database uses a partial measured-timestamp index for these endpoint seeks,
+including the empty case. It does not scan native JSON for available bounds.
+
+---
+
 ## `GET /api/session`
 
 Detailed view of a single session including per-turn breakdown.
@@ -622,6 +878,7 @@ Detailed view of a single session including per-turn breakdown.
 |---|---|---|
 | `session` | object | Same shape as `latest_session` from `/api/sessions` |
 | `turns` | array | Per-turn token + cost records |
+| `speed_measurement` | object | Compatibility summary; ordinary detail has no timing measurements. Use `/api/session-speed` for indexed coverage and verdicts |
 
 **Turn object shape**
 
@@ -638,6 +895,75 @@ Detailed view of a single session including per-turn breakdown.
   "timestamp": "2026-05-20T16:02:07.514000+00:00"
 }
 ```
+
+Core turns retain `output_speed` as a nullable compatibility field, normally
+`null` on ordinary reads. They also expose `turn_key` where a verified stable
+identity exists, and `stream_id`; anonymous path-based identities stay private.
+Core detail and lists neither open the timing cache nor start builds. The UI
+loads the separate session-speed API independently, allowing core detail to paint
+before timing is available.
+
+---
+
+## `POST /api/session-speeds`
+
+Cached aggregation starts from indexed membership for each requested session;
+it does not scan all responses belonging to that tool for every visible row.
+
+Cache-only batch summaries for visible explorer rows. The JSON body contains
+`sessions: [{tool, session_id}]`, `date_from` and `date_to` (both required). At most
+50 keys are accepted and duplicates are collapsed. This read never creates the
+derived cache or launches a build. The ordinary `/api/sessions` payload is unchanged.
+
+The response has `schema_version: 1`, `scope: {kind: "date_range", from, to}`,
+`measurement_generation` and `sessions`. Each summary includes its tool/session,
+`cache_state`, `measurement_status`, nullable `output_tok_per_s`, `speed_calls`,
+`eligible_calls`, `coverage`, `partial_model_scope` and model/kind/basis `groups`.
+A scalar requires exactly one eligible normalized model and one measured method
+and token basis. Other eligible models make the result `mixed`, even if their
+timing is missing. Project rows have no scalar speed. Not-indexed/building,
+unsupported, indexed-without-timing, stale and read failures remain distinct.
+
+## `POST /api/output-speed/ensure`
+
+Queues or joins the same worker for a bounded visible-session batch. Body and
+limit match `/api/session-speeds`, with optional `refresh`. Returns `cache`
+metadata including `job_id`; already-ready sessions return without a new job.
+Only contributing physical inputs receive timing extraction. Core ownership
+synchronization precedes extraction. Collapsed panels dispatch neither batch
+reads nor builds. These structured POST operations carry no user configuration
+mutation and use the same server-routing authority as GET reads.
+
+## `GET /api/session-speed`
+
+Demand-built session timeline and model-specific aggregates. Required `tool` and
+`session_id`; optional paired `date_from`/`date_to` (default **Entire session**),
+`model`, `measurement_kind`, `token_basis`, `max_points` (1–1000, default 1000),
+`refresh` and `cache_only` (default false). Terminal reloads and their selected
+group follow-ups use `cache_only=true` with the same snapshot semantics as model
+speed. An absent cache returns pending coverage without creating a database.
+
+Returns `scope`, `cache`, `measurement_generation`, complete `summary`/`groups`,
+`series`, `total_responses`, `returned_points`, `bucketed` and `truncated`.
+Each point carries nullable stable `call_key`/`turn_key`, stream, recorded order
+and clock/basis, model/kind/basis, additive speed totals, rate, eligibility and
+verdict. Missing measurements and filtered groups remain explicit null gaps;
+`break_before` separates contributing-input boundaries. Concurrent streams stay
+separate. Recorded clocks are not inferred decode start/end times. Equal clocks
+do not deduplicate responses. Without clocks, clients label response order.
+The dashboard's elapsed axis starts at the earliest recorded response in the
+session timeline; those timestamp differences position points, never supply the
+rate denominator.
+
+Long timelines use ordered additive buckets, with min/max response rates and
+last recorded time. Consecutive null responses in one stream may collapse into
+one explicit gap marker with `gap_responses`; they never become a zero rate.
+Measured buckets never cross gaps, stream, model, method or token-basis
+boundaries. If boundaries exceed the point budget, truncation is explicit and
+aggregates still cover the full session. Bucket rate is a ratio of token/duration
+sums, never a mean of call rates. These points describe response averages, not a
+continuous within-response decoder trace. The modal reuses one Chart/Responses
+panel; the explorer uses the selected top-date range.
 
 ---
 
@@ -663,6 +989,7 @@ separate from `/api/usage` because it reads every supported session source.
 | `period` | string | Echo of the period param |
 | `active_ms` | int | Clock time any agent was working: overlapping sessions *and tools* count once |
 | `active_ms_sum` | int | Agent time: per-stream intervals added up, so concurrent agents count separately |
+| `sparkline` | object\|null | Same bounded hourly/daily/monthly bucket contract as `/api/usage`, with `{key, agent_ms}` rows whose sum equals `active_ms_sum`; intervals crossing a bucket boundary are split |
 | `comparison` | object\|null | The same two figures for the previous window and the percentage change: `{active_ms_prev, active_ms_sum_prev, active_ms_pct, active_ms_sum_pct}`. A percentage is `null` when the previous window is empty, and the whole object is `null` if that window could not be read |
 | `by_tool` | object | Per-tool `{tool_label, session_count, active_ms, active_ms_sum}` |
 | `unavailable_tools` | array | Tools that could not be read or summarized for this window (excluded from the totals, so the rest still answer) |

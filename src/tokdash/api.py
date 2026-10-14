@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import secrets
+import sqlite3
 import threading
 import time
 from collections import OrderedDict
@@ -29,11 +30,13 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import __version__
 from .assets import (
+    CJK_FONT_CSS_PLACEHOLDER,
     NO_CACHE_HEADERS,
     STATIC_DIR,
     SW_CACHE_NAME_PLACEHOLDER,
     VENDOR_CACHE_HEADERS,
     get_static_cache_name,
+    local_cjk_font_css,
 )
 from .compute import (
     compute_stats,
@@ -46,7 +49,17 @@ from .dateutil import parse_date_range
 from .insights import UnknownFacetError, compute_insights
 from .instance_identity import get_instance_id_async
 from .usage_store import SCHEMA_VERSION as USAGE_DB_SCHEMA_VERSION
-from .usage_store import UsageDatabaseSchemaTooNewError
+from .usage_store import (
+    MEASUREMENT_GENERATION_META_KEY,
+    UsageDatabaseNeedsMigrationError,
+    UsageDatabaseSchemaTooNewError,
+    UsageEntryStore,
+    raise_if_usage_db_incompatible,
+    read_stored_schema_version,
+    speed_columns_present,
+    usage_db_path,
+)
+from . import speed_report, speed_native
 from .sessions import (
     SESSION_TOOLS,
     get_active_time_data,
@@ -668,7 +681,28 @@ async def _lifespan(app: "FastAPI"):
             app.state.identity_warm.cancel()
 
 
-app = FastAPI(title="Tokdash", lifespan=_lifespan)
+# No Swagger UI or ReDoc pages. FastAPI loads both from cdn.jsdelivr.net (pinned to a
+# major version only, no integrity check), and a script served on this origin can read
+# the write token from /api/csrf-token like the dashboard does. /openapi.json stays: it
+# is plain JSON with no third-party code, and API.md is the human-readable reference.
+app = FastAPI(
+    title="Tokdash",
+    description="Local token & cost dashboard for AI coding tools",
+    version=__version__,
+    lifespan=_lifespan,
+    docs_url=None,
+    redoc_url=None,
+    contact={"name": "Jingbiao Mei"},
+    license_info={"name": "MIT"},
+    openapi_tags=[
+        {"name": "Pricing", "description": "Pricing database endpoints"},
+        {"name": "Usage", "description": "Token usage and cost endpoints"},
+        {"name": "Quota", "description": "Quota tracking and polling endpoints"},
+        {"name": "Sessions", "description": "Session explorer endpoints"},
+        {"name": "System", "description": "Health, version, and system endpoints"},
+        {"name": "Updater", "description": "Click-to-update and managed install endpoints"},
+    ],
+)
 # follow_symlink=True: pipx/uv installs the packaged static assets as symlinks into
 # the uv cache. Starlette defaults to follow_symlink=False, where lookup_path()
 # realpath-resolves each request out of STATIC_DIR, fails the commonpath guard, and
@@ -903,6 +937,10 @@ def _request_is_loopback_write(request: Request) -> bool:
 
 @app.middleware("http")
 async def _write_guard(request: Request, call_next):
+    # Structured read queries and disposable derived-cache builds have the same
+    # authority as their GET equivalents; they cannot modify user configuration.
+    if request.method.upper() == 'POST' and _request_route_path(request) in {'/api/session-speeds', '/api/output-speed/ensure'}:
+        return await call_next(request)
     if request.method.upper() in _MUTATING_METHODS and _dev_fixture_mode(request.app):
         return JSONResponse(
             {"detail": "Writes are disabled while a synthetic development fixture is active."},
@@ -1456,6 +1494,8 @@ def _cache_set_if_epoch(key: str, value: Any, epoch: int) -> bool:
     with _cache_guard:
         if epoch != _cache_epoch:
             return False
+        if isinstance(value, dict) and any(r.get("status") == "read_failure" for r in value.get("source_status", [])):
+            return False
         _cache[key] = (datetime.now().timestamp(), value)
         _cache.move_to_end(key)
         while len(_cache) > CACHE_MAX_ENTRIES:
@@ -1893,8 +1933,9 @@ def _pricing_cache_key(base: str) -> str:
     return f"{base}_pricing_{digest}"
 
 
-@app.get("/api/pricing-db")
+@app.get("/api/pricing-db", tags=["Pricing"])
 def get_pricing_db() -> Dict[str, Any]:
+    """Get the current pricing database snapshot."""
     if _dev_fixture_mode() == "dense":
         # The packaged baseline is part of the install, not user data, so the
         # editor still renders. The override under the data dir is neither read
@@ -1922,7 +1963,7 @@ def get_pricing_db() -> Dict[str, Any]:
     }
 
 
-@app.put("/api/pricing-db")
+@app.put("/api/pricing-db", tags=["Pricing"])
 def update_pricing_db(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         if "text" in payload:
@@ -1956,13 +1997,14 @@ def update_pricing_db(payload: Dict[str, Any]) -> Dict[str, Any]:
             "baseline_version": _baseline_version(), "source": "override", "data": data, "text": formatted}
 
 
-@app.get("/api/usage")
+@app.get("/api/usage", tags=["Usage"])
 def get_usage(
     period: str = "today",
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     refresh: bool = False,
 ) -> Dict[str, Any]:
+    """Get aggregated token usage and cost."""
     _validate_date_params(date_from, date_to)
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_usage
@@ -1990,8 +2032,9 @@ def get_usage(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/openclaw")
+@app.get("/api/openclaw", tags=["Usage"])
 def get_openclaw(period: str = "today") -> Dict[str, Any]:
+    """Get OpenClaw model breakdown."""
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_openclaw
 
@@ -2017,7 +2060,7 @@ def get_openclaw(period: str = "today") -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/tools")
+@app.get("/api/tools", tags=["Usage"])
 def get_tools(period: str = "today") -> Dict[str, Any]:
     """Coding tools usage (local parsers)."""
 
@@ -2046,7 +2089,7 @@ def get_tools(period: str = "today") -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/quota")
+@app.get("/api/quota", tags=["Quota"])
 def get_quota() -> Dict[str, Any]:
     """Subscription quota state from local files and stored snapshots.
 
@@ -2072,7 +2115,7 @@ def get_quota() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/quota/history")
+@app.get("/api/quota/history", tags=["Quota"])
 def get_quota_history(
     providers: Optional[str] = None,
     granularity: str = "hour",
@@ -2080,6 +2123,7 @@ def get_quota_history(
     end: Optional[int] = None,
     max_points: Optional[int] = 300,
 ) -> Dict[str, Any]:
+    """Get quota utilization and consumption history."""
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_quota_history
 
@@ -2140,7 +2184,7 @@ def _abort_quota_refresh() -> None:
         _quota_last_refresh_monotonic = _quota_prev_refresh_monotonic
 
 
-@app.post("/api/quota/consent")
+@app.post("/api/quota/consent", tags=["Quota"])
 def set_quota_consent(payload: Dict[str, Any]) -> Dict[str, Any]:
     from .sources.quota.config import set_quota_consent as _set_quota_consent
 
@@ -2149,7 +2193,7 @@ def set_quota_consent(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"consent": consent}
 
 
-@app.post("/api/quota/settings")
+@app.post("/api/quota/settings", tags=["Quota"])
 def set_quota_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Persist the quota master switch and poll interval (write-gated).
 
@@ -2183,8 +2227,9 @@ def set_quota_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
 # Read-only poll (no quota consumed): providers' usage endpoints are read-only, so this is
 # intentionally GET, not POST, so it works over Tailscale/WSL/any forward while genuine
 # config-write endpoints stay loopback-guarded.
-@app.get("/api/quota/refresh")
+@app.get("/api/quota/refresh", tags=["Quota"])
 def refresh_quota() -> Dict[str, Any]:
+    """Run an immediate quota poll."""
     if _dev_fixture_mode() == "dense":
         return {
             "snapshots": 14,
@@ -2225,8 +2270,9 @@ def refresh_quota() -> Dict[str, Any]:
     return {"snapshots": len(snapshots), "inserted": inserted}
 
 
-@app.get("/api/codex/sessions")
+@app.get("/api/codex/sessions", tags=["Sessions"])
 def get_codex_sessions(period: str = "today", include_review_sessions: Optional[bool] = None) -> Dict[str, Any]:
+    """List Codex sessions."""
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_sessions
 
@@ -2253,8 +2299,9 @@ def get_codex_sessions(period: str = "today", include_review_sessions: Optional[
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/codex/session")
+@app.get("/api/codex/session", tags=["Sessions"])
 def get_codex_session(session_id: str) -> Dict[str, Any]:
+    """Get a single Codex session."""
     try:
         if _dev_fixture_mode() == "dense":
             from .dev_fixtures import dense_session_detail
@@ -2269,7 +2316,7 @@ def get_codex_session(session_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/sessions")
+@app.get("/api/sessions", tags=["Sessions"])
 def get_sessions(
     tool: str,
     period: str = "today",
@@ -2277,6 +2324,7 @@ def get_sessions(
     date_to: Optional[str] = None,
     include_review_sessions: Optional[bool] = None,
 ) -> Dict[str, Any]:
+    """List sessions for a tool."""
     _validate_date_params(date_from, date_to)
     try:
         if _dev_fixture_mode() == "dense":
@@ -2316,7 +2364,7 @@ def get_sessions(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/active-time")
+@app.get("/api/active-time", tags=["Sessions"])
 def get_active_time(
     period: str = "today",
     date_from: Optional[str] = None,
@@ -2366,8 +2414,9 @@ def get_active_time(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/session")
+@app.get("/api/session", tags=["Sessions"])
 def get_session(tool: str, session_id: str) -> Dict[str, Any]:
+    """Get detailed turns for a single session."""
     try:
         if _dev_fixture_mode() == "dense":
             from .dev_fixtures import dense_session_detail
@@ -2382,6 +2431,185 @@ def get_session(tool: str, session_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/output-speed")
+def get_output_speed(
+    view: str = "across-models",
+    period: str = "year",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    source: Optional[str] = None,
+    model: Optional[str] = None,
+    measurement_kind: Optional[str] = None,
+    token_basis: Optional[str] = None,
+    bucket: str = "auto",
+    refresh: bool = False,
+    cache_only: bool = False,
+) -> Dict[str, Any]:
+    """Model output throughput, for the standalone Model output speed page.
+
+    Lazy by design: the report's normal load never calls this, and the dashboard
+    only requests it once the page is open. The views share one route so the
+    hourly and trend views cannot disagree with the table they summarise -- all
+    are built from the same snapshot. ``trend`` lays every comparison key and
+    every per-model merge out over ``bucket``-sized periods and the 24 local
+    hours, per stream and combined (see speed_trend).
+
+    A rate here is always SUM(matched output tokens) / SUM(matched duration),
+    never an average of per-call rates, so one long call counts for the time it
+    actually took. Absence is null throughout: an unmeasured model or an empty
+    hour has no rate rather than a zero one.
+    """
+    _validate_date_params(date_from, date_to)
+    if view not in ("across-models", "time-of-day", "trend"):
+        raise HTTPException(status_code=400, detail="unknown view")
+    from .speed_trend import BUCKETS
+    if bucket != "auto" and bucket not in BUCKETS:
+        raise HTTPException(status_code=400, detail="unknown bucket")
+    if _dev_fixture_mode() == "dense":
+        return {
+            "schema_version": speed_report.SPEED_CACHE_CONTRACT_VERSION,
+            "view": view,
+            "metric": "output_tok_per_s",
+            "aggregation": "sum_tokens_over_sum_duration",
+            "range": resolve_period(period, date_from, date_to),
+            "rows": [],
+            "models": [],
+            "series": [],
+            "model_series": [],
+            "source_status": [],
+            "note": "fixture_mode",
+            "available_measurement_range": None,
+        }
+    try:
+        if view == "time-of-day":
+            error = speed_report.validate_key(source or "", model or "", measurement_kind or "", token_basis or "")
+            if error:
+                raise HTTPException(status_code=400, detail=error)
+        resolved = resolve_period(period, date_from, date_to)
+        from .speed_cache import payload
+        return payload(str(resolved['from']), str(resolved['to']), view=view,
+                       source=source or '', model=model or '', kind=measurement_kind or '',
+                       basis=token_basis or '', bucket=bucket, refresh=refresh, cache_only=cache_only)
+    except UsageDatabaseSchemaTooNewError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except UsageDatabaseNeedsMigrationError as e:
+        # 503, unlike the too-new case above: this database does become readable
+        # on its own, once the sync that runs the migration chain gets its turn.
+        # 503 is the dashboard's retry signal, and fetchJsonWithRetry already
+        # backs off on it, so a report opened during a first-run migration fills
+        # itself in instead of showing the reader a server error.
+        raise HTTPException(status_code=503, detail=str(e))
+    except CacheBackpressureError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except sqlite3.OperationalError as exc:
+        _raise_speed_database_error(exc)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _raise_speed_database_error(exc: sqlite3.OperationalError):
+    # A publication writer is temporary backpressure, not a failed timing read.
+    code = getattr(exc, 'sqlite_errorcode', None)
+    if code is None:
+        # Python 3.10 lacks SQLite exception codes and SQLITE_BUSY/LOCKED.
+        # Match only SQLite's lock messages; unrelated SQL failures stay 500.
+        message = str(exc).strip().lower()
+        busy = any(message == prefix or message.startswith(prefix + ':') for prefix in (
+            'database is locked', 'database is busy',
+            'database table is locked', 'database schema is locked',
+        ))
+    else:
+        # Stable SQLite primary codes: BUSY=5, LOCKED=6, including extended codes.
+        busy = (code & 255) in (5, 6)
+    if busy:
+        raise HTTPException(status_code=503, detail="Timing cache publication is busy; retry shortly.") from exc
+    raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/output-speed/jobs/{job_id}")
+def get_output_speed_job(job_id: str):
+    from .speed_cache import job_status
+    try:
+        return job_status(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Timing job not found")
+
+
+@app.get("/api/output-speed/jobs/{job_id}/events")
+async def output_speed_job_events(job_id: str, request: Request):
+    """Visible-page subscription, independent of the report compute semaphore."""
+    import asyncio
+    from fastapi.responses import StreamingResponse
+    from .speed_cache import job_status
+    async def events():
+        previous = None
+        while not await request.is_disconnected():
+            try:
+                status = job_status(job_id)
+            except KeyError:
+                yield 'event: error\ndata: {"state":"error","error":"Timing job not found"}\n\n'
+                return
+            encoded = json.dumps(status, separators=(',', ':'))
+            if encoded != previous:
+                yield 'data: ' + encoded + '\n\n'
+                previous = encoded
+            if status['state'] in ('ready', 'error'):
+                return
+            await asyncio.sleep(1)
+    return StreamingResponse(events(), media_type='text/event-stream',
+                             headers={'Cache-Control':'no-store','X-Accel-Buffering':'no'})
+
+
+@app.post("/api/output-speed/ensure")
+def ensure_output_speed_sessions(body: Dict[str, Any]):
+    from .session_speed import ensure_sessions
+    try:
+        _validate_date_params(body.get('date_from'),body.get('date_to'))
+        if not body.get('date_from') or not body.get('date_to'):
+            raise ValueError('date_from and date_to are required')
+        return ensure_sessions(body.get('sessions',[]),body['date_from'],body['date_to'],bool(body.get('refresh')))
+    except ValueError as exc:
+        raise HTTPException(status_code=400,detail=str(exc))
+    except sqlite3.OperationalError as exc:
+        _raise_speed_database_error(exc)
+
+
+@app.post("/api/session-speeds")
+def get_session_speeds(body: Dict[str, Any]):
+    from .session_speed import batch_summaries
+    try:
+        _validate_date_params(body.get('date_from'), body.get('date_to'))
+        if not body.get('date_from') or not body.get('date_to'):
+            raise ValueError('date_from and date_to are required')
+        return batch_summaries(body.get('sessions', []), body['date_from'], body['date_to'])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except sqlite3.OperationalError as exc:
+        _raise_speed_database_error(exc)
+
+
+@app.get("/api/session-speed")
+def get_session_speed(tool: str, session_id: str, date_from: Optional[str] = None,
+                      date_to: Optional[str] = None, model: Optional[str] = None,
+                      measurement_kind: Optional[str] = None, token_basis: Optional[str] = None,
+                      max_points: int = 1000, refresh: bool = False, cache_only: bool = False):
+    from .session_speed import timeline
+    try:
+        _validate_date_params(date_from,date_to)
+        return timeline(tool,session_id,date_from=date_from,date_to=date_to,model=model,
+                        kind=measurement_kind,basis=token_basis,max_points=max_points,refresh=refresh,cache_only=cache_only)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except sqlite3.OperationalError as exc:
+        _raise_speed_database_error(exc)
+
+
 # NOTE: the handlers below are intentionally ``async def`` so they run on the event
 # loop and never need an AnyIO worker token. Under heavy load every worker may be
 # busy in a multi-second compute; keeping these (and /health) async means the
@@ -2391,7 +2619,11 @@ def _render_dashboard_html(base_path: str) -> str:
     html_path = STATIC_DIR / "index.html"
     if not html_path.exists():
         return "<h1>Dashboard not found</h1><p>Please create static/index.html</p>"
-    return html_path.read_text(encoding="utf-8").replace(BASE_PATH_PLACEHOLDER, base_path)
+    return (
+        html_path.read_text(encoding="utf-8")
+        .replace(BASE_PATH_PLACEHOLDER, base_path)
+        .replace(CJK_FONT_CSS_PLACEHOLDER, local_cjk_font_css())
+    )
 
 
 def _render_manifest(base_path: str) -> str:
@@ -2449,8 +2681,9 @@ async def serve_service_worker(request: Request):
     )
 
 
-@app.get("/api/stats")
+@app.get("/api/stats", tags=["Usage"])
 def get_stats(year: Optional[int] = None) -> Dict[str, Any]:
+    """Get annual stats aggregation."""
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_stats
 
@@ -2471,7 +2704,7 @@ def get_stats(year: Optional[int] = None) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/insights")
+@app.get("/api/insights", tags=["Usage"])
 def get_insights(
     period: str = "year",
     date_from: Optional[str] = None,
@@ -2537,8 +2770,9 @@ def get_insights(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/activity-insights")
+@app.get("/api/activity-insights", tags=["Usage"])
 def get_activity_insights(refresh: bool = False) -> dict[str, Any]:
+    """Get Codex activity insights."""
     if _dev_fixture_mode() == "dense":
         from .dev_fixtures import dense_activity_insights
 
@@ -2561,7 +2795,7 @@ def get_activity_insights(refresh: bool = False) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/health")
+@app.get("/health", tags=["System"])
 async def health_check():
     # async so the liveness probe answers even when every worker thread is busy in a
     # heavy compute — this is what makes an external /health watchdog reliable (P4).
@@ -2599,7 +2833,7 @@ def _read_install_manifest() -> Dict[str, Any]:
         return {}
 
 
-@app.get("/api/version")
+@app.get("/api/version", tags=["System"])
 async def get_version() -> Dict[str, Any]:
     # Local-only version info; async to stay responsive like /health. Provenance
     # fields come from the setup manifest when present (Phase 1+), else None.
@@ -2635,7 +2869,7 @@ def _update_check_enabled() -> bool:
         return False
 
 
-@app.post("/api/update-check/consent")
+@app.post("/api/update-check/consent", tags=["System"])
 async def update_check_consent() -> Dict[str, Any]:
     # Write-gated by _write_guard (loopback + Host/Origin + token). One-time opt-in that
     # persists consent to config.json so the dashboard can offer update checks (§14).
@@ -2652,7 +2886,7 @@ async def update_check_consent() -> Dict[str, Any]:
 # (§14). An upgrade is still never a web-triggered shell: the one web-traversable apply
 # (the §15 amendment) is the authenticated /api/update/* family below, which runs only the
 # fixed self-update of a verified managed installation through the independent helper.
-@app.get("/api/update-check")
+@app.get("/api/update-check", tags=["System"])
 async def run_update_check() -> Dict[str, Any]:
     from .onboard import updatecheck
 
@@ -2661,7 +2895,7 @@ async def run_update_check() -> Dict[str, Any]:
     return {"enabled": True, **updatecheck.check(__version__)}
 
 
-@app.get("/api/csrf-token")
+@app.get("/api/csrf-token", tags=["System"])
 async def get_csrf_token(request: Request) -> Dict[str, str]:
     # The dashboard fetches this right before a write and echoes it back as
     # X-Tokdash-Token. The default CORS regex permits any localhost *port*, so we cannot
@@ -2716,8 +2950,9 @@ def _update_request_class(request: Request) -> str:
 # coroutines those would block the event loop — stalling every other request
 # including /health, which the browser recovery loop itself polls. Plain ``def``
 # routes run in Starlette's threadpool instead.
-@app.get("/api/update/capability")
+@app.get("/api/update/capability", tags=["Updater"])
 def update_capability(request: Request, want_csrf: bool = False) -> Dict[str, Any]:
+    """Get managed update capability."""
     from .onboard import update_auth, update_control
 
     plane = _update_request_class(request)
@@ -2746,7 +2981,7 @@ def update_capability(request: Request, want_csrf: bool = False) -> Dict[str, An
     return payload
 
 
-@app.post("/api/update/enroll")
+@app.post("/api/update/enroll", tags=["Updater"])
 def update_enroll(request: Request, payload: Dict[str, Any] = None) -> JSONResponse:
     from .onboard import update_auth
 
@@ -2780,7 +3015,7 @@ def update_enroll(request: Request, payload: Dict[str, Any] = None) -> JSONRespo
     return response
 
 
-@app.post("/api/update/start")
+@app.post("/api/update/start", tags=["Updater"])
 def update_start(request: Request, payload: Dict[str, Any] = None) -> JSONResponse:
     from .onboard import update_control
 
@@ -2798,8 +3033,9 @@ def update_start(request: Request, payload: Dict[str, Any] = None) -> JSONRespon
     return JSONResponse(body, status_code=status)
 
 
-@app.get("/api/update/status")
+@app.get("/api/update/status", tags=["Updater"])
 def update_status(request: Request, job: Optional[str] = None) -> Dict[str, Any]:
+    """Get managed update status."""
     from .onboard import update_auth, update_jobs
 
     plane = _update_request_class(request)
