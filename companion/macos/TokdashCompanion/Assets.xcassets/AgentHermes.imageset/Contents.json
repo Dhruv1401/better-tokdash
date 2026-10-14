@@ -4,17 +4,6 @@
       "filename": "hermes.png",
       "idiom": "mac",
       "scale": "1x"
-    },
-    {
-      "appearances": [
-        {
-          "appearance": "luminosity",
-          "value": "dark"
-        }
-      ],
-      "filename": "hermes-dark.png",
-      "idiom": "mac",
-      "scale": "1x"
     }
   ],
   "info": {

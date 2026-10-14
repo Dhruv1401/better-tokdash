@@ -152,6 +152,12 @@ tokdash db resync --pretty
 tokdash db watch --pretty
 ```
 
+What each command does:
+
+- `tokdash db sync` — incrementally re-reads the source logs and indexes new or changed rows. This is the right first step when entries look missing.
+- `tokdash db repair` — recomputes derived counters and checkpoints the WAL. It does **not** repair physical SQLite corruption; if SQLite's integrity check fails, run a full resync instead.
+- `tokdash db resync` — rebuilds the database from the source logs. It can drop durable rows whose logs have since been pruned, so use it only when `db sync` cannot recover the missing entries.
+
 ## Quota polling
 
 Quota snapshots live in the usage DB and feed the history charts; boundary

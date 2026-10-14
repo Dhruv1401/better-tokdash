@@ -1,3 +1,8 @@
+"""Tests for OpenClaw session usage parsing and token accounting.
+
+Covers cacheWrite token handling, session file discovery and archive filtering,
+message ID deduplication, inner timestamp date filtering, and zero-token rows.
+"""
 import json
 from datetime import datetime, timezone
 from pathlib import Path

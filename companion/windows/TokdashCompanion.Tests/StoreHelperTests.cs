@@ -289,7 +289,7 @@ public class StoreHelperTests
         // as a PNG, and every darkInvert mark also ships its pre-inverted {name}-dark copy.
         foreach (var asset in packaged)
             Assert.IsTrue(File.Exists(Path.Combine(agents, $"{asset}.png")), $"Assets/Agents/{asset}.png missing");
-        foreach (var asset in new[] { "codex", "grok", "zcode", "cline", "hermes", "omp", "zed", "cursor" })
+        foreach (var asset in new[] { "codex", "grok", "zcode", "cline", "omp", "zed", "cursor" })
             Assert.IsTrue(File.Exists(Path.Combine(agents, $"{asset}-dark.png")), $"Assets/Agents/{asset}-dark.png missing");
         Assert.IsFalse(File.Exists(Path.Combine(agents, "mimo.png")),
             "the MiMo wordmark must not sit unreferenced where it could be mistaken for MiniMax's mark");
