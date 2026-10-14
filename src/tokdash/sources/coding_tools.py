@@ -3767,10 +3767,13 @@ class HermesParser(BaseParser):
                                 m_first = m_data.get("first_seen")
                                 entry_ts = ts_ms
                                 if m_first is not None:
-                                    fs = float(m_first)
-                                    entry_ts = int(fs * 1000) if fs < 1e12 else int(fs)
+                                    try:
+                                        fs = float(m_first)
+                                        entry_ts = int(fs * 1000) if fs < 1e12 else int(fs)
+                                    except (ValueError, TypeError):
+                                        pass
 
-                                out.append({
+                                entry = {
                                     "source": self.source_name,
                                     "model": model_name,
                                     "provider": provider,
@@ -3781,10 +3784,12 @@ class HermesParser(BaseParser):
                                     "reasoning": m_reasoning,
                                     "cost": cost,
                                     "timestamp": entry_ts,
-                                    "messageCount": msg_count_val if model_idx == 0 else 0,
                                     "entry_id": f"hermes:{row_id}:{model_name}",
                                     "_billing": billing,
-                                })
+                                }
+                                if model_idx == 0:
+                                    entry["messageCount"] = msg_count_val
+                                out.append(entry)
                         else:
                             input_t = self._i(input_t)
                             output_t = self._i(output_t)

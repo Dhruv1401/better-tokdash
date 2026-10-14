@@ -3394,7 +3394,10 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                                 if rc == 0.0 and u_provider:
                                     rc = _PRICING_DB.get_cost(u_model, u_in_v, u_out_v, u_cr_v, u_cw_v)
                                 m_entry["cost"] = m_entry.get("cost", 0.0) + rc
-                            fs = float(u_first) if u_first is not None else None
+                            try:
+                                fs = float(u_first) if u_first is not None else None
+                            except (ValueError, TypeError):
+                                fs = None
                             if fs is not None:
                                 fs_ms = int(fs * 1000) if fs < 1e12 else int(fs)
                                 if m_entry["first_seen"] is None or fs_ms < m_entry["first_seen"]:

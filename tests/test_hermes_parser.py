@@ -435,7 +435,7 @@ def test_hermes_parser_multi_model_session(monkeypatch, tmp_path):
     assert g["cacheWrite"] == 25
     assert g["reasoning"] == 10
     assert abs(g["cost"] - 0.010) < 1e-9
-    assert g["messageCount"] == 0  # Only first model gets session-level count
+    assert "messageCount" not in g  # Non-first models omit messageCount
     assert g["entry_id"] == "hermes:sess-multi:gpt-4o"
 
 

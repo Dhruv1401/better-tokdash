@@ -818,6 +818,7 @@ def usage_billing_pricing(
     """Billing inputs for a row Tokdash prices itself."""
     record: dict[str, Any] = {
         "kind": "pricing",
+        "rule": "split-cache-write",
         "models": [str(model or "") for model in models],
         "input": int(input_tokens or 0),
         "output": int(output_tokens or 0),
@@ -953,7 +954,7 @@ def _entry_for_storage(entry: dict[str, Any]) -> Optional[dict[str, Any]]:
     raw["reasoning"] = _int_field(raw, "reasoning")
     raw["cost"] = _float_field(raw, "cost")
     raw["timestamp"] = timestamp
-    raw["messageCount"] = _int_field(raw, "messageCount") or 0
+    raw["messageCount"] = _int_field(raw, "messageCount") or 1
     raw["entry_key"] = _entry_key(raw)
     raw.pop(SPEED_ENTRY_KEY, None)
     raw.pop('output_speed', None)
