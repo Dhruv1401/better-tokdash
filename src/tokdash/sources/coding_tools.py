@@ -3622,7 +3622,6 @@ class HermesParser(BaseParser):
                                cache_read_tokens, cache_write_tokens,
                                reasoning_tokens, estimated_cost_usd, actual_cost_usd
                         FROM sessions
-                        WHERE model IS NOT NULL AND TRIM(model) != ''
                         """
                     )
                     rows = cur.fetchall()
@@ -3749,6 +3748,13 @@ class HermesParser(BaseParser):
                                         cache_write=m_cache_w,
                                     )
 
+                                # Use first_seen as timestamp when available, fall back to session start
+                                m_first = m_data.get("first_seen")
+                                entry_ts = ts_ms
+                                if m_first is not None:
+                                    fs = float(m_first)
+                                    entry_ts = int(fs * 1000) if fs < 1e12 else int(fs)
+
                                 out.append({
                                     "source": self.source_name,
                                     "model": model_name,
@@ -3759,7 +3765,7 @@ class HermesParser(BaseParser):
                                     "cacheWrite": m_cache_w,
                                     "reasoning": m_reasoning,
                                     "cost": cost,
-                                    "timestamp": ts_ms,
+                                    "timestamp": entry_ts,
                                     "messageCount": msg_count_val if model_idx == 0 else 0,
                                     "entry_id": f"hermes:{row_id}:{model_name}",
                                     "_billing": billing,

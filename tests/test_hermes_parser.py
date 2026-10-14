@@ -318,7 +318,8 @@ def test_hermes_parser_default_dir(monkeypatch, tmp_path):
 
 
 def test_hermes_parser_skip_null_model(monkeypatch, tmp_path):
-    """Rows with NULL or empty model are excluded by SQL WHERE clause."""
+    """Rows with NULL or empty model are now included (fallback path).
+    They produce entries with model='unknown'."""
     hermes_dir = tmp_path / ".hermes"
     hermes_dir.mkdir()
     rows = [
@@ -333,8 +334,12 @@ def test_hermes_parser_skip_null_model(monkeypatch, tmp_path):
 
     parser = HermesParser(PricingDatabase())
     entries = parser.collect(None, None)
-    assert len(entries) == 1
-    assert entries[0]["model"] == "MiniMax-M2.7"
+    assert len(entries) == 2
+    by_id = {e["entry_id"]: e for e in entries}
+    assert "hermes:good" in by_id
+    assert by_id["hermes:good"]["model"] == "MiniMax-M2.7"
+    assert "hermes:null-model" in by_id
+    assert by_id["hermes:null-model"]["model"] == "unknown"
 
 
 def test_hermes_parser_started_at_ms_passthrough(monkeypatch, tmp_path):

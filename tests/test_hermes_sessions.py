@@ -328,8 +328,8 @@ def test_parity_with_usage_parser(monkeypatch, tmp_path):
         assert h["cost"] == pytest.approx(p["cost"], abs=1e-12), (since_ms, until_ms)
 
     raw = _hermes_sessions()
-    # WHERE drops the model='' and NULL rows; each surviving row keeps one turn.
-    assert {s["session_id"] for s in raw.values()} == {"p-1", "p-2", "p-3", "p-4"}
+    # NULL/empty model rows are now included via the fallback path.
+    assert {s["session_id"] for s in raw.values()} == {"p-1", "p-2", "p-3", "p-4", "p-5", "p-6"}
     assert raw["p-1"]["display_name"] == "Priced row"  # title beats preview
     assert raw["p-3"]["display_name"] == "First prompt of p3"  # NULL title -> preview
     # The ms-branch timestamp: 1779400000123.0 seconds is > 1e12 -> used as ms.

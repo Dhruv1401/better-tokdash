@@ -3324,7 +3324,6 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                            { 'message_count' if has_msgs else "0" } as msgs_col,
                            { 'profile_name' if has_profile else "'default'" } as profile_col
                     FROM sessions
-                    WHERE model IS NOT NULL AND TRIM(model) != ''
                 """
                 cur.execute(query)
                 rows = cur.fetchall()
@@ -3442,9 +3441,16 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                                         else None
                                     ),
                                 )
+                                # Use first_seen as timestamp when available, fall back to session start
+                                m_first = m_data.get("first_seen")
+                                turn_ts = ts_ms
+                                if m_first is not None:
+                                    fs = float(m_first)
+                                    turn_ts = int(fs * 1000) if fs < 1e12 else int(fs)
+
                                 turn = _build_turn(
                                     turn_index=turn_idx,
-                                    timestamp_ms=ts_ms,
+                                    timestamp_ms=turn_ts,
                                     model=model_name,
                                     tokens_in=m_in + m_cw,
                                     tokens_cache=m_cr,
