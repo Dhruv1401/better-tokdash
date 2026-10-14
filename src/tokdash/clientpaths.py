@@ -1136,6 +1136,7 @@ def _roo_task_dirs() -> List[Path]:
     entry at all, so index-driven discovery loses a task that still cost money.
     """
     out: List[Path] = []
+    seen_ids: set = set()
     for root in roo_storage_roots():
         try:
             tasks_dir = root / "tasks"
@@ -1144,7 +1145,9 @@ def _roo_task_dirs() -> List[Path]:
         except OSError:
             continue
         for task in sorted(found):
-            if task not in out:
+            task_id = task.name
+            if task_id not in seen_ids:
+                seen_ids.add(task_id)
                 out.append(task)
     return out
 
