@@ -51,6 +51,9 @@ per-session token); see [`docs/SECURITY.md`](../SECURITY.md) and `PUT /api/prici
 | `GET` | `/api/insights` | Fine-grained analytics (hour-of-day, weekday, heatmap, projects, streaks) |
 | `GET` | `/api/pricing-db` | Current pricing database snapshot |
 | `PUT` | `/api/pricing-db` | Update the pricing database (write-gated, requires token) |
+| `GET` | `/api/activity-insights` | Codex activity insights |
+| `GET` | `/manifest.webmanifest` | PWA web manifest |
+| `GET` | `/sw.js` | Service worker JavaScript |
 | `GET` | `/` | Web dashboard (HTML) |
 
 ---
@@ -1242,6 +1245,120 @@ curl -s -X PUT http://127.0.0.1:55423/api/pricing-db \
   -H "Content-Type: application/json" -H "X-Tokdash-Token: $TOKEN" \
   -d '{"data": { ... }}'
 ```
+
+---
+
+## `GET /api/activity-insights`
+
+Returns Codex activity insights derived from usage data.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `refresh` | `bool` | `false` | Force a fresh computation, bypassing the cache |
+
+**Response:** `application/json`
+
+```json
+{
+  "scope": {"tool": "codex", "local": true, "primary_only": true},
+  "recorded_chats": {
+    "value": 42,
+    "coverage": {
+      "primary_files": 100,
+      "files_with_session_id": 95,
+      "legacy_unavailable_records": 5
+    }
+  },
+  "reasoning": {
+    "most_used": {"effort": "high", "count": 10, "share": 0.666667},
+    "distribution": [
+      {"effort": "high", "count": 10, "share": 0.666667},
+      {"effort": "medium", "count": 5, "share": 0.333333}
+    ],
+    "coverage": {
+      "identified_turns": 20,
+      "known_effort_turns": 15,
+      "ambiguous_turns": 3,
+      "excluded_records": 2
+    }
+  },
+  "tools": {
+    "total_calls": 90,
+    "most_used": {"name": "read_file", "count": 50, "share": 0.625},
+    "distribution": [
+      {"name": "read_file", "count": 50, "share": 0.625},
+      {"name": "write", "count": 30, "share": 0.375}
+    ],
+    "coverage": {
+      "named_calls": 80,
+      "ambiguous_name_calls": 10,
+      "excluded_records": 5
+    }
+  },
+  "timestamp": "2026-10-06T12:00:00+00:00"
+}
+```
+
+**Caching:** The cache key is scoped to the day. Entries expire on the normal `TOKDASH_CACHE_TTL` (600 seconds by default). Pass `refresh=true` to bypass.
+
+---
+
+## `GET /manifest.webmanifest`
+
+Returns the PWA web manifest for installing Tokdash as a progressive web app.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `base` | `string` | none | Optional public URL prefix (e.g. `/tokdash`). The dashboard passes `?base=/tokdash` behind Tailscale Serve. The prefix can also come from `X-Forwarded-Prefix` / `X-Script-Name` or `TOKDASH_PUBLIC_BASE_PATH`. |
+
+**Response:** `application/manifest+json`
+
+```json
+{
+  "name": "Tokdash",
+  "short_name": "Tokdash",
+  "description": "OpenClaw + coding tools usage, cost, and activity.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#1E40AF",
+  "icons": [
+    {
+      "src": "/static/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
+```
+
+Note: `start_url`, `scope`, and icon `src` paths are rewritten to the public base path (e.g. `/tokdash/`) when Tokdash is served behind a proxy that strips the prefix.
+
+---
+
+## `GET /sw.js`
+
+Returns the service worker JavaScript for offline caching and PWA functionality.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `base` | `string` | none | Optional public URL prefix (e.g. `/tokdash`). The dashboard passes `?base=/tokdash` behind Tailscale Serve. The prefix can also come from `X-Forwarded-Prefix` / `X-Script-Name` or `TOKDASH_PUBLIC_BASE_PATH`. |
+
+**Response:** `application/javascript`
 
 ---
 
