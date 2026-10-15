@@ -110,7 +110,9 @@ class SourceSyncCapability:
     # path, matching the parsers' own source-wide dedup — and re-parses
     # surviving files when the owner is removed or rewritten. See
     # UsageEntryStore.sync_files. An explicit file-context dedup_priority may
-    # precede that ordering (Pi originals before descendant copies).
+    # precede that ordering (Pi originals before descendant copies). Parsers
+    # with a cross_file_entry_supersedes callback retain per-file candidates
+    # and fold them in path order instead (Claude's streaming snapshots).
     cross_file_stable_keys: bool = False
     reason: str = ""
 
@@ -1587,6 +1589,7 @@ class ClaudeParser(BaseParser):
     sync_capability = SourceSyncCapability(
         mode="file_replace",
         session_store=True,
+        cross_file_stable_keys=True,
         reason="Claude streaming snapshots require full-file dedup context; tail append is unsafe.",
     )
     # 1: assistant usage rows keyed on message id, streaming snapshots
@@ -1599,7 +1602,24 @@ class ClaudeParser(BaseParser):
     #    output yet -- dropping ~20% of all output tokens.
     # 3: rows carry the session reader's session id, so the timing cache can
     #    tell when every input of a session has been read.
-    persistent_parser_version = 3
+    # 4: per-file candidates preserve the source-wide streaming winner when
+    #    copied message ids occur in several transcripts.
+    persistent_parser_version = 4
+
+    @staticmethod
+    def cross_file_entry_supersedes(entry: Dict[str, Any], best: Dict[str, Any]) -> bool:
+        """Fold file-local winners in path order, just like the live scan.
+
+        A file that reclassifies usage at its maximum total must replace an
+        earlier file even if its final split returns to that earlier split.
+        Keeping this bit makes a file-local reduction equivalent to reading
+        every streamed write in the source-wide scan.
+        """
+        buckets = tuple(entry.get(key, 0) for key in ("input", "output", "cacheRead", "cacheWrite"))
+        best_buckets = tuple(best.get(key, 0) for key in ("input", "output", "cacheRead", "cacheWrite"))
+        return claude_usage_supersedes(sum(buckets), buckets, sum(best_buckets), best_buckets) or (
+            sum(buckets) == sum(best_buckets) and bool(entry.get("_dedup", {}).get("reclassified"))
+        )
 
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)
@@ -1644,10 +1664,11 @@ class ClaudeParser(BaseParser):
         # nothing on disk carries the real count, so none is estimated here.
         #
         # See claude_usage_supersedes for the tie rules.
-        best_by_message_id: Dict[str, Tuple[int, ClaudeUsageBuckets, Dict[str, Any]]] = {}
+        best_by_message_id: Dict[str, Dict[str, Any]] = {}
         measure_speed = timing_enabled()
 
         for path_str, _, _ in self._file_signatures():
+            file_best: Dict[str, Tuple[int, ClaudeUsageBuckets, Dict[str, Any]]] = {}
             session_file = Path(path_str)
             # sessions._parse_claude_session_file's rule: the last sessionId, else the stem.
             session_id = session_file.stem
@@ -1692,7 +1713,7 @@ class ClaudeParser(BaseParser):
                     # A write that cannot supersede this id's best is not worth
                     # pricing, so bail before building the entry.
                     if msg_id:
-                        best = best_by_message_id.get(msg_id)
+                        best = file_best.get(msg_id)
                         if best is not None and not claude_usage_supersedes(
                             total_t, buckets, best[0], best[1]
                         ):
@@ -1719,6 +1740,8 @@ class ClaudeParser(BaseParser):
                             cache_write=cache_w,
                         ),
                     }
+                    if msg_id and best is not None and total_t == best[0]:
+                        entry["_dedup"] = {"reclassified": True}
                     created.append((entry, msg_id))
                     if association is not None:
                         entry["_stream_id"] = str(obj.get("agentId") or "").strip() or "main"
@@ -1726,7 +1749,7 @@ class ClaudeParser(BaseParser):
                         out.append(entry)
                         continue
 
-                    best_by_message_id[msg_id] = (total_t, buckets, entry)
+                    file_best[msg_id] = (total_t, buckets, entry)
             except Exception:
                 pass
             for entry, msg_id in created:
@@ -1735,8 +1758,12 @@ class ClaudeParser(BaseParser):
                     entry["_speed"] = association.resolve(msg_id, entry["output"])
                     if entry["_speed"]["speed_calls"]:
                         entry["_speed_start"] = association.opened[msg_id]
+            for msg_id, (_total, _buckets, entry) in file_best.items():
+                best = best_by_message_id.get(msg_id)
+                if best is None or self.cross_file_entry_supersedes(entry, best):
+                    best_by_message_id[msg_id] = entry
 
-        out.extend(entry for _, _, entry in best_by_message_id.values())
+        out.extend(best_by_message_id.values())
         out.sort(key=lambda entry: int(entry.get("timestamp", 0) or 0))
         return out
 
@@ -7720,6 +7747,7 @@ class CrushParser(BaseParser):
     source_name = "crush"
     sync_capability = SourceSyncCapability(
         mode="file_replace",
+        cross_file_stable_keys=True,
         reason=(
             "One WAL-mode crush.db per data dir; a session row is a mutable "
             "snapshot that Crush rewrites in place, so each sync replaces the "
@@ -7729,7 +7757,9 @@ class CrushParser(BaseParser):
     # 1: one entry per session with non-zero tokens (sub-agents included),
     #    model from the last assistant message, seconds timestamps,
     #    pricing-DB cost only (sessions.cost ignored).
-    persistent_parser_version = 1
+    # 2: copied sessions across project databases bill once, owned by the
+    #    earliest (timestamp, file_path), matching the usage store.
+    persistent_parser_version = 2
 
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)
@@ -7814,7 +7844,7 @@ class CrushParser(BaseParser):
         return out
 
     def _parse_all(self) -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
+        winners: Dict[str, Tuple[Tuple[int, str], Dict[str, Any]]] = {}
         # Driven off _file_signatures() so file_replace sync's injected
         # single-file scope reparses one project DB, not all of them.
         for path_str, _, _ in self._file_signatures():
@@ -7823,14 +7853,18 @@ class CrushParser(BaseParser):
                 # Shared WAL-snapshot helper (first user: ZCodeParser);
                 # see its docstring for the coherence semantics.
                 with zcode_snapshot(db) as snap:
-                    out.extend(self._parse_db(snap.conn))
+                    for entry in self._parse_db(snap.conn):
+                        position = (entry["timestamp"], path_str)
+                        previous = winners.get(entry["entry_id"])
+                        if previous is None or position < previous[0]:
+                            winners[entry["entry_id"]] = (position, entry)
             except (ZCodeSnapshotError, sqlite3.Error, OSError):
                 # A locked or corrupt per-project DB must not blank the
                 # others; the signatures move with Crush's next write, so
                 # the next collect retries.
                 logger.warning("crush db %s unreadable; skipped", db, exc_info=True)
                 continue
-        return out
+        return [entry for _position, entry in winners.values()]
 
 
 class MiniMaxCodeParser(BaseParser):
