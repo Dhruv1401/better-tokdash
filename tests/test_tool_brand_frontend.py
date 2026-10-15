@@ -71,7 +71,7 @@ def test_supported_tool_brand_icons_are_local_and_small() -> None:
     assert expected <= actual
     # Budget for the 28 supported marks; raises the ceiling when a new
     # source lands, not on incidental growth of an existing icon.
-    assert sum((ICON_DIR / name).stat().st_size for name in expected) < 110_000
+    assert sum((ICON_DIR / name).stat().st_size for name in expected) < 111_000  # 110KB + goose/roo icons
 
 
 def test_recent_sources_have_readme_pills() -> None:
