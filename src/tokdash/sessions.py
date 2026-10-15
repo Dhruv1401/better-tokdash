@@ -6413,12 +6413,76 @@ class GooseReadError(RuntimeError):
     """A Goose database this reader cannot account for, or a failed read."""
 
 
-# Max (window) entries kept in the loader result cache, mirroring ZCode.
-_GOOSE_SESSIONS_CACHE_MAX = 32
+# Max turn entries kept in the window result cache across all cached windows.
+# Bounded by turns rather than window count so that multi-window sweeps across
+# large databases do not explode memory.
+_GOOSE_SESSIONS_CACHE_MAX_TURNS = SESSION_CACHE_TURNS_DEFAULT
+_GOOSE_SESSIONS_CACHE_MAX = _GOOSE_SESSIONS_CACHE_MAX_TURNS  # backward-compat alias
 
-_goose_sessions_cache: Dict[tuple, Dict[str, Dict[str, Any]]] = {}
+
+def _goose_cache_turn_budget() -> int:
+    """Turn budget for the Goose window cache; override with TOKDASH_SESSION_CACHE_TURNS."""
+    if _GOOSE_SESSIONS_CACHE_MAX_TURNS != SESSION_CACHE_TURNS_DEFAULT:
+        return max(0, int(_GOOSE_SESSIONS_CACHE_MAX_TURNS))
+    return _session_cache_turn_budget()
+
+
+class _GooseWindowCache(OrderedDict):
+    """Window-keyed raw session cache bounded by total turn entries across windows.
+
+    Bounding by total turns rather than window count prevents memory usage from
+    exploding when sweeps across multiple windows run against large databases.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.total_turns = 0
+        self._turn_counts: Dict[tuple, int] = {}
+
+    def __setitem__(self, key: tuple, value: Dict[str, Dict[str, Any]]) -> None:
+        if key in self:
+            self.total_turns -= self._turn_counts.pop(key, 0)
+        super().__setitem__(key, value)
+        turns = (
+            sum(len(s.get("turns") or ()) for s in value.values())
+            if isinstance(value, dict)
+            else 0
+        )
+        self._turn_counts[key] = turns
+        self.total_turns += turns
+
+    def __delitem__(self, key: tuple) -> None:
+        if key in self:
+            self.total_turns -= self._turn_counts.pop(key, 0)
+        super().__delitem__(key)
+
+    def pop(self, key: tuple, *args) -> Any:
+        if key in self:
+            self.total_turns -= self._turn_counts.pop(key, 0)
+        return super().pop(key, *args)
+
+    def popitem(self, last: bool = True) -> tuple:
+        key, value = super().popitem(last=last)
+        self.total_turns -= self._turn_counts.pop(key, 0)
+        return key, value
+
+    def clear(self) -> None:
+        super().clear()
+        self.total_turns = 0
+        self._turn_counts.clear()
+
+    def get(self, key: tuple, default: Any = None) -> Any:
+        if key in self:
+            self.move_to_end(key)
+            return self[key]
+        return default
+
+
+_goose_sessions_cache = _GooseWindowCache()
+_goose_window_cache = _goose_sessions_cache
 _goose_sessions_cache_sig: tuple = ()
 _goose_sessions_cache_lock = threading.Lock()
+_goose_read_lock = threading.Lock()
 
 # Goose's own default titles. Kept out of display_name so the panel shows the
 # project and short id instead of a row that reads "CLI Session" for every
@@ -6837,9 +6901,17 @@ def _goose_store(
     global _goose_sessions_cache, _goose_sessions_cache_sig
     with _goose_sessions_cache_lock:
         if sig == _goose_sessions_cache_sig:
-            if len(_goose_sessions_cache) >= _GOOSE_SESSIONS_CACHE_MAX:
+            budget = _goose_cache_turn_budget()
+            if budget <= 0:
                 _goose_sessions_cache.clear()
+                return raw_sessions
             _goose_sessions_cache[key] = raw_sessions
+            _goose_sessions_cache.move_to_end(key)
+            while (
+                _goose_sessions_cache.total_turns > budget
+                and len(_goose_sessions_cache) > 1
+            ):
+                _goose_sessions_cache.popitem(last=False)
     return raw_sessions
 
 
