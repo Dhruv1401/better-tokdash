@@ -85,7 +85,7 @@ logger = logging.getLogger(__name__)
 # File-signature caching – avoids repeated rglob / glob.glob + stat() calls
 # when multiple API requests arrive within a short window.
 # ---------------------------------------------------------------------------
-_sig_cache: Dict[str, Tuple[float, tuple]] = {}
+_sig_cache: Dict[str, Tuple[float, tuple, float]] = {}
 _SIG_TTL = float(os.environ.get("TOKDASH_SIG_TTL", "5.0"))  # seconds; 0 to disable
 _OPENCODE_QUERY_CACHE_MAX = 32  # max date-range entries before eviction
 
@@ -148,9 +148,10 @@ def _timed_sigs(cache_key: str, scan_fn) -> tuple:
             return cached[1]
     start = _time.monotonic()
     result = scan_fn()
-    scan_time = _time.monotonic() - start
+    end = _time.monotonic()
+    scan_time = end - start
     ttl = min(max(_SIG_TTL, 2 * scan_time), 4 * _SIG_TTL)
-    _sig_cache[cache_key] = (now, result, ttl)
+    _sig_cache[cache_key] = (end, result, ttl)
     return result
 
 
