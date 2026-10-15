@@ -3337,9 +3337,8 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                                    input_tokens, output_tokens,
                                    cache_read_tokens, cache_write_tokens,
                                    reasoning_tokens, estimated_cost_usd, actual_cost_usd,
-                                   first_seen
+                                    first_seen
                             FROM session_model_usage
-                            WHERE model IS NOT NULL AND TRIM(model) != ''
                             """
                         )
                         usage_rows = cur.fetchall()
@@ -3351,7 +3350,8 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                                 u_est, u_act, u_first,
                             ) = urow
                             u_sid = str(u_sid)
-                            u_model = str(u_model)
+                            u_model_clean = str(u_model).strip() if u_model is not None else ""
+                            u_model = u_model_clean if u_model_clean else "unknown"
                             m_dict = usage_by_session.setdefault(u_sid, {})
                             if u_model not in m_dict:
                                 m_dict[u_model] = {
@@ -3373,9 +3373,11 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                             m_entry["reasoning"] += _to_int(u_reason)
                             try:
                                 u_act_f = float(u_act or 0.0)
-                                u_est_f = float(u_est or 0.0)
                             except (ValueError, TypeError):
                                 u_act_f = 0.0
+                            try:
+                                u_est_f = float(u_est or 0.0)
+                            except (ValueError, TypeError):
                                 u_est_f = 0.0
                             if u_act_f > 0:
                                 m_entry["cost"] = m_entry.get("cost", 0.0) + u_act_f
@@ -3409,6 +3411,63 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                 # harness does too (parity), and the remaining DBs still serve.
                 rows = None
             if rows is not None:
+                def _build_hermes_turns(sid: str, m_dict: Dict[str, Dict[str, Any]], base_ts: int) -> List[Dict[str, Any]]:
+                    turns = []
+                    turn_idx = 1
+                    sorted_models = sorted(
+                        m_dict.items(),
+                        key=lambda kv: (kv[1].get("first_seen") is None, kv[1].get("first_seen") or 0),
+                    )
+                    for model_name, m_data in sorted_models:
+                        m_in = m_data["input"]
+                        m_out = m_data["output"]
+                        m_cr = m_data["cache_read"]
+                        m_cw = m_data["cache_write"]
+                        m_reas = m_data["reasoning"]
+                        m_cost = m_data.get("cost", 0.0)
+                        m_has_fixed = m_data.get("has_fixed_cost", False)
+
+                        if (m_in + m_out + m_cr + m_cw + m_reas) <= 0 and not (
+                            m_has_fixed or m_cost > 0
+                        ):
+                            continue
+
+                        provider = HermesParser._infer_provider(model_name)
+                        full_model = f"{provider}/{model_name}" if provider else model_name
+                        bill = _billing_record(
+                            full_model,
+                            "split-cache-write",
+                            input_tokens=m_in,
+                            output_tokens=m_out,
+                            cache_read=m_cr,
+                            cache_write=m_cw,
+                            fixed_cost=m_cost if m_has_fixed else None,
+                        )
+                        # Use first_seen as timestamp when available, fall back to session start
+                        m_first = m_data.get("first_seen")
+                        turn_ts = base_ts
+                        if m_first is not None and m_first > 0:
+                            try:
+                                fs = float(m_first)
+                                turn_ts = int(fs * 1000) if fs < 1e12 else int(fs)
+                            except (ValueError, TypeError):
+                                pass
+
+                        turn = _build_turn(
+                            turn_index=turn_idx,
+                            timestamp_ms=turn_ts,
+                            model=model_name,
+                            tokens_in=m_in + m_cw,
+                            tokens_cache=m_cr,
+                            tokens_out=m_out,
+                            tokens_reasoning=m_reas,
+                            bill=bill,
+                        )
+                        turn["_event_key"] = f"hermes:{sid}:{model_name}"
+                        turns.append(turn)
+                        turn_idx += 1
+                    return turns
+
                 for row in rows:
                     try:
                         (
@@ -3433,69 +3492,7 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                         ts_ms = int(sa * 1000) if sa < 1e12 else int(sa)
 
                         if usage_by_session is not None and sid in usage_by_session:
-                            turns = []
-                            turn_idx = 1
-                            sorted_models = sorted(
-                                usage_by_session[sid].items(),
-                                key=lambda kv: (kv[1].get("first_seen") is None, kv[1].get("first_seen") or 0),
-                            )
-                            for model_name, m_data in sorted_models:
-                                m_in = m_data["input"]
-                                m_out = m_data["output"]
-                                m_cr = m_data["cache_read"]
-                                m_cw = m_data["cache_write"]
-                                m_reas = m_data["reasoning"]
-                                m_cost = m_data.get("cost", 0.0)
-                                m_has_fixed = m_data.get("has_fixed_cost", False)
-
-                                if (m_in + m_out + m_cr + m_cw + m_reas) <= 0 and not (
-                                    m_has_fixed or m_cost > 0
-                                ):
-                                    continue
-
-                                provider = HermesParser._infer_provider(model_name)
-                                full_model = f"{provider}/{model_name}" if provider else model_name
-                                fixed_cost_val = m_cost if m_has_fixed else None
-                                if fixed_cost_val is not None:
-                                    bill = _billing_record(
-                                        full_model,
-                                        "split-cache-write",
-                                        input_tokens=m_in,
-                                        output_tokens=m_out,
-                                        cache_read=m_cr,
-                                        cache_write=m_cw,
-                                        fixed_cost=fixed_cost_val,
-                                    )
-                                else:
-                                    candidates = [full_model] + ([model_name] if provider else [])
-                                    bill = usage_billing_pricing(
-                                        candidates,
-                                        input_tokens=m_in,
-                                        output_tokens=m_out,
-                                        cache_read=m_cr,
-                                        cache_write=m_cw,
-                                    )
-                                # Use first_seen as timestamp when available, fall back to session start
-                                m_first = m_data.get("first_seen")
-                                turn_ts = ts_ms
-                                if m_first is not None:
-                                    fs = float(m_first)
-                                    turn_ts = int(fs * 1000) if fs < 1e12 else int(fs)
-
-                                turn = _build_turn(
-                                    turn_index=turn_idx,
-                                    timestamp_ms=turn_ts,
-                                    model=model_name,
-                                    tokens_in=m_in + m_cw,
-                                    tokens_cache=m_cr,
-                                    tokens_out=m_out,
-                                    tokens_reasoning=m_reas,
-                                    bill=bill,
-                                )
-                                turn["_event_key"] = f"hermes:{sid}:{model_name}"
-                                turns.append(turn)
-                                turn_idx += 1
-
+                            turns = _build_hermes_turns(sid, usage_by_session[sid], ts_ms)
                             if not turns:
                                 continue
                         else:
@@ -3581,6 +3578,31 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                         sessions[sid] = raw
                     except (ValueError, TypeError, OverflowError):
                         continue
+
+                # Orphan session_model_usage rows whose session_id wasn't in sessions
+                if usage_by_session is not None:
+                    for orphan_sid, m_dict in usage_by_session.items():
+                        if orphan_sid in claimed:
+                            continue
+                        claimed.add(orphan_sid)
+                        turns = _build_hermes_turns(orphan_sid, m_dict, 0)
+                        if not turns:
+                            continue
+                        title = _hermes_user_preview(conn, orphan_sid)
+                        raw: Dict[str, Any] = {
+                            "tool": "hermes",
+                            "session_id": orphan_sid,
+                            "project": "unknown",
+                            "git_branch": "",
+                            "tool_call_count": 0,
+                            "message_count": 0,
+                            "profile_name": "default",
+                            "turns": turns,
+                        }
+                        if title:
+                            raw["display_name"] = title
+                            raw["_display_name_explicit"] = True
+                        sessions[orphan_sid] = raw
         finally:
             conn.close()
     return sessions

@@ -3642,7 +3642,6 @@ class HermesParser(BaseParser):
                                    reasoning_tokens, estimated_cost_usd, actual_cost_usd,
                                    first_seen
                             FROM session_model_usage
-                            WHERE model IS NOT NULL AND TRIM(model) != ''
                             """
                         )
                         usage_rows = cur.fetchall()
@@ -3654,7 +3653,8 @@ class HermesParser(BaseParser):
                                 u_est, u_act, u_first,
                             ) = urow
                             u_sid = str(u_sid)
-                            u_model = str(u_model)
+                            u_model_clean = str(u_model).strip() if u_model is not None else ""
+                            u_model = u_model_clean if u_model_clean else "unknown"
                             m_dict = usage_by_session.setdefault(u_sid, {})
                             if u_model not in m_dict:
                                 m_dict[u_model] = {
@@ -3676,8 +3676,14 @@ class HermesParser(BaseParser):
                             m_entry["reasoning"] += self._i(u_reason)
                             # Compute cost per-row so unpriced tokens are not
                             # swallowed by a sibling row's fixed cost.
-                            u_act_f = float(u_act or 0.0)
-                            u_est_f = float(u_est or 0.0)
+                            try:
+                                u_act_f = float(u_act or 0.0)
+                            except (ValueError, TypeError):
+                                u_act_f = 0.0
+                            try:
+                                u_est_f = float(u_est or 0.0)
+                            except (ValueError, TypeError):
+                                u_est_f = 0.0
                             if u_act_f > 0:
                                 m_entry["cost"] = m_entry.get("cost", 0.0) + u_act_f
                                 m_entry["has_fixed_cost"] = True
@@ -3696,7 +3702,10 @@ class HermesParser(BaseParser):
                                     rc = self.pricing_db.get_cost(u_model, u_in_v, u_out_v, u_cr_v, u_cw_v)
                                 m_entry["cost"] = m_entry.get("cost", 0.0) + rc
                             # Track earliest first_seen (normalized to ms) for ordering
-                            fs = float(u_first) if u_first is not None else None
+                            try:
+                                fs = float(u_first) if u_first is not None else None
+                            except (ValueError, TypeError):
+                                fs = None
                             if fs is not None:
                                 fs_ms = int(fs * 1000) if fs < 1e12 else int(fs)
                                 if m_entry["first_seen"] is None or fs_ms < m_entry["first_seen"]:
@@ -3705,6 +3714,71 @@ class HermesParser(BaseParser):
                     usage_by_session = None
 
                 conn.close()
+
+                def _build_multi_model_entries(sid: str, m_dict: Dict[str, Dict[str, Any]], base_ts: int, msg_cnt: int) -> List[Dict[str, Any]]:
+                    entries = []
+                    sorted_models = sorted(
+                        m_dict.items(),
+                        key=lambda kv: (kv[1].get("first_seen") is None, kv[1].get("first_seen") or 0),
+                    )
+                    msg_count_assigned = False
+                    for model_name, m_data in sorted_models:
+                        m_input = m_data["input"]
+                        m_output = m_data["output"]
+                        m_cache_r = m_data["cache_read"]
+                        m_cache_w = m_data["cache_write"]
+                        m_reasoning = m_data["reasoning"]
+                        m_cost = m_data.get("cost", 0.0)
+                        m_has_fixed = m_data.get("has_fixed_cost", False)
+
+                        has_tokens = (m_input + m_output + m_cache_r + m_cache_w + m_reasoning) > 0
+                        has_cost = m_has_fixed or m_cost > 0
+                        if not has_tokens and not has_cost:
+                            continue
+
+                        provider = self._infer_provider(model_name)
+                        cost = m_cost
+                        if m_has_fixed:
+                            billing = usage_billing_fixed(m_cost)
+                        else:
+                            provider_model = f"{provider}/{model_name}" if provider else model_name
+                            billing = usage_billing_pricing(
+                                [provider_model] + ([model_name] if provider else []),
+                                input_tokens=m_input,
+                                output_tokens=m_output,
+                                cache_read=m_cache_r,
+                                cache_write=m_cache_w,
+                            )
+
+                        # Use first_seen as timestamp when available, fall back to session start
+                        m_first = m_data.get("first_seen")
+                        entry_ts = base_ts
+                        if m_first is not None and m_first > 0:
+                            try:
+                                fs = float(m_first)
+                                entry_ts = int(fs * 1000) if fs < 1e12 else int(fs)
+                            except (ValueError, TypeError):
+                                pass
+
+                        entry = {
+                            "source": self.source_name,
+                            "model": model_name,
+                            "provider": provider,
+                            "input": m_input,
+                            "output": m_output,
+                            "cacheRead": m_cache_r,
+                            "cacheWrite": m_cache_w,
+                            "reasoning": m_reasoning,
+                            "cost": cost,
+                            "timestamp": entry_ts,
+                            "entry_id": f"hermes:{sid}:{model_name}",
+                            "_billing": billing,
+                        }
+                        if not msg_count_assigned:
+                            entry["messageCount"] = msg_cnt
+                            msg_count_assigned = True
+                        entries.append(entry)
+                    return entries
 
                 for row in rows:
                     try:
@@ -3716,9 +3790,10 @@ class HermesParser(BaseParser):
                         ) = row
 
                         # Dedup across multiple state.db files
-                        if row_id in seen_ids:
+                        sid = str(row_id)
+                        if sid in seen_ids:
                             continue
-                        seen_ids.add(row_id)
+                        seen_ids.add(sid)
 
                         msg_count_val = int(self._i(message_count))
 
@@ -3729,67 +3804,8 @@ class HermesParser(BaseParser):
                             sa = 0.0
                         ts_ms = int(sa * 1000) if sa < 1e12 else int(sa)
 
-                        if usage_by_session is not None and str(row_id) in usage_by_session:
-                            # Sort models by earliest first_seen for chronological ordering
-                            sorted_models = sorted(
-                                usage_by_session[str(row_id)].items(),
-                                key=lambda kv: (kv[1].get("first_seen") is None, kv[1].get("first_seen") or 0),
-                            )
-                            for model_idx, (model_name, m_data) in enumerate(sorted_models):
-                                m_input = m_data["input"]
-                                m_output = m_data["output"]
-                                m_cache_r = m_data["cache_read"]
-                                m_cache_w = m_data["cache_write"]
-                                m_reasoning = m_data["reasoning"]
-                                m_cost = m_data.get("cost", 0.0)
-                                m_has_fixed = m_data.get("has_fixed_cost", False)
-
-                                has_tokens = (m_input + m_output + m_cache_r + m_cache_w + m_reasoning) > 0
-                                has_cost = m_has_fixed or m_cost > 0
-                                if not has_tokens and not has_cost:
-                                    continue
-
-                                provider = self._infer_provider(model_name)
-                                cost = m_cost
-                                if m_has_fixed:
-                                    billing = usage_billing_fixed(m_cost)
-                                else:
-                                    provider_model = f"{provider}/{model_name}" if provider else model_name
-                                    billing = usage_billing_pricing(
-                                        [provider_model] + ([model_name] if provider else []),
-                                        input_tokens=m_input,
-                                        output_tokens=m_output,
-                                        cache_read=m_cache_r,
-                                        cache_write=m_cache_w,
-                                    )
-
-                                # Use first_seen as timestamp when available, fall back to session start
-                                m_first = m_data.get("first_seen")
-                                entry_ts = ts_ms
-                                if m_first is not None:
-                                    try:
-                                        fs = float(m_first)
-                                        entry_ts = int(fs * 1000) if fs < 1e12 else int(fs)
-                                    except (ValueError, TypeError):
-                                        pass
-
-                                entry = {
-                                    "source": self.source_name,
-                                    "model": model_name,
-                                    "provider": provider,
-                                    "input": m_input,
-                                    "output": m_output,
-                                    "cacheRead": m_cache_r,
-                                    "cacheWrite": m_cache_w,
-                                    "reasoning": m_reasoning,
-                                    "cost": cost,
-                                    "timestamp": entry_ts,
-                                    "entry_id": f"hermes:{row_id}:{model_name}",
-                                    "_billing": billing,
-                                }
-                                if model_idx == 0:
-                                    entry["messageCount"] = msg_count_val
-                                out.append(entry)
+                        if usage_by_session is not None and sid in usage_by_session:
+                            out.extend(_build_multi_model_entries(sid, usage_by_session[sid], ts_ms, msg_count_val))
                         else:
                             input_t = self._i(input_t)
                             output_t = self._i(output_t)
@@ -3797,8 +3813,14 @@ class HermesParser(BaseParser):
                             cache_w = self._i(cache_w)
                             reasoning = self._i(reasoning)
 
-                            actual_cost_f = float(actual_cost or 0.0)
-                            estimated_cost_f = float(estimated_cost or 0.0)
+                            try:
+                                actual_cost_f = float(actual_cost or 0.0)
+                            except (ValueError, TypeError):
+                                actual_cost_f = 0.0
+                            try:
+                                estimated_cost_f = float(estimated_cost or 0.0)
+                            except (ValueError, TypeError):
+                                estimated_cost_f = 0.0
 
                             # Skip rows with no tokens AND no recorded cost
                             has_tokens = (input_t + output_t + cache_r + cache_w + reasoning) > 0
@@ -3846,11 +3868,19 @@ class HermesParser(BaseParser):
                                 # so compute.py credits sessions correctly instead
                                 # of treating each row as a single message.
                                 "messageCount": msg_count_val,
-                                "entry_id": f"hermes:{row_id}",
+                                "entry_id": f"hermes:{sid}",
                                 "_billing": billing,
                             })
                     except Exception:
                         continue
+
+                # Orphan session_model_usage rows whose session_id wasn't in sessions
+                if usage_by_session is not None:
+                    for orphan_sid, m_dict in usage_by_session.items():
+                        if orphan_sid in seen_ids:
+                            continue
+                        seen_ids.add(orphan_sid)
+                        out.extend(_build_multi_model_entries(orphan_sid, m_dict, 0, 0))
             except Exception:
                 continue
 
