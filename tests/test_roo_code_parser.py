@@ -589,8 +589,9 @@ def test_roo_index_json_is_not_treated_as_a_task(monkeypatch, roo_home, tmp_path
     # _index.json is a file, not a task directory, and has no ui_messages.json.
     (storage / "tasks" / "_index.json").write_text(json.dumps({"version": 1}), encoding="utf-8")
     files = _parser(monkeypatch, storage)._file_signatures()
+    ui_files = [f for f in files if f[0].endswith("ui_messages.json")]
 
-    assert [Path(p).parent.name for p, _, _ in files] == ["task-ok"]
+    assert [Path(p).parent.name for p, _, _ in ui_files] == ["task-ok"]
 
 
 def test_roo_nested_extension_layout_is_found(monkeypatch, roo_home):
@@ -691,6 +692,7 @@ def test_roo_strict_entry_point_raises_when_the_task_vanishes(monkeypatch, roo_h
     )
     parser = _parser(monkeypatch, storage)
     sigs = parser._file_signatures()
+    sigs = [s for s in sigs if s[0].endswith("ui_messages.json")]
     assert len(sigs) == 1
 
     (task / "ui_messages.json").unlink()

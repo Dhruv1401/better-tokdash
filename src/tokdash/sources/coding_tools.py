@@ -8138,6 +8138,29 @@ def roo_task_file_signatures() -> tuple:
     )
 
 
+def _roo_sidecar_signatures_for_parser(
+    task_sigs: tuple,
+) -> tuple:
+    """Sibling api_conversation_history.json signatures for parser identity.
+
+    Roo's model comes from api_conversation_history.json, so a change to that
+    file must invalidate the parser identity. These signatures are folded into
+    RooCodeParser._file_signatures() so Overview and Sessions stay in sync,
+    but they do NOT emit a second usage-producing file — Roo's entry keys are
+    task-scoped and unique on (source, entry_key), so a second path would
+    fight the first over one stored row.
+    """
+    out: List[Tuple[str, int, int]] = []
+    for path_str, _, _ in task_sigs:
+        sibling = str(Path(path_str).parent / "api_conversation_history.json")
+        try:
+            st = Path(sibling).stat()
+            out.append((sibling, st.st_mtime_ns, st.st_size))
+        except OSError:
+            continue
+    return tuple(out)
+
+
 def _scan_roo_task_file_signatures() -> tuple:
     sigs: List[Tuple[str, int, int]] = []
     for path in clientpaths.roo_task_message_files():
@@ -8436,7 +8459,14 @@ class RooCodeParser(BaseParser):
     def _file_signatures(self) -> tuple:
         # The shared signer owns the TTL and the cache key, which is what keeps
         # this surface and the Sessions loader on one scan and one clock.
-        return roo_task_file_signatures()
+        # Include the sibling api_conversation_history.json signature so a
+        # conversation-model change invalidates the parse identity. The sibling
+        # sig is folded into the same tuple but does NOT emit a second
+        # usage-producing file — Roo's entry keys are task-scoped and unique
+        # on (source, entry_key), so a second path would fight the first.
+        task_sigs = roo_task_file_signatures()
+        sidecar_sigs = _roo_sidecar_signatures_for_parser(task_sigs)
+        return task_sigs + sidecar_sigs
 
     def _entries(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
