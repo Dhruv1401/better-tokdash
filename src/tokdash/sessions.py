@@ -6863,28 +6863,29 @@ def _goose_sessions(
 
     raw_sessions: Dict[str, Dict[str, Any]]
     try:
-        with zcode_snapshot(db_path) as snap:
-            conn = snap.conn
-            conn.row_factory = sqlite3.Row
-            names = {
-                str(r[0])
-                for r in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                )
-            }
-            if "usage_ledger" not in names:
-                if "sessions" in names:
-                    # GooseSchemaError in the parser. Same rule here: the
-                    # database claims to be Goose's but has no ledger, so this
-                    # reader cannot tell an empty history from a schema that
-                    # moved the table, and the difference must not be cached.
-                    raise GooseReadError(
-                        "Goose database has a sessions table but no usage_ledger; "
-                        "its schema is not one this reader can account for"
+        with _goose_read_lock:
+            with zcode_snapshot(db_path) as snap:
+                conn = snap.conn
+                conn.row_factory = sqlite3.Row
+                names = {
+                    str(r[0])
+                    for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
                     )
-                raw_sessions = {}
-            else:
-                raw_sessions = _goose_load_sessions(conn, since_ms, until_ms)
+                }
+                if "usage_ledger" not in names:
+                    if "sessions" in names:
+                        # GooseSchemaError in the parser. Same rule here: the
+                        # database claims to be Goose's but has no ledger, so this
+                        # reader cannot tell an empty history from a schema that
+                        # moved the table, and the difference must not be cached.
+                        raise GooseReadError(
+                            "Goose database has a sessions table but no usage_ledger; "
+                            "its schema is not one this reader can account for"
+                        )
+                    raw_sessions = {}
+                else:
+                    raw_sessions = _goose_load_sessions(conn, since_ms, until_ms)
     except (ZCodeSnapshotError, sqlite3.Error) as error:
         raise GooseReadError(f"Goose session read failed: {error}") from error
 
