@@ -1,10 +1,25 @@
-"""Tests for HermesParser."""
+"""Tests for HermesParser.
+
+Hermes keeps one row per session whose token columns cover the whole session
+while naming one model, so the harness pins HERMES_HOME per test and asserts the
+per-model breakdown (session_model_usage) as well as the older fallback.
+"""
+import json
 import sqlite3
 from pathlib import Path
 
-from tokdash import osinfo
+import pytest
+
+from tokdash import compute, osinfo
 from tokdash.pricing import PricingDatabase
 from tokdash.sources.coding_tools import BaseParser, HermesParser, _sig_cache
+from tokdash.usage_store import (
+    UsageEntryStore,
+    _entry_for_storage,
+    build_source_signature,
+    persistent_pricing_signature,
+    usage_entry_cost,
+)
 
 
 def _create_hermes_db(db_path: Path, rows: list, usage_rows: list = None) -> None:
@@ -424,7 +439,7 @@ def test_hermes_parser_multi_model_session(monkeypatch, tmp_path):
     assert c["reasoning"] == 20
     assert abs(c["cost"] - 0.015) < 1e-9
     assert c["messageCount"] == 7
-    assert c["entry_id"] == "hermes:sess-multi:claude-3-5-sonnet"
+    assert c["entry_id"] == "hermes:sess-multi:anthropic:claude-3-5-sonnet:recorded"
 
     g = by_model["gpt-4o"]
     assert g["source"] == "hermes"
@@ -435,8 +450,10 @@ def test_hermes_parser_multi_model_session(monkeypatch, tmp_path):
     assert g["cacheWrite"] == 25
     assert g["reasoning"] == 10
     assert abs(g["cost"] - 0.010) < 1e-9
-    assert "messageCount" not in g  # Non-first models omit messageCount
-    assert g["entry_id"] == "hermes:sess-multi:gpt-4o"
+    # An explicit zero, not an omitted count: every consumer reads a row that
+    # says nothing as one message, which used to inflate the session to eight.
+    assert g["messageCount"] == 0
+    assert g["entry_id"] == "hermes:sess-multi:openai:gpt-4o:recorded"
 
 
 def test_hermes_parser_multi_model_aggregation(monkeypatch, tmp_path):
@@ -493,7 +510,7 @@ def test_hermes_parser_multi_model_aggregation(monkeypatch, tmp_path):
     assert e["reasoning"] == 6
     assert abs(e["cost"] - 0.015) < 1e-9
     assert e["messageCount"] == 4
-    assert e["entry_id"] == "hermes:sess-agg:claude-3-5-sonnet"
+    assert e["entry_id"] == "hermes:sess-agg:anthropic:claude-3-5-sonnet:recorded"
 
 
 def test_hermes_parser_no_session_model_usage_table(monkeypatch, tmp_path):
@@ -582,7 +599,8 @@ def test_hermes_parser_multi_model_cost_precedence(monkeypatch, tmp_path):
 
 def test_hermes_parser_multi_model_mixed_cost_aggregation(monkeypatch, tmp_path):
     """One row with actual_cost > 0 and another with actual_cost = 0 for the
-    same model: the unpriced tokens must be priced, not swallowed."""
+    same model: the unpriced tokens are priced on their own, and a rate edit
+    still reaches them."""
     hermes_dir = tmp_path / ".hermes"
     hermes_dir.mkdir()
     sess_row = _default_row(row_id="sess-mixed", model="kimi-k2.5", message_count=3)
@@ -606,11 +624,344 @@ def test_hermes_parser_multi_model_mixed_cost_aggregation(monkeypatch, tmp_path)
     parser = HermesParser(PricingDatabase())
     entries = parser.collect(None, None)
 
-    assert len(entries) == 1
-    e = entries[0]
-    # Cost = 0.005 (fixed) + priced(1000, 100) > 0.005
-    assert e["cost"] > 0.005
-    # Tokens are summed
-    assert e["input"] == 1100
-    assert e["output"] == 110
+    # The recorded charge and the repricable tokens are separate rows, so
+    # neither freezes the other.
+    assert [e["_billing"]["kind"] for e in entries] == ["fixed", "pricing"]
+    assert entries[0]["cost"] == pytest.approx(0.005)
+    assert (entries[0]["input"], entries[0]["output"]) == (100, 10)
+    assert (entries[1]["input"], entries[1]["output"]) == (1000, 100)
+    assert entries[1]["cost"] > 0.0
+    # Tokens counted once, messages counted once.
+    assert sum(e["input"] for e in entries) == 1100
+    assert sum(e["output"] for e in entries) == 110
+    assert [e["messageCount"] for e in entries] == [3, 0]
 
+
+# --- Issue #238 follow-ups: providers, billing halves, message counts -------
+
+
+class _Rates:
+    """Pricing this file owns, so every cost assertion below is exact.
+
+    Rates are per million tokens and every bucket prices at the same rate, so a
+    model's cost is its token count times the rate.
+    """
+
+    def __init__(self, rates: dict) -> None:
+        self.rates = dict(rates)
+
+    def get_cost(self, model, input_tokens, output_tokens, cache_read=0, cache_write=0):
+        rate = self.rates.get(str(model))
+        if rate is None:
+            return 0.0
+        tokens = (input_tokens or 0) + (output_tokens or 0) + (cache_read or 0) + (cache_write or 0)
+        return tokens * rate / 1_000_000
+
+    def with_rate(self, model: str, rate: float) -> "_Rates":
+        return _Rates({**self.rates, model: rate})
+
+
+def _entries(pricing) -> list:
+    """Parse the Hermes home the test just pinned, with the given rates."""
+    _sig_cache.clear()
+    BaseParser._entry_cache.clear()
+    return HermesParser(pricing).collect(None, None)
+
+
+def test_hermes_parser_keeps_the_recorded_billing_provider(monkeypatch, tmp_path):
+    """One model reached through two providers is two bills.
+
+    The breakdown records which provider actually billed each model. Dropping it
+    and re-guessing from the model name turned a proxy charge into a vendor
+    charge (Issue #238 review).
+    """
+    hermes_dir = tmp_path / ".hermes"
+    hermes_dir.mkdir()
+    _create_hermes_db(
+        hermes_dir / "state.db",
+        [_default_row(row_id="sess-proxy", model="gpt-4o", billing_provider="proxy",
+                      message_count=2)],
+        [
+            _default_usage_row(session_id="sess-proxy", model="gpt-4o",
+                               billing_provider="proxy", input_tokens=1000, output_tokens=100),
+            _default_usage_row(session_id="sess-proxy", model="gpt-4o",
+                               billing_provider="openai", input_tokens=1000, output_tokens=100,
+                               first_seen=1779395300.0),
+        ],
+    )
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+
+    entries = _entries(_Rates({"proxy/gpt-4o": 25.0, "openai/gpt-4o": 2.0}))
+
+    assert len(entries) == 2
+    by_provider = {e["provider"]: e for e in entries}
+    assert set(by_provider) == {"proxy", "openai"}
+    assert abs(by_provider["proxy"]["cost"] - 0.0275) < 1e-9
+    assert abs(by_provider["openai"]["cost"] - 0.0022) < 1e-9
+    # Provider-qualified key first, bare model second, in that order.
+    assert by_provider["proxy"]["_billing"]["models"] == ["proxy/gpt-4o", "gpt-4o"]
+    assert len({e["entry_id"] for e in entries}) == 2
+
+
+def test_hermes_parser_falls_back_to_the_bare_model_and_keeps_the_order(tmp_path, monkeypatch):
+    """A recorded provider that the pricing file does not know still prices on
+    the bare name, and the ordered candidates travel with the row so a provider
+    rate added later shadows it on the reprice."""
+    hermes_dir = tmp_path / ".hermes"
+    hermes_dir.mkdir()
+    _create_hermes_db(
+        hermes_dir / "state.db",
+        [_default_row(row_id="sess-fallback", model="gpt-4o", billing_provider="proxy")],
+        [_default_usage_row(session_id="sess-fallback", model="gpt-4o",
+                            billing_provider="proxy", input_tokens=1000, output_tokens=100)],
+    )
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+
+    rates = _Rates({"gpt-4o": 2.0})
+    entries = _entries(rates)
+    assert len(entries) == 1
+    assert entries[0]["provider"] == "proxy"
+    assert abs(entries[0]["cost"] - 0.0022) < 1e-9
+
+    repriced = usage_entry_cost(entries[0]["_billing"], rates.with_rate("proxy/gpt-4o", 25.0))
+    assert repriced == pytest.approx(0.0275)
+
+
+def test_hermes_parser_infers_provider_only_when_none_is_recorded(monkeypatch, tmp_path):
+    hermes_dir = tmp_path / ".hermes"
+    hermes_dir.mkdir()
+    _create_hermes_db(
+        hermes_dir / "state.db",
+        [_default_row(row_id="sess-infer", model="claude-3-5-sonnet")],
+        [_default_usage_row(session_id="sess-infer", model="claude-3-5-sonnet",
+                            billing_provider="")],
+    )
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+
+    entries = _entries(_Rates({"anthropic/claude-3-5-sonnet": 2.0}))
+    assert [e["provider"] for e in entries] == ["anthropic"]
+
+
+def test_hermes_parser_breakdown_without_billing_provider_column(monkeypatch, tmp_path):
+    """An older breakdown table has no provider column; per-model attribution
+    still works and the provider comes from the model name."""
+    hermes_dir = tmp_path / ".hermes"
+    hermes_dir.mkdir()
+    hermes_dir.mkdir(parents=True, exist_ok=True)
+    db_path = hermes_dir / "state.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE sessions (id TEXT PRIMARY KEY, model TEXT, billing_provider TEXT,"
+        " started_at REAL, message_count INTEGER, input_tokens INTEGER, output_tokens INTEGER,"
+        " cache_read_tokens INTEGER, cache_write_tokens INTEGER, reasoning_tokens INTEGER,"
+        " estimated_cost_usd REAL, actual_cost_usd REAL)"
+    )
+    conn.execute(
+        "CREATE TABLE session_model_usage (session_id TEXT NOT NULL, model TEXT NOT NULL,"
+        " task TEXT NOT NULL DEFAULT '', input_tokens INTEGER NOT NULL DEFAULT 0,"
+        " output_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,"
+        " cache_write_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER NOT NULL DEFAULT 0,"
+        " estimated_cost_usd REAL NOT NULL DEFAULT 0, actual_cost_usd REAL NOT NULL DEFAULT 0,"
+        " first_seen REAL, PRIMARY KEY (session_id, model, task))"
+    )
+    conn.execute(
+        "INSERT INTO sessions VALUES ('sess-old','gpt-4o','openai',1779395293.0,4,3000,300,0,0,0,0,0)"
+    )
+    conn.executemany(
+        "INSERT INTO session_model_usage (session_id, model, task, input_tokens, output_tokens,"
+        " first_seen) VALUES (?,?,?,?,?,?)",
+        [("sess-old", "gpt-4o", "main", 2000, 200, 1779395300.0),
+         ("sess-old", "claude-3-5-sonnet", "aux", 1000, 100, 1779395293.0)],
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+
+    entries = _entries(_Rates({
+        "openai/gpt-4o": 2.0, "gpt-4o": 2.0,
+        "anthropic/claude-3-5-sonnet": 2.0, "claude-3-5-sonnet": 2.0,
+    }))
+
+    assert {e["model"]: e["provider"] for e in entries} == {
+        "gpt-4o": "openai", "claude-3-5-sonnet": "anthropic",
+    }
+    assert sum(e["input"] for e in entries) == 3000
+    assert [e["messageCount"] for e in entries] == [4, 0]
+
+
+def test_hermes_parser_splits_recorded_charge_from_repriced_tokens(monkeypatch, tmp_path):
+    """A recorded charge and Tokdash-priced tokens in one model group stay
+    separate, so a rate edit reaches the half that owns them."""
+    hermes_dir = tmp_path / ".hermes"
+    hermes_dir.mkdir()
+    _create_hermes_db(
+        hermes_dir / "state.db",
+        [_default_row(row_id="sess-mixed2", model="kimi-k2.5", billing_provider="moonshotai",
+                      message_count=3)],
+        [
+            _default_usage_row(session_id="sess-mixed2", model="kimi-k2.5",
+                               billing_provider="moonshotai", task="main",
+                               input_tokens=100, output_tokens=10, actual_cost_usd=0.005),
+            _default_usage_row(session_id="sess-mixed2", model="kimi-k2.5",
+                               billing_provider="moonshotai", task="background_review",
+                               input_tokens=1000, output_tokens=100),
+        ],
+    )
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+
+    rates = _Rates({"moonshotai/kimi-k2.5": 2.0, "kimi-k2.5": 2.0})
+    entries = _entries(rates)
+
+    assert [e["_billing"]["kind"] for e in entries] == ["fixed", "pricing"]
+    assert entries[0]["cost"] == pytest.approx(0.005)
+    assert entries[1]["cost"] == pytest.approx(0.0022)
+    # Tokens of both halves, counted once, and only one row carries the count.
+    assert (sum(e["input"] for e in entries), sum(e["output"] for e in entries)) == (1100, 110)
+    assert [e["messageCount"] for e in entries] == [3, 0]
+
+    edited = rates.with_rate("moonshotai/kimi-k2.5", 20.0)
+    repriced = [usage_entry_cost(e["_billing"], edited) for e in entries]
+    assert repriced == [pytest.approx(0.005), pytest.approx(0.022)]
+
+
+def test_hermes_message_count_survives_both_consumer_paths(monkeypatch, tmp_path):
+    """An explicit zero stays zero; an absent count still means one message.
+
+    Hermes splits a session across models, so the extra rows are marked zero.
+    Every consumer defaults an omitted count to one message, which is what turned
+    a seven-message session into eight.
+    """
+    hermes_dir = tmp_path / ".hermes"
+    hermes_dir.mkdir()
+    _create_hermes_db(
+        hermes_dir / "state.db",
+        [_default_row(row_id="sess-msg", model="gpt-4o", billing_provider="openai",
+                      message_count=7)],
+        [
+            _default_usage_row(session_id="sess-msg", model="gpt-4o",
+                               billing_provider="openai", input_tokens=1000, output_tokens=100),
+            _default_usage_row(session_id="sess-msg", model="claude-3-5-sonnet",
+                               billing_provider="anthropic", input_tokens=1000, output_tokens=100,
+                               first_seen=1779395300.0),
+        ],
+    )
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+    entries = _entries(_Rates({
+        "openai/gpt-4o": 2.0, "gpt-4o": 2.0,
+        "anthropic/claude-3-5-sonnet": 2.0, "claude-3-5-sonnet": 2.0,
+    }))
+
+    assert [e["messageCount"] for e in entries] == [7, 0]
+    assert compute.parse_entries_json({"entries": entries})["total_messages"] == 7
+    assert sum(_entry_for_storage(e)["messageCount"] for e in entries) == 7
+
+    # The default belongs to rows that say nothing, not to Hermes' second model.
+    silent = {k: v for k, v in entries[1].items() if k != "messageCount"}
+    assert compute.parse_entries_json({"entries": [silent]})["total_messages"] == 1
+    assert _entry_for_storage(silent)["messageCount"] == 1
+
+
+def test_hermes_message_count_lands_on_a_row_that_reports_usage(monkeypatch, tmp_path):
+    """A row that recorded a charge but no tokens should not be the one that
+    carries the session's messages."""
+    hermes_dir = tmp_path / ".hermes"
+    hermes_dir.mkdir()
+    _create_hermes_db(
+        hermes_dir / "state.db",
+        [_default_row(row_id="sess-late", model="gpt-4o", billing_provider="openai",
+                      message_count=6)],
+        [
+            _default_usage_row(session_id="sess-late", model="gpt-4o",
+                               billing_provider="openai", input_tokens=0, output_tokens=0,
+                               actual_cost_usd=0.01, first_seen=1779395293.0),
+            _default_usage_row(session_id="sess-late", model="gpt-4o",
+                               billing_provider="openai", task="main",
+                               input_tokens=1000, output_tokens=100,
+                               first_seen=1779395300.0),
+        ],
+    )
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+    entries = _entries(_Rates({"openai/gpt-4o": 2.0, "gpt-4o": 2.0}))
+
+    # The cost-only row comes first (it was seen first) and carries nothing.
+    assert [e["_billing"]["kind"] for e in entries] == ["fixed", "pricing"]
+    assert [e["messageCount"] for e in entries] == [0, 6]
+    assert sum(_entry_for_storage(e)["messageCount"] for e in entries) == 6
+
+
+def test_hermes_stored_rows_reprice_only_the_priced_half(monkeypatch, tmp_path):
+    """Persistence/reload: the recorded row never moves, the priced row follows
+    the new rates, and neither is reparsed out of the source database."""
+    hermes_dir = tmp_path / ".hermes"
+    hermes_dir.mkdir()
+    _create_hermes_db(
+        hermes_dir / "state.db",
+        [_default_row(row_id="sess-store", model="kimi-k2.5", billing_provider="moonshotai",
+                      message_count=3)],
+        [
+            _default_usage_row(session_id="sess-store", model="kimi-k2.5",
+                               billing_provider="moonshotai", task="main",
+                               input_tokens=100, output_tokens=10, actual_cost_usd=0.005),
+            _default_usage_row(session_id="sess-store", model="kimi-k2.5",
+                               billing_provider="moonshotai", task="aux",
+                               input_tokens=1000, output_tokens=100),
+        ],
+    )
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+    _write_rates({"moonshotai/kimi-k2.5": 2.0, "kimi-k2.5": 2.0})
+
+    store = UsageEntryStore(tmp_path / "usage.sqlite3")
+    signature = build_source_signature(files=[("state.db", 1, 2)], parser={"object": "hermes", "version": 3})
+
+    parses = {"count": 0}
+    original = HermesParser._parse_all
+
+    def counting(self):
+        parses["count"] += 1
+        return original(self)
+
+    monkeypatch.setattr(HermesParser, "_parse_all", counting)
+    pricing = PricingDatabase()
+    store.sync_source(
+        "hermes",
+        signature,
+        lambda: HermesParser(pricing).collect(None, None),
+        pricing_identity=persistent_pricing_signature(pricing),
+    )
+
+    rows = sorted(store.query_entries(sources=["hermes"]), key=lambda row: row["cost"])
+    assert [row["cost"] for row in rows] == [pytest.approx(0.0022), pytest.approx(0.005)]
+    assert parses["count"] == 1
+    assert sorted(_message_counts(store)) == [0, 3]
+
+    # A rate edit: the priced half follows, the recorded half does not.
+    _write_rates({"moonshotai/kimi-k2.5": 20.0, "kimi-k2.5": 2.0})
+    edited = PricingDatabase()
+    assert store.apply_pricing(persistent_pricing_signature(edited), edited) is True
+
+    rows = sorted(store.query_entries(sources=["hermes"]), key=lambda row: row["cost"])
+    assert [row["cost"] for row in rows] == [pytest.approx(0.005), pytest.approx(0.022)]
+    assert store.aggregate_entries(sources=["hermes"])["total_cost"] == pytest.approx(0.027)
+    assert parses["count"] == 1, "repricing must not read the source database"
+    assert sorted(_message_counts(store)) == [0, 3]
+
+
+def _write_rates(rates: dict) -> None:
+    """Pin pricing to rates this file owns (the override replaces the baseline)."""
+    path = PricingDatabase().override_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({
+            "version": "test",
+            "aliases": {},
+            "models": {
+                name: {"input": rate, "output": rate, "cache_read": rate, "cache_write": rate}
+                for name, rate in rates.items()
+            },
+        }),
+        encoding="utf-8",
+    )
+
+
+def _message_counts(store) -> list:
+    return [int(row.get("messageCount") or 0) for row in store.query_entries(sources=["hermes"])]

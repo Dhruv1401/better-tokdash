@@ -8,6 +8,7 @@ always "unknown": schema v12 records no cwd.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -566,14 +567,14 @@ def test_hermes_sessions_multi_model(monkeypatch, tmp_path):
     t1 = turns[0]
     assert t1["turn_index"] == 1
     assert t1["model"] == "claude-3-5-sonnet"
-    assert t1["_event_key"] == "hermes:s-multi:claude-3-5-sonnet"
+    assert t1["_event_key"] == "hermes:s-multi:anthropic:claude-3-5-sonnet"
     assert t1["tokens_out"] == 100
     assert abs(t1["cost"] - 0.005) < 1e-9
 
     t2 = turns[1]
     assert t2["turn_index"] == 2
     assert t2["model"] == "gpt-4o"
-    assert t2["_event_key"] == "hermes:s-multi:gpt-4o"
+    assert t2["_event_key"] == "hermes:s-multi:openai:gpt-4o"
     assert t2["tokens_out"] == 200
     assert abs(t2["cost"] - 0.010) < 1e-9
 
@@ -600,3 +601,134 @@ def test_hermes_sessions_no_session_model_usage(monkeypatch, tmp_path):
     assert turn["tokens_out"] == 50
     assert abs(turn["cost"] - 0.001) < 1e-9
 
+
+def _write_rates(rates: dict) -> None:
+    """Pin pricing to rates this file owns (the override replaces the baseline).
+
+    Every bucket prices at the same rate, so a model's cost is its token count
+    times the rate per million.
+    """
+    path = PricingDatabase().override_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({
+            "version": "test",
+            "aliases": {},
+            "models": {
+                name: {"input": rate, "output": rate, "cache_read": rate, "cache_write": rate}
+                for name, rate in rates.items()
+            },
+        }),
+        encoding="utf-8",
+    )
+    sessions.reload_pricing_db()
+
+
+def test_hermes_sessions_keeps_the_recorded_billing_provider(monkeypatch, tmp_path):
+    """Sessions bills the provider the database recorded, not a guess.
+
+    Both turns of one model reached through two providers survive, each priced on
+    its own provider-qualified key -- the same two rows Overview shows.
+    """
+    home = _home(tmp_path)
+    sess_row = _row("s-prov", "gpt-4o", "proxy", 1779395293.0,
+                    2000, 200, 0, 0, title="Two Providers", msg_count=4)
+    usage = [
+        _usage_row("s-prov", "gpt-4o", "proxy",
+                   input_tokens=1000, output_tokens=100, first_seen=1779395293.0),
+        _usage_row("s-prov", "gpt-4o", "openai",
+                   input_tokens=1000, output_tokens=100, first_seen=1779395300.0),
+    ]
+    _write_db(home, [sess_row], usage_rows=usage)
+    _patch_env(monkeypatch, home)
+    _write_rates({"proxy/gpt-4o": 25.0, "openai/gpt-4o": 2.0, "gpt-4o": 2.0})
+
+    raw = _hermes_sessions()
+    turns = raw["s-prov"]["turns"]
+
+    assert [t["model"] for t in turns] == ["gpt-4o", "gpt-4o"]
+    assert [t["_event_key"] for t in turns] == [
+        "hermes:s-prov:proxy:gpt-4o", "hermes:s-prov:openai:gpt-4o",
+    ]
+    assert turns[0]["cost"] == pytest.approx(0.0275)
+    assert turns[1]["cost"] == pytest.approx(0.0022)
+    # The ordered candidates ride with the turn, so a reprice keeps the priority.
+    assert turns[0]["_bill"]["models"] == ["proxy/gpt-4o", "gpt-4o"]
+
+    # Parity: Sessions and Overview bill the same two groups.
+    assert _turn_sums(raw)["cost"] == pytest.approx(
+        _entry_sums(_parser_entries(home))["cost"]
+    )
+
+
+def test_hermes_sessions_priced_half_reprices_after_a_rate_edit(monkeypatch, tmp_path):
+    """A recorded charge and repricable tokens share a model group and must not
+    freeze each other -- in Sessions, which folds both into one turn."""
+    home = _home(tmp_path)
+    sess_row = _row("s-mix", "kimi-k2.5", "moonshotai", 1779395293.0,
+                    1100, 110, 0, 0, title="Mixed", msg_count=3)
+    usage = [
+        _usage_row("s-mix", "kimi-k2.5", "moonshotai", task="main",
+                   input_tokens=100, output_tokens=10, actual_cost_usd=0.005,
+                   first_seen=1779395293.0),
+        _usage_row("s-mix", "kimi-k2.5", "moonshotai", task="aux",
+                   input_tokens=1000, output_tokens=100, first_seen=1779395300.0),
+    ]
+    _write_db(home, [sess_row], usage_rows=usage)
+    _patch_env(monkeypatch, home)
+    _write_rates({"moonshotai/kimi-k2.5": 2.0, "kimi-k2.5": 2.0})
+
+    raw = _hermes_sessions()
+    session = raw["s-mix"]
+    assert session["message_count"] == 3, "the session's own count, not one per turn"
+    turns = session["turns"]
+    assert len(turns) == 1
+    turn = turns[0]
+    # Both halves of the group, on one turn, tokens counted once.
+    assert [b.get("fixed") is not None for b in turn["_bills"]] == [True, False]
+    assert turn["tokens_in"] == 1100
+    assert turn["tokens_out"] == 110
+    assert turn["cost"] == pytest.approx(0.0072)
+
+    # Overview agrees, before and after the edit.
+    parser_cost = _entry_sums(_parser_entries(home))["cost"]
+    assert parser_cost == pytest.approx(turn["cost"])
+
+    _write_rates({"moonshotai/kimi-k2.5": 20.0, "kimi-k2.5": 2.0})
+    repriced = sessions._repriced_turns(turns, PricingDatabase())
+
+    assert repriced[0]["cost"] == pytest.approx(0.027)
+    assert sessions._repriced_turns(
+        _hermes_sessions()["s-mix"]["turns"], PricingDatabase()
+    )[0]["cost"] == pytest.approx(0.027)
+    assert _turn_sums({"s-mix": {"session_id": "s-mix", "turns": repriced}})["cost"] == pytest.approx(
+        _entry_sums(_parser_entries(home))["cost"]
+    )
+
+
+def test_hermes_sessions_multi_model_without_a_recorded_provider(monkeypatch, tmp_path):
+    """A breakdown that records no provider still infers one, and the model order
+    stays chronological."""
+    home = _home(tmp_path)
+    sess_row = _row("s-infer", "gpt-4o", "", 1779395293.0,
+                    3000, 300, 0, 0, title="Inferred", msg_count=8)
+    usage = [
+        _usage_row("s-infer", "gpt-4o", "", input_tokens=2000, output_tokens=200,
+                   first_seen=1779395300.0),
+        _usage_row("s-infer", "claude-3-5-sonnet", "", input_tokens=1000, output_tokens=100,
+                   first_seen=1779395293.0),
+    ]
+    _write_db(home, [sess_row], usage_rows=usage)
+    _patch_env(monkeypatch, home)
+    _write_rates({
+        "openai/gpt-4o": 2.0, "gpt-4o": 2.0,
+        "anthropic/claude-3-5-sonnet": 2.0, "claude-3-5-sonnet": 2.0,
+    })
+
+    turns = _hermes_sessions()["s-infer"]["turns"]
+
+    assert [t["model"] for t in turns] == ["claude-3-5-sonnet", "gpt-4o"]
+    assert [t["_event_key"] for t in turns] == [
+        "hermes:s-infer:anthropic:claude-3-5-sonnet", "hermes:s-infer:openai:gpt-4o",
+    ]
+    assert [t["cost"] for t in turns] == [pytest.approx(0.0022), pytest.approx(0.0044)]

@@ -60,6 +60,13 @@ from .sources.coding_tools import (
     codex_replay_key_session_id,
     codex_token_event_key,
     connect_sqlite_readonly,
+    hermes_group_id,
+    hermes_group_timestamp_ms,
+    hermes_model_usage_groups,
+    hermes_price_candidates,
+    hermes_sorted_usage_groups,
+    hermes_usage_parts,
+    HERMES_PART_RECORDED,
     iter_grok_usage_rows,
     parse_cline_message_file,
     qoder_cli_effective_rate,
@@ -843,6 +850,15 @@ def _merged_interval_ms(intervals: Iterable[tuple[int, int]], *, presorted: bool
 #                          split cache write, and when the pricing DB resolves
 #                          nothing the cost the SOURCE recorded on the message
 #                          is the fallback (OpenClaw)
+#   split-cache-write-candidates
+#                          split cache write, with the model tried under the
+#                          ordered bill["models"] list -- first non-zero wins.
+#                          Hermes prices provider/model before the bare name,
+#                          so the list has to travel with the row rather than
+#                          one already-resolved name: a pricing file that adds
+#                          the qualified key later has to shadow the bare one
+#                          on the reprice too. Mirrors the models list of
+#                          usage_billing_pricing (usage_store.py).
 #
 # Changing a rule changes what stored rows cost, deliberately and without a
 # reparse. Changing which counts a parser *extracts* is a parser change and must
@@ -865,6 +881,20 @@ _BILLING_RULES: dict[str, Callable[[Any, Dict[str, Any]], float]] = {
     "split-cache-write-payload": lambda db, bill: db.get_cost(
         bill["model"], bill["input"], bill["output"], bill["cache_read"], bill["cache_write"]
     ) or float(bill.get("payload_fallback") or 0.0),
+    "split-cache-write-candidates": lambda db, bill: next(
+        (
+            cost
+            for cost in (
+                db.get_cost(
+                    str(model or ""),
+                    bill["input"], bill["output"], bill["cache_read"], bill["cache_write"],
+                )
+                for model in (bill.get("models") or [bill["model"]])
+            )
+            if cost > 0
+        ),
+        0.0,
+    ),
 }
 
 
@@ -872,6 +902,7 @@ def _billing_record(
     model: str,
     rule: str,
     *,
+    models: Optional[list] = None,
     input_tokens: Any = 0,
     output_tokens: Any = 0,
     cache_read: Any = 0,
@@ -898,7 +929,43 @@ def _billing_record(
     # and retires the fallback.
     if payload_fallback is not None:
         bill["payload_fallback"] = float(payload_fallback)
+    # Rules that resolve the model itself (Hermes) price from this ordered list
+    # and ignore the single "model", which stays the display/first candidate.
+    if models is not None:
+        bill["models"] = [str(item or "") for item in models]
     return bill
+
+
+def _hermes_turn_bill(
+    candidates: list[str],
+    part: Dict[str, Any],
+) -> Dict[str, Any]:
+    """The bill for one half of a Hermes per-model group.
+
+    A recorded charge rides as ``fixed`` and no rate edit moves it; the tokens
+    Tokdash prices carry their ordered candidate models, so a reprice keeps
+    pricing ``provider/model`` before the bare name exactly as the row Overview
+    priced did.
+    """
+    if part["name"] == HERMES_PART_RECORDED:
+        return _billing_record(
+            candidates[0],
+            "split-cache-write",
+            input_tokens=part["input"],
+            output_tokens=part["output"],
+            cache_read=part["cache_read"],
+            cache_write=part["cache_write"],
+            fixed_cost=part["cost"],
+        )
+    return _billing_record(
+        candidates[0],
+        "split-cache-write-candidates",
+        models=candidates,
+        input_tokens=part["input"],
+        output_tokens=part["output"],
+        cache_read=part["cache_read"],
+        cache_write=part["cache_write"],
+    )
 
 
 def _turn_cost(bill: Dict[str, Any], pricing: Any = None) -> float:
@@ -3328,142 +3395,46 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                 """
                 cur.execute(query)
                 rows = cur.fetchall()
-                usage_by_session: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None
-                if _sqlite_table_exists(conn, "session_model_usage"):
-                    try:
-                        cur.execute(
-                            """
-                            SELECT session_id, model,
-                                   input_tokens, output_tokens,
-                                   cache_read_tokens, cache_write_tokens,
-                                   reasoning_tokens, estimated_cost_usd, actual_cost_usd,
-                                    first_seen
-                            FROM session_model_usage
-                            """
-                        )
-                        usage_rows = cur.fetchall()
-                        usage_by_session = {}
-                        for urow in usage_rows:
-                            (
-                                u_sid, u_model, u_in, u_out,
-                                u_cr, u_cw, u_reason,
-                                u_est, u_act, u_first,
-                            ) = urow
-                            u_sid = str(u_sid)
-                            u_model_clean = str(u_model).strip() if u_model is not None else ""
-                            u_model = u_model_clean if u_model_clean else "unknown"
-                            m_dict = usage_by_session.setdefault(u_sid, {})
-                            if u_model not in m_dict:
-                                m_dict[u_model] = {
-                                    "input": 0,
-                                    "output": 0,
-                                    "cache_read": 0,
-                                    "cache_write": 0,
-                                    "reasoning": 0,
-                                    "estimated_cost": 0.0,
-                                    "actual_cost": 0.0,
-                                    "first_seen": None,
-                                }
-                            m_entry = m_dict[u_model]
-                            m_entry["input"] += _to_int(u_in)
-                            m_entry["output"] += _to_int(u_out)
-                            m_entry["cache_read"] += _to_int(u_cr)
-                            m_entry["cache_write"] += _to_int(u_cw)
-                            m_entry.setdefault("has_fixed_cost", False)
-                            m_entry["reasoning"] += _to_int(u_reason)
-                            try:
-                                u_act_f = float(u_act or 0.0)
-                            except (ValueError, TypeError):
-                                u_act_f = 0.0
-                            try:
-                                u_est_f = float(u_est or 0.0)
-                            except (ValueError, TypeError):
-                                u_est_f = 0.0
-                            if u_act_f > 0:
-                                m_entry["cost"] = m_entry.get("cost", 0.0) + u_act_f
-                                m_entry["has_fixed_cost"] = True
-                            elif u_est_f > 0:
-                                m_entry["cost"] = m_entry.get("cost", 0.0) + u_est_f
-                                m_entry["has_fixed_cost"] = True
-                            else:
-                                u_in_v = _to_int(u_in)
-                                u_out_v = _to_int(u_out)
-                                u_cr_v = _to_int(u_cr)
-                                u_cw_v = _to_int(u_cw)
-                                u_provider = HermesParser._infer_provider(u_model)
-                                u_pm = f"{u_provider}/{u_model}" if u_provider else u_model
-                                rc = _PRICING_DB.get_cost(u_pm, u_in_v, u_out_v, u_cr_v, u_cw_v)
-                                if rc == 0.0 and u_provider:
-                                    rc = _PRICING_DB.get_cost(u_model, u_in_v, u_out_v, u_cr_v, u_cw_v)
-                                m_entry["cost"] = m_entry.get("cost", 0.0) + rc
-                            try:
-                                fs = float(u_first) if u_first is not None else None
-                            except (ValueError, TypeError):
-                                fs = None
-                            if fs is not None:
-                                fs_ms = int(fs * 1000) if fs < 1e12 else int(fs)
-                                if m_entry["first_seen"] is None or fs_ms < m_entry["first_seen"]:
-                                    m_entry["first_seen"] = fs_ms
-                    except (OSError, sqlite3.Error):
-                        usage_by_session = None
+                # Shared with HermesParser: the same groups on both sides.
+                usage = hermes_model_usage_groups(conn)
             except (OSError, sqlite3.Error):
                 # Corrupt/foreign DB: the parser skips it per-DB, so the
                 # harness does too (parity), and the remaining DBs still serve.
                 rows = None
             if rows is not None:
-                def _build_hermes_turns(sid: str, m_dict: Dict[str, Dict[str, Any]], base_ts: int) -> List[Dict[str, Any]]:
-                    turns = []
+                def _build_hermes_turns(sid: str, groups: Dict[Tuple[str, str], Dict[str, Any]], base_ts: int) -> List[Dict[str, Any]]:
+                    """One turn per (model, provider) group of the session.
+
+                    Same groups Overview prices into usage entries; the billing
+                    shape is Sessions' own. A group whose source reported a
+                    charge and whose rows Tokdash also prices carries both as a
+                    bill list, which is what _repriced_turns sums -- one fixed
+                    part that no rate edit moves, one that reprices on its own.
+                    """
+                    turns: List[Dict[str, Any]] = []
                     turn_idx = 1
-                    sorted_models = sorted(
-                        m_dict.items(),
-                        key=lambda kv: (kv[1].get("first_seen") is None, kv[1].get("first_seen") or 0),
-                    )
-                    for model_name, m_data in sorted_models:
-                        m_in = m_data["input"]
-                        m_out = m_data["output"]
-                        m_cr = m_data["cache_read"]
-                        m_cw = m_data["cache_write"]
-                        m_reas = m_data["reasoning"]
-                        m_cost = m_data.get("cost", 0.0)
-                        m_has_fixed = m_data.get("has_fixed_cost", False)
-
-                        if (m_in + m_out + m_cr + m_cw + m_reas) <= 0 and not (
-                            m_has_fixed or m_cost > 0
-                        ):
+                    for group in hermes_sorted_usage_groups(groups):
+                        parts = hermes_usage_parts(group)
+                        if not parts:
                             continue
-
-                        provider = HermesParser._infer_provider(model_name)
-                        full_model = f"{provider}/{model_name}" if provider else model_name
-                        bill = _billing_record(
-                            full_model,
-                            "split-cache-write",
-                            input_tokens=m_in,
-                            output_tokens=m_out,
-                            cache_read=m_cr,
-                            cache_write=m_cw,
-                            fixed_cost=m_cost if m_has_fixed else None,
-                        )
-                        # Use first_seen as timestamp when available, fall back to session start
-                        m_first = m_data.get("first_seen")
-                        turn_ts = base_ts
-                        if m_first is not None and m_first > 0:
-                            try:
-                                fs = float(m_first)
-                                turn_ts = int(fs * 1000) if fs < 1e12 else int(fs)
-                            except (ValueError, TypeError):
-                                pass
-
+                        candidates = hermes_price_candidates(group["model"], group["provider"])
+                        bills = [_hermes_turn_bill(candidates, part) for part in parts]
+                        totals = {
+                            key: sum(part[key] for part in parts)
+                            for key in ("input", "output", "cache_read", "cache_write", "reasoning")
+                        }
                         turn = _build_turn(
                             turn_index=turn_idx,
-                            timestamp_ms=turn_ts,
-                            model=model_name,
-                            tokens_in=m_in + m_cw,
-                            tokens_cache=m_cr,
-                            tokens_out=m_out,
-                            tokens_reasoning=m_reas,
-                            bill=bill,
+                            timestamp_ms=hermes_group_timestamp_ms(group, base_ts),
+                            model=group["model"],
+                            tokens_in=totals["input"] + totals["cache_write"],
+                            tokens_cache=totals["cache_read"],
+                            tokens_out=totals["output"],
+                            tokens_reasoning=totals["reasoning"],
+                            bill=bills[0] if len(bills) == 1 else None,
+                            bills=bills if len(bills) > 1 else None,
                         )
-                        turn["_event_key"] = f"hermes:{sid}:{model_name}"
+                        turn["_event_key"] = hermes_group_id(sid, group)
                         turns.append(turn)
                         turn_idx += 1
                     return turns
@@ -3491,8 +3462,8 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                             sa = 0.0
                         ts_ms = int(sa * 1000) if sa < 1e12 else int(sa)
 
-                        if usage_by_session is not None and sid in usage_by_session:
-                            turns = _build_hermes_turns(sid, usage_by_session[sid], ts_ms)
+                        if usage is not None and sid in usage:
+                            turns = _build_hermes_turns(sid, usage[sid], ts_ms)
                             if not turns:
                                 continue
                         else:
@@ -3580,8 +3551,8 @@ def _load_hermes_sessions(signature: tuple[tuple[str, int, int], ...], _pricing_
                         continue
 
                 # Orphan session_model_usage rows whose session_id wasn't in sessions
-                if usage_by_session is not None:
-                    for orphan_sid, m_dict in usage_by_session.items():
+                if usage:
+                    for orphan_sid, m_dict in usage.items():
                         if orphan_sid in claimed:
                             continue
                         claimed.add(orphan_sid)
