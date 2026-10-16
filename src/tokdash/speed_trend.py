@@ -184,7 +184,8 @@ def _combined(tokens: float, ms: float, busy: float) -> dict[str, Any]:
 # Reading the measured responses once
 # --------------------------------------------------------------------------
 
-def _responses(conn: sqlite3.Connection, since_ms: int, until_ms: int, wanted: str):
+def _responses(conn: sqlite3.Connection, since_ms: int, until_ms: int, wanted: str,
+               include_request_windows: bool = True):
     """Measured responses in the window, one tuple each.
 
     The same predicate and covering index as the grouped table read, so this
@@ -206,6 +207,8 @@ def _responses(conn: sqlite3.Connection, since_ms: int, until_ms: int, wanted: s
         source = str(row[0])
         if wanted and source.lower() != wanted:
             continue
+        if not include_request_windows and row[2] == "request_window":
+            continue
         ts = float(row[4])
         ms = float(row[6] or 0.0)
         begin, end = busy_interval(source, ts, ms, row[8])
@@ -216,7 +219,8 @@ def _responses(conn: sqlite3.Connection, since_ms: int, until_ms: int, wanted: s
 
 
 def combined_for_window(
-    conn: sqlite3.Connection, day_from: str, day_to: str, *, source: str = ""
+    conn: sqlite3.Connection, day_from: str, day_to: str, *, source: str = "",
+    include_request_windows: bool = True,
 ) -> tuple[dict[tuple, dict[str, Any]], dict[str, dict[str, Any]]]:
     """Window totals: busy time per comparison key and per model.
 
@@ -227,7 +231,7 @@ def combined_for_window(
     since_ms, until_ms = _day_bounds_ms(day_from, day_to)
     wanted = (source or "").strip().lower()
     per_key: dict[tuple, list] = defaultdict(list)
-    for key, _ts, start, end, *_rest in _responses(conn, since_ms, until_ms, wanted):
+    for key, _ts, start, end, *_rest in _responses(conn, since_ms, until_ms, wanted, include_request_windows):
         per_key[key].append((start, end))
     by_key: dict[tuple, dict[str, Any]] = {}
     model_intervals: dict[str, list] = defaultdict(list)
@@ -250,6 +254,7 @@ def attach_combined(
     measured_days: dict[tuple, set],
     *,
     source: str = "",
+    include_request_windows: bool = True,
 ) -> list[dict[str, Any]]:
     """Add combined fields to speed_report's rows; return the per-model rows.
 
@@ -257,7 +262,8 @@ def attach_combined(
     parallelism and peak_in_flight) and returns one entry per normalised model
     that merges every harness the model was measured in.
     """
-    by_key, by_model = combined_for_window(conn, day_from, day_to, source=source)
+    by_key, by_model = combined_for_window(conn, day_from, day_to, source=source,
+                                          include_request_windows=include_request_windows)
     models: dict[str, dict[str, Any]] = {}
     for row in rows:
         key = (row["source"], row["model"], row["measurement_kind"], row["token_basis"])
@@ -480,6 +486,7 @@ def trend_rows(
     *,
     bucket: str = "auto",
     source: str = "",
+    include_request_windows: bool = True,
     hour_of_local: Callable[[int], int],
     date_of_local: Callable[[int], str],
 ) -> dict[str, Any]:
@@ -499,7 +506,7 @@ def trend_rows(
     wanted = (source or "").strip().lower()
 
     series: dict[tuple, _Series] = {}
-    for key, ts, start, end, tokens, ms, calls in _responses(conn, since_ms, until_ms, wanted):
+    for key, ts, start, end, tokens, ms, calls in _responses(conn, since_ms, until_ms, wanted, include_request_windows):
         hour = hour_of_local(ts)
         slot = index.get(bucket_key(date_of_local(ts), granularity, hour))
         if slot is None:  # pragma: no cover - the window bounds keep every row inside an edge
