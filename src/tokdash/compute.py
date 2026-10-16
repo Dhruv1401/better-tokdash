@@ -776,8 +776,8 @@ def get_openclaw_data_for_range(date_from: str, date_to: str) -> Dict[str, Any]:
     return get_session_usage_range(since, until)
 
 
-def _has_visible_token_usage(row: Dict[str, Any]) -> bool:
-    """A row is visible if any of input/output/cacheRead/cacheWrite token dimensions are non-zero."""
+def _has_visible_usage(row: Dict[str, Any]) -> bool:
+    """Token usage or a positive recorded cost makes a model visible."""
     tokens_in = int(row.get("tokens_in", row.get("input", 0)) or 0)
     tokens_out = int(row.get("tokens_out", row.get("output", 0)) or 0)
     cache_read = int(row.get("cache_read", row.get("cacheRead", 0)) or 0)
@@ -788,7 +788,7 @@ def _has_visible_token_usage(row: Dict[str, Any]) -> bool:
         cache_total = int(row.get("tokens_cache", 0) or 0)
         cache_read = cache_total
 
-    return (tokens_in + tokens_out + cache_read + cache_write) > 0
+    return (tokens_in + tokens_out + cache_read + cache_write) > 0 or float(row.get("cost", 0.0) or 0.0) > 0
 
 
 def _normalize_model_name(name: str) -> str:
@@ -986,7 +986,7 @@ def compute_usage(period: str, date_from: Optional[str] = None, date_to: Optiona
     coding_models = [
         m
         for m in coding_data.get("all_models", [])
-        if (m.get("source") or "").lower() != "openclaw" and _has_visible_token_usage(m)
+        if (m.get("source") or "").lower() != "openclaw" and _has_visible_usage(m)
     ]
 
     total_tokens = openclaw_data["total_tokens"] + sum(v.get("tokens", 0) for v in coding_apps.values())
@@ -1019,14 +1019,14 @@ def compute_usage(period: str, date_from: Optional[str] = None, date_to: Optiona
     }
 
     openclaw_models = sorted(
-        [{"name": k, **v} for k, v in openclaw_data["models"].items() if _has_visible_token_usage(v)],
+        [{"name": k, **v} for k, v in openclaw_data["models"].items() if _has_visible_usage(v)],
         key=model_rank_key,
     )
 
     combined_by_model: Dict[str, dict] = {}
 
     def add_row(row: dict):
-        if not _has_visible_token_usage(row):
+        if not _has_visible_usage(row):
             return
         key = _normalize_model_name(row.get("name", "unknown"))
         cur = combined_by_model.setdefault(

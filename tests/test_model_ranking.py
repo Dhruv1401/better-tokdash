@@ -13,6 +13,7 @@ drifted back into agreement would silently stop testing anything.
 from __future__ import annotations
 
 import tokdash.compute as C
+import pytest
 from tokdash.compute import _merge_parsed_usage, compute_usage, parse_entries_json
 from tokdash.usage_store import UsageEntryStore, build_source_signature, model_rank_key
 
@@ -223,6 +224,23 @@ def test_cost_podium_ties_break_on_tokens(monkeypatch):
 
     out = compute_usage("today")
     assert [m["name"] for m in out["top_models_by_cost"]] == ["same-cost-big", "same-cost-small"]
+
+
+def test_cost_only_model_remains_in_overview_model_lists(monkeypatch):
+    entries = [*_entries(), _entry("hermes", "recorded-fee", 0, 50.0, 1_700_000_000_000)]
+    monkeypatch.setattr(C, "get_tools_data", lambda period: parse_entries_json({"entries": entries}))
+    monkeypatch.setattr(C, "get_openclaw_data", lambda period: _openclaw_payload())
+
+    out = compute_usage("today")
+
+    assert out["total_cost"] == pytest.approx(79.5)
+    assert out["by_tool"]["hermes"]["cost"] == pytest.approx(50.0)
+    for key in ("coding_models", "combined_models", "top_models_by_cost"):
+        fee = next(row for row in out[key] if row["name"] == "recorded-fee")
+        assert fee["tokens"] == 0
+        assert fee["cost"] == pytest.approx(50.0)
+    assert out["top_models_by_cost"][0]["name"] == "recorded-fee"
+    assert sum(row["cost"] for row in out["combined_models"]) == pytest.approx(out["total_cost"])
 
 
 def test_stats_podium_agrees_with_the_arrays(monkeypatch):
