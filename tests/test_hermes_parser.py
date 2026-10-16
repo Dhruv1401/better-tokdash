@@ -6,13 +6,14 @@ per-model breakdown (session_model_usage) as well as the older fallback.
 """
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from tokdash import compute, osinfo
 from tokdash.pricing import PricingDatabase
-from tokdash.sources.coding_tools import BaseParser, HermesParser, _sig_cache
+from tokdash.sources.coding_tools import BaseParser, CodingToolsUsageTracker, HermesParser, _sig_cache
 from tokdash.usage_store import (
     UsageEntryStore,
     _entry_for_storage,
@@ -887,6 +888,73 @@ def test_hermes_message_count_lands_on_a_row_that_reports_usage(monkeypatch, tmp
     assert [e["_billing"]["kind"] for e in entries] == ["fixed", "pricing"]
     assert [e["messageCount"] for e in entries] == [0, 6]
     assert sum(_entry_for_storage(e)["messageCount"] for e in entries) == 6
+
+
+@pytest.mark.parametrize("backend", ["disabled", "stored", "corrupt"])
+@pytest.mark.parametrize("charge_group", ["same", "other-model", "other-provider", "cost-only"])
+def test_hermes_tokenless_charge_survives_overview_aggregation(
+    monkeypatch, tmp_path, backend, charge_group,
+):
+    """Splitting a fixed charge from priced tokens must preserve the whole bill."""
+    hermes_dir = tmp_path / ".hermes"
+    hermes_dir.mkdir()
+    charged_model = "claude-3-5-sonnet" if charge_group == "other-model" else "gpt-4o"
+    charged_provider = "proxy" if charge_group == "other-provider" else "openai"
+    usage_rows = [
+        _default_usage_row(
+            session_id="sess-charge", model=charged_model, billing_provider=charged_provider,
+            input_tokens=0, output_tokens=0, actual_cost_usd=0.01,
+            first_seen=1779395293.0,
+        ),
+    ]
+    if charge_group != "cost-only":
+        usage_rows.append(_default_usage_row(
+            session_id="sess-charge", model="gpt-4o", billing_provider="openai", task="main",
+            input_tokens=1000, output_tokens=100, first_seen=1779395300.0,
+        ))
+    _create_hermes_db(
+        hermes_dir / "state.db",
+        [_default_row(row_id="sess-charge", model="gpt-4o", billing_provider="openai",
+                      message_count=6)],
+        usage_rows,
+    )
+    monkeypatch.setenv("HERMES_HOME", str(hermes_dir))
+    monkeypatch.setenv("TOKDASH_USAGE_DB", "0" if backend == "disabled" else "1")
+    store_path = tmp_path / "usage.sqlite3"
+    monkeypatch.setenv("TOKDASH_USAGE_DB_PATH", str(store_path))
+    if backend == "corrupt":
+        store_path.write_bytes(b"not a sqlite database")
+    _write_rates({"openai/gpt-4o": 2.0, "gpt-4o": 2.0})
+    _sig_cache.clear()
+    BaseParser._entry_cache.clear()
+    tracker = CodingToolsUsageTracker()
+    tracker.parsers = {"hermes": HermesParser(tracker.pricing_db)}
+    tracker._dir_conflicts = []
+    monkeypatch.setattr(compute, "CodingToolsUsageTracker", lambda: tracker)
+
+    since = datetime.fromtimestamp(1779395293.0, timezone.utc) - timedelta(hours=1)
+    result = compute.get_tools_data_for_range(since, since + timedelta(hours=2))
+
+    expected_tokens = 0 if charge_group == "cost-only" else 1100
+    expected_cost = 0.01 if charge_group == "cost-only" else 0.0122
+    assert result["source_errors"] == []
+    assert result["total_cost"] == pytest.approx(expected_cost)
+    assert result["total_tokens"] == expected_tokens
+    assert result["total_messages"] == 6
+    app = result["apps"]["hermes"]
+    assert (app["tokens"], app["messages"]) == (expected_tokens, 6)
+    assert app["cost"] == pytest.approx(expected_cost)
+    assert sum(row["cost"] for row in result["all_models"]) == pytest.approx(expected_cost)
+    assert sum(row["cost"] for row in app["models"]) == pytest.approx(expected_cost)
+    charged_name = f"{charged_provider}/{charged_model}"
+    charged = next(row for row in app["models"] if row["name"] == charged_name)
+    assert charged["cost"] == pytest.approx(0.0122 if charge_group == "same" else 0.01)
+    if charge_group != "same":
+        assert charged["tokens"] == 0
+    buckets = result["sparkline"]["buckets"]
+    assert sum(row["cost"] for row in buckets) == pytest.approx(expected_cost)
+    assert sum(row["tokens"] for row in buckets) == expected_tokens
+    assert sum(row["messages"] for row in buckets) == 6
 
 
 def test_hermes_stored_rows_reprice_only_the_priced_half(monkeypatch, tmp_path):

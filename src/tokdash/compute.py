@@ -291,12 +291,12 @@ def _merge_parsed_usage(parts: list[Dict[str, Any]]) -> Dict[str, Any]:
             source = str(row.get("source") or "unknown")
             name = str(row.get("name") or "unknown")
             tokens = int(row.get("tokens", 0) or 0)
-            if tokens == 0:
+            cost = float(row.get("cost", 0.0) or 0.0)
+            if tokens == 0 and cost <= 0:
                 continue
             tokens_in = int(row.get("tokens_in", 0) or 0)
             tokens_out = int(row.get("tokens_out", 0) or 0)
             tokens_cache = int(row.get("tokens_cache", 0) or 0)
-            cost = float(row.get("cost", 0.0) or 0.0)
             messages = int(row.get("messages", 0) or 0)
 
             app_ref = apps.setdefault(
@@ -511,8 +511,10 @@ def parse_entries_json(data: Dict[str, Any], *, granularity: Optional[str] = Non
         # `totalTokens` definition and keeps Overview consistent with Stats).
         total_tokens = tokens_in + tokens_out + tokens_cache + reasoning
 
-        # Suppress fully empty rows.
-        if total_tokens == 0:
+        # A recorded charge can have no token counters (for example a Hermes
+        # fixed billing half). Suppress only rows with neither usage nor a fee.
+        entry_cost = float(entry.get("cost") or 0.0)
+        if total_tokens == 0 and entry_cost <= 0:
             continue
 
         # Prefer parser-provided cost when present (pi-agent ships per-message
@@ -521,7 +523,6 @@ def parse_entries_json(data: Dict[str, Any], *, granularity: Optional[str] = Non
         # only when the parser couldn't determine cost keeps Overview/API costs
         # aligned with the per-source semantics and with the Stats tab, which
         # already trusts entry["cost"].
-        entry_cost = float(entry.get("cost") or 0.0)
         # costAuthoritative marks a recorded zero as the source's own
         # billing decision (a free request): accept it instead of
         # guessing a price from the token buckets.

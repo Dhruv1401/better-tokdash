@@ -2690,12 +2690,12 @@ class UsageEntryStore:
                     for field in row:
                         if field.endswith("_sum") or field.endswith("_unpriced"):
                             grouped[key][field] += row[field] or 0
-            # Eligibility belongs to the whole selected model, as it did before
-            # bucketing. A tokenless hour/month can still carry its messages or
-            # recorded fees when the model has visible usage elsewhere in range.
+            # Eligibility belongs to the whole selected model. Recorded fees
+            # make a model visible even when it has no token counters in range.
             token_fields = ("input_sum", "output_sum", "cache_read_sum", "cache_write_sum", "reasoning_sum")
             visible = {key for key, row in grouped.items()
-                       if sum(int(row[field] or 0) for field in token_fields) != 0}
+                       if sum(int(row[field] or 0) for field in token_fields) != 0
+                       or float(row["cost_priced_sum"] or 0.0) > 0}
             for row in rows:
                 key = (row["source"], row["provider"], row["model"])
                 if key not in visible or str(row["source"]).lower() == "openclaw":
@@ -2737,7 +2737,7 @@ class UsageEntryStore:
             tokens_in = input_raw + cache_write
             tokens_cache = cache_read
             tokens = tokens_in + output + tokens_cache + reasoning
-            if tokens == 0:
+            if tokens == 0 and cost <= 0:
                 continue
 
             # Recompute the zero-cost rows' share separately. A parser may store
