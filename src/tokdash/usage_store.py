@@ -1951,9 +1951,14 @@ class UsageEntryStore:
     ) -> None:
         """Publish the path-ordered fold for changed keys in the same transaction."""
         keys = sorted(affected)
+        changed_owners: set[str] = set()
         for start in range(0, len(keys), 500):
             batch = keys[start : start + 500]
             placeholders = ",".join("?" for _ in batch)
+            previous_owners = dict(conn.execute(
+                f"SELECT entry_key, file_path FROM usage_entries "
+                f"WHERE source = ? AND entry_key IN ({placeholders})", [source, *batch]
+            ))
             winners: dict[str, tuple[str, dict[str, Any]]] = {}
             for row in conn.execute(
                 f"SELECT entry_key, file_path, raw_json FROM usage_entry_candidates "
@@ -1966,6 +1971,12 @@ class UsageEntryStore:
                 best = winners.get(row["entry_key"])
                 if best is None or supersedes(entry, best[1]):
                     winners[row["entry_key"]] = (row["file_path"], entry)
+            for key in batch:
+                previous = previous_owners.get(key)
+                winner = winners.get(key)
+                current = winner[0] if winner is not None else None
+                if previous != current:
+                    changed_owners.update(path for path in (previous, current) if path is not None)
             conn.execute(
                 f"DELETE FROM usage_entries WHERE source = ? AND entry_key IN ({placeholders})",
                 [source, *batch],
@@ -1983,6 +1994,15 @@ class UsageEntryStore:
                     stable_json(public_usage_entry(entry)), _billing_json(entry), _entry_cost_authoritative(entry),
                 ))
             conn.executemany(insert_sql, values)
+        # A swap can leave both owners' row counts unchanged. Stamp both sides
+        # so timing invalidation sees their changed populations without parsing
+        # unchanged source logs during accounting. Advance even in one clock tick.
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        conn.executemany(
+            "UPDATE file_state SET updated_at_ms = MAX(updated_at_ms + 1, ?) "
+            "WHERE source = ? AND path = ?",
+            [(now_ms, source, path) for path in sorted(changed_owners)],
+        )
 
     def sync_files(
         self,
@@ -2353,10 +2373,11 @@ class UsageEntryStore:
                             (int(datetime.now(timezone.utc).timestamp() * 1000), source, path),
                         )
                     else:
-                        conn.execute(
-                            "DELETE FROM usage_entries WHERE source = ? AND file_path = ?",
-                            (source, path),
-                        )
+                        if entry_supersedes is None:
+                            conn.execute(
+                                "DELETE FROM usage_entries WHERE source = ? AND file_path = ?",
+                                (source, path),
+                            )
                         conn.execute(
                             "DELETE FROM file_state WHERE source = ? AND path = ?",
                             (source, path),
@@ -2412,7 +2433,10 @@ class UsageEntryStore:
                     conn.executemany("INSERT OR IGNORE INTO usage_session_inputs VALUES (?,?,?)",
                                      ((source,str(sid),path) for sid in {e.get('_session_id') for e in entries} if sid))
                     total_changed_entries += len(entries)
-                    if not appended:
+                    # Candidate resolution publishes canonical rows once, after
+                    # every file's candidates and state are ready. Retain the old
+                    # rows until then so it can invalidate their former owners.
+                    if not appended and entry_supersedes is None:
                         if unresolved_keys:
                             # Hold, not heal. These keys keep the row they already
                             # had instead of losing it with the replaced owner, and
@@ -2439,30 +2463,31 @@ class UsageEntryStore:
                                 "DELETE FROM usage_entries WHERE source = ? AND file_path = ?",
                                 (source, path),
                             )
-                    conn.executemany(
-                        insert_sql,
-                        [
-                            (
-                                e["source"],
-                                path,
-                                e["entry_key"],
-                                e["model"],
-                                e["provider"],
-                                e["timestamp"],
-                                e["input"],
-                                e["output"],
-                                e["cacheRead"],
-                                e["cacheWrite"],
-                                e["reasoning"],
-                                e["cost"],
-                                e["messageCount"],
-                                stable_json(public_usage_entry(e)),
-                                _billing_json(e),
-                                _entry_cost_authoritative(e),
-                            )
-                            for e in entries
-                        ],
-                    )
+                    if entry_supersedes is None:
+                        conn.executemany(
+                            insert_sql,
+                            [
+                                (
+                                    e["source"],
+                                    path,
+                                    e["entry_key"],
+                                    e["model"],
+                                    e["provider"],
+                                    e["timestamp"],
+                                    e["input"],
+                                    e["output"],
+                                    e["cacheRead"],
+                                    e["cacheWrite"],
+                                    e["reasoning"],
+                                    e["cost"],
+                                    e["messageCount"],
+                                    stable_json(public_usage_entry(e)),
+                                    _billing_json(e),
+                                    _entry_cost_authoritative(e),
+                                )
+                                for e in entries
+                            ],
+                        )
                     conn.execute(
                         """
                         INSERT INTO file_state(
@@ -2476,7 +2501,7 @@ class UsageEntryStore:
                             safe_offset = excluded.safe_offset,
                             missing = excluded.missing,
                             signature = excluded.signature,
-                            updated_at_ms = excluded.updated_at_ms,
+                            updated_at_ms = MAX(file_state.updated_at_ms + 1, excluded.updated_at_ms),
                             entry_count = excluded.entry_count
                         """,
                         (

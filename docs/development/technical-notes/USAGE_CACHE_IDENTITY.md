@@ -25,6 +25,12 @@ unchanged transcripts. A rewrite replaces that file's candidates; durable missin
 files keep theirs. Promotion reprices the winner using the same pricing snapshot
 as the sync. Candidate metadata stays out of public usage rows.
 
+Candidate publication also advances the file state of former and new owners.
+This invalidates derived timing even when two files exchange messages without
+changing their row counts, including successive syncs in the same clock tick.
+The timing worker reuses an unchanged file's measurements only when they cover
+all of its current canonical rows; newly acquired calls require a timing read.
+
 The schema upgrade seeds previously stored Claude rows as candidates, preserving
 archived usage. Claude parser version 4 and Crush version 2 rebuild surviving
 files to establish the corrected ownership.

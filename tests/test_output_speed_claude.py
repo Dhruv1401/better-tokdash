@@ -280,6 +280,66 @@ def test_model_rows_and_the_session_timeline_come_from_one_build(claude_home):
         'cache_state'] == 'ready'
 
 
+@pytest.mark.parametrize('change', ['snapshots', 'reclassification'])
+def test_ownership_swaps_rebuild_timing_with_unchanged_file_counts(claude_home, monkeypatch, change):
+    from tokdash import usage_store
+    from tokdash.sources.coding_tools import _sig_cache
+
+    # Repeated publications in one clock tick must still invalidate their inputs.
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return T0.astimezone(tz)
+
+    monkeypatch.setattr(usage_store, 'datetime', FrozenDatetime)
+    monkeypatch.setenv('TOKDASH_SPEED_CPU_FRACTION', '1')
+
+    def call(mid, start, end, sid, *, out=400, cached=False):
+        sender = user(f'{sid}-{mid}-u', None, start, sid=sid)
+        answer = block(f'{sid}-{mid}-a', sender['uuid'], end, mid, 'text',
+                       index=0, stop='end_turn', sid=sid, out=out)
+        if cached:
+            answer['message']['usage'].update(input_tokens=0, cache_read_input_tokens=10)
+        return [sender, answer]
+
+    def sync():
+        _sig_cache.clear()
+        return compute._sync_usage_store(CodingToolsUsageTracker())[0]
+
+    a, b, c = [claude_home / 'proj' / f'{name}.jsonl' for name in ('aaaa', 'bbbb', 'cccc')]
+    write(a, call('m1', 0, 1000, 'a') + call('m2', 10000, 12000, 'a'))
+    if change == 'snapshots':
+        write(b, call('m1', 20000, 26000, 'b', out=500) + call('m2', 30000, 33000, 'b', out=300))
+        changed_rows = call('m1', 20000, 26000, 'b', out=300) + call('m2', 30000, 33000, 'b', out=500)
+        expected_owners = {'claude:m1': str(a), 'claude:m2': str(b)}
+        expected_ms = 4000
+    else:
+        write(b, call('m2', 10000, 14000, 'b', cached=True))
+        write(c, call('m1', 20000, 26000, 'c') + call('m2', 30000, 33000, 'c'))
+        changed_rows = call('m1', 10000, 18000, 'b', cached=True)
+        expected_owners = {'claude:m1': str(c), 'claude:m2': str(a)}
+        expected_ms = 8000
+    store = sync()
+    with closing(store.read_connection()) as conn:
+        before_counts = dict(conn.execute("SELECT path,entry_count FROM file_state WHERE source='claude'"))
+    _run(speed_cache.ensure(DAY, DAY, source='claude'))
+
+    write(b, changed_rows)
+    store = sync()
+    with closing(store.read_connection()) as conn:
+        assert dict(conn.execute("SELECT path,entry_count FROM file_state WHERE source='claude'")) == before_counts
+        assert dict(conn.execute("SELECT entry_key,file_path FROM usage_entries WHERE source='claude'")) == expected_owners
+    status = speed_cache.ensure(DAY, DAY, source='claude')
+    assert status['state'] == 'stale'
+    assert status['pending_inputs'] == 2
+    _run(status)
+
+    with closing(speed_cache.connect(readonly=True)) as conn:
+        assert dict(conn.execute("SELECT entry_key,input_owner FROM speed_responses WHERE source='claude'")) == expected_owners
+        assert conn.execute("SELECT sum(speed_calls),sum(speed_ms) FROM speed_responses WHERE source='claude'").fetchone()[:] == (2, expected_ms)
+    assert speed_cache.ensure(DAY, DAY, source='claude')['state'] == 'ready'
+
+
 def test_claude_is_end_anchored_and_single_block_requests_are_exact():
     # Single-block (and pre-2.1.x cumulative) requests bill the write that closes
     # the window; a recorded start covers multi-block ones.
