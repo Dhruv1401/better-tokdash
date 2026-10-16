@@ -3579,6 +3579,234 @@ class CopilotCLIParser(BaseParser):
         return out
 
 
+# ---------------------------------------------------------------------------
+# Hermes per-model attribution (Issue #238) -- shared by Overview and Sessions
+# ---------------------------------------------------------------------------
+# Hermes' `sessions` row covers the whole session: its token columns are
+# session totals while its `model` column names one model, typically the last
+# one used. `session_model_usage` holds the breakdown, one row per
+# (session_id, model, billing_provider, billing_base_url, billing_mode, task).
+#
+# Both surfaces need that breakdown and they must agree on it, so everything up
+# to "what did this session actually use" lives here: Overview turns the groups
+# into usage entries (usage_billing_* in usage_store.py) and Sessions turns them
+# into turn bills (_billing_record in sessions.py). The cost *representation*
+# stays each surface's own because each repricing path reads its own.
+#
+# Grouping keeps every distinction a Tokdash price depends on -- the model and
+# the recorded billing provider, since a proxy rate and a vendor rate for one
+# model are different prices -- and sums the rest, which is what folds a
+# session's auxiliary calls into the model that made them. A group's recorded
+# charge and its repricable tokens stay in separate halves (see
+# hermes_usage_parts), because merging them would either freeze the priced
+# tokens at the recorded number or reprice a charge the provider reported.
+
+HERMES_USAGE_TABLE = "session_model_usage"
+
+# Halves of one (model, provider) group.
+HERMES_PART_RECORDED = "recorded"
+HERMES_PART_PRICED = "priced"
+
+# Columns the breakdown reads. A table without these is not the breakdown
+# (older or foreign Hermes database), and the caller falls back to the
+# sessions-table row. The rest degrade to their default individually: a database
+# that predates billing_provider still knows its per-model tokens.
+_HERMES_USAGE_REQUIRED = ("session_id", "model", "input_tokens", "output_tokens")
+_HERMES_USAGE_COLUMNS = (
+    ("billing_provider", "''"),
+    ("input_tokens", "0"),
+    ("output_tokens", "0"),
+    ("cache_read_tokens", "0"),
+    ("cache_write_tokens", "0"),
+    ("reasoning_tokens", "0"),
+    ("estimated_cost_usd", "0"),
+    ("actual_cost_usd", "0"),
+    ("first_seen", "NULL"),
+)
+
+
+def hermes_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def hermes_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def hermes_timestamp_ms(value: Any) -> int:
+    """started_at / first_seen as epoch-ms. Hermes writes seconds; a value
+    already past 1e12 is taken as milliseconds and passed through."""
+    stamp = hermes_float(value)
+    return int(stamp * 1000) if 0 < stamp < 1e12 else int(stamp)
+
+
+def hermes_provider(model: Any, recorded: Any = None) -> str:
+    """The provider Tokdash bills under: whatever the database recorded, and
+    only when it recorded nothing does the model name get to speak. Inference
+    is a guess, and a guess that overrides a recorded proxy turns a proxy rate
+    into a vendor rate."""
+    provider = str(recorded or "").strip()
+    return provider or HermesParser._infer_provider(str(model or ""))
+
+
+def hermes_price_candidates(model: Any, provider: Any) -> List[str]:
+    """Ordered pricing keys for a group: provider-qualified first, then bare.
+
+    The order is the contract. Kept as a list rather than resolved at parse
+    time so a stored row reprices with the same priority -- including when a
+    later pricing file adds the qualified key that should now shadow the bare
+    one (see billing provenance in
+    docs/development/technical-notes/USAGE_CACHE_IDENTITY.md).
+    """
+    name = str(model or "")
+    provider = str(provider or "")
+    return [f"{provider}/{name}", name] if provider else [name]
+
+
+def _hermes_part() -> Dict[str, Any]:
+    return {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0,
+            "reasoning": 0, "cost": 0.0}
+
+
+def hermes_model_usage_groups(
+    conn: sqlite3.Connection,
+) -> Optional[Dict[str, Dict[Tuple[str, str], Dict[str, Any]]]]:
+    """``{session_id: {(model, provider): group}}`` from session_model_usage.
+
+    ``None`` means "this database has no breakdown I can read", which is how
+    both surfaces keep their older-database fallback instead of losing the whole
+    database to one unexpected column.
+    """
+    try:
+        return _hermes_usage_groups(conn)
+    except Exception:
+        return None
+
+
+def _hermes_usage_groups(
+    conn: sqlite3.Connection,
+) -> Optional[Dict[str, Dict[Tuple[str, str], Dict[str, Any]]]]:
+    columns = {
+        str(row[1])
+        for row in conn.execute(f"PRAGMA table_info({HERMES_USAGE_TABLE})").fetchall()
+    }
+    if not set(_HERMES_USAGE_REQUIRED).issubset(columns):
+        return None
+    selected = ", ".join(
+        name if name in columns else default for name, default in _HERMES_USAGE_COLUMNS
+    )
+    try:
+        rows = conn.execute(
+            f"SELECT session_id, model, {selected} FROM {HERMES_USAGE_TABLE}"
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+
+    groups: Dict[str, Dict[Tuple[str, str], Dict[str, Any]]] = {}
+    for row in rows:
+        (raw_sid, raw_model, raw_provider, raw_input, raw_output, raw_cache_read,
+         raw_cache_write, raw_reasoning, raw_estimated, raw_actual, raw_first) = row
+        session_id = str(raw_sid)
+        model = str(raw_model).strip() if raw_model is not None else ""
+        model = model or "unknown"
+        provider = hermes_provider(model, raw_provider)
+        group = groups.setdefault(session_id, {}).get((model, provider))
+        if group is None:
+            group = groups[session_id][(model, provider)] = {
+                "model": model,
+                "provider": provider,
+                "first_seen": None,
+                "parts": {
+                    HERMES_PART_RECORDED: _hermes_part(),
+                    HERMES_PART_PRICED: _hermes_part(),
+                },
+            }
+        actual = hermes_float(raw_actual)
+        estimated = hermes_float(raw_estimated)
+        # Cost precedence, identical to the sessions-table row: a positive
+        # actual cost, then a positive estimated one, then Tokdash's own rate. A
+        # recorded zero is "nothing recorded", not "free", so it falls through.
+        recorded = actual if actual > 0 else (estimated if estimated > 0 else None)
+        part = group["parts"][HERMES_PART_RECORDED if recorded else HERMES_PART_PRICED]
+        part["input"] += hermes_int(raw_input)
+        part["output"] += hermes_int(raw_output)
+        part["cache_read"] += hermes_int(raw_cache_read)
+        part["cache_write"] += hermes_int(raw_cache_write)
+        part["reasoning"] += hermes_int(raw_reasoning)
+        if recorded:
+            part["cost"] += recorded
+        if raw_first is not None:
+            stamp = hermes_timestamp_ms(raw_first)
+            if stamp > 0 and (group["first_seen"] is None or stamp < group["first_seen"]):
+                group["first_seen"] = stamp
+    return groups
+
+
+def hermes_part_tokens(part: Dict[str, Any]) -> int:
+    return (part["input"] + part["output"] + part["cache_read"]
+            + part["cache_write"] + part["reasoning"])
+
+
+
+def hermes_usage_parts(group: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The halves of *group* that earn a row, in emit order.
+
+    A half with neither tokens nor a recorded charge earns nothing, so a session
+    whose every half is empty contributes no row at all -- the same skip the
+    sessions-table path applies.
+    """
+    parts = []
+    for name in (HERMES_PART_RECORDED, HERMES_PART_PRICED):
+        part = group["parts"][name]
+        if part["cost"] > 0 or hermes_part_tokens(part) > 0:
+            parts.append({**part, "name": name})
+    return parts
+
+
+def hermes_sorted_usage_groups(groups: Dict[Tuple[str, str], Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Groups in the order the session met them, so the first model to answer is
+    the first row. A group with no first_seen keeps scan order behind the dated
+    ones rather than jumping to the front."""
+    return sorted(
+        groups.values(),
+        key=lambda group: (group.get("first_seen") is None, group.get("first_seen") or 0),
+    )
+
+
+def hermes_group_timestamp_ms(group: Dict[str, Any], base_ts_ms: int) -> int:
+    """When the group happened: its own first_seen, else the session's start."""
+    stamp = group.get("first_seen")
+    return int(stamp) if stamp else int(base_ts_ms or 0)
+
+
+def hermes_group_id(sid: str, group: Dict[str, Any], part: Optional[str] = None) -> str:
+    """Identity of one group, or of one half of it.
+
+    The recorded provider belongs here: one model reached through two providers
+    is two different bills, and an identity that dropped the provider would have
+    them collide -- in the usage store, and in the session turn merge.
+    """
+    provider = str(group.get("provider") or "")
+    model = str(group.get("model") or "unknown")
+    key = f"hermes:{sid}:{provider}:{model}" if provider else f"hermes:{sid}:{model}"
+    return f"{key}:{part}" if part else key
+
+
+_HERMES_SESSIONS_QUERY = """
+    SELECT id, model, billing_provider, started_at,
+           message_count, input_tokens, output_tokens,
+           cache_read_tokens, cache_write_tokens,
+           reasoning_tokens, estimated_cost_usd, actual_cost_usd
+    FROM sessions
+"""
+
+
 class HermesParser(BaseParser):
     """
     Parser for Hermes agent session database.
@@ -3597,15 +3825,28 @@ class HermesParser(BaseParser):
                   cache_read_tokens, cache_write_tokens,
                   reasoning_tokens, estimated_cost_usd, actual_cost_usd
            FROM sessions
-           WHERE model IS NOT NULL AND TRIM(model) != ''
 
-    One entry per session row.  started_at is a Python float Unix timestamp
-    in seconds; multiply by 1000 for epoch-ms (or treat as-is if > 1e12).
+    Per-model attribution (Issue #238), preferred when available: the
+    session_model_usage table (see hermes_model_usage_groups above) holds one
+    row per (session_id, model, billing_provider, billing_base_url,
+    billing_mode, task) and carries that model's own token counts.  One entry
+    per (model, billing_provider) group, and per billing half of such a group,
+    ordered by first_seen.  Its token totals can legitimately exceed the
+    sessions row's, because the breakdown includes auxiliary calls: they are
+    never rescaled to the session total and never added to it.
 
-    Cost precedence:
+    Fallback for a database without that table: one entry per session row, and
+    the sessions row's own tokens and model.
+
+    started_at is a Python float Unix timestamp in seconds; multiply by 1000
+    for epoch-ms (or treat as-is if > 1e12).  first_seen orders the models.
+
+    Cost precedence, per row of either table:
       1. actual_cost_usd if positive
       2. estimated_cost_usd if positive
       3. pricing DB lookup via billing_provider/model, then bare model
+    Rows that reach a recorded cost and rows Tokdash prices stay separate
+    inside a group, so a recorded charge never freezes the repricable half.
     NOTE: a recorded zero (e.g. ChatGPT Plus subscription) is treated as
     "no cost recorded" and falls through to pricing-DB calc — it does NOT
     short-circuit.
@@ -3621,9 +3862,12 @@ class HermesParser(BaseParser):
         mode="source_replace",
         reason="Hermes is DB-backed; current safe cache unit is the whole source until DB-native incremental sync is added.",
     )
-    # 1: session-level rows keyed on the Hermes row id, actual/estimated cost
-    #    kept as fixed, otherwise priced provider-qualified then bare.
-    persistent_parser_version = 1
+    # 3: per-model groups keyed by the recorded billing provider, recorded
+    #    charges split from repricable tokens, and the session's message count
+    #    carried by exactly one row. Version 2 dropped a recorded provider,
+    #    froze a repricable cost at a sibling's recorded charge, and counted one
+    #    message too many per extra model, so its stored rows are wrong.
+    persistent_parser_version = 3
 
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)
@@ -3671,113 +3915,185 @@ class HermesParser(BaseParser):
         seen_ids: set = set()
 
         for db_path in self._db_paths():
+            conn = None
             try:
                 conn = connect_sqlite_readonly(db_path)
-                cur = conn.cursor()
                 try:
-                    cur.execute(
-                        """
-                        SELECT id, model, billing_provider, started_at,
-                               message_count, input_tokens, output_tokens,
-                               cache_read_tokens, cache_write_tokens,
-                               reasoning_tokens, estimated_cost_usd, actual_cost_usd
-                        FROM sessions
-                        WHERE model IS NOT NULL AND TRIM(model) != ''
-                        """
-                    )
-                    rows = cur.fetchall()
+                    rows = conn.execute(_HERMES_SESSIONS_QUERY).fetchall()
                 except Exception:
-                    conn.close()
                     continue
-                conn.close()
+                usage = hermes_model_usage_groups(conn)
 
                 for row in rows:
                     try:
                         (
-                            row_id, model, billing_provider, started_at,
+                            row_id, sess_model, billing_provider, started_at,
                             message_count, input_t, output_t,
                             cache_r, cache_w, reasoning,
                             estimated_cost, actual_cost,
                         ) = row
 
-                        # Dedup across multiple state.db files
-                        if row_id in seen_ids:
+                        # Claimed at first sight, before any skip, so a zero row
+                        # in an earlier file suppresses a later file's real row --
+                        # and Sessions, which mirrors this, stays in parity.
+                        sid = str(row_id)
+                        if sid in seen_ids:
                             continue
-                        seen_ids.add(row_id)
+                        seen_ids.add(sid)
 
-                        input_t = self._i(input_t)
-                        output_t = self._i(output_t)
-                        cache_r = self._i(cache_r)
-                        cache_w = self._i(cache_w)
-                        reasoning = self._i(reasoning)
-
-                        actual_cost_f = float(actual_cost or 0.0)
-                        estimated_cost_f = float(estimated_cost or 0.0)
-
-                        # Skip rows with no tokens AND no recorded cost
-                        has_tokens = (input_t + output_t + cache_r + cache_w + reasoning) > 0
-                        has_cost = actual_cost_f > 0 or estimated_cost_f > 0
-                        if not has_tokens and not has_cost:
+                        ts_ms = hermes_timestamp_ms(started_at)
+                        if usage is not None and sid in usage:
+                            out.extend(self._usage_entries(
+                                sid, usage[sid], ts_ms, hermes_int(message_count)))
                             continue
 
-                        # Timestamp: started_at is seconds; if > 1e12 already in ms.
-                        try:
-                            sa = float(started_at or 0.0)
-                        except (ValueError, TypeError):
-                            sa = 0.0
-                        ts_ms = int(sa * 1000) if sa < 1e12 else int(sa)
-
-                        # Cost precedence: actual > estimated > pricing DB.
-                        # A recorded zero is NOT treated as a real zero — fall through.
-                        provider = str(billing_provider or "").strip() or self._infer_provider(str(model or ""))
-                        if actual_cost_f > 0:
-                            cost = actual_cost_f
-                            # Hermes' own subscription-aware number; never repriced.
-                            billing = usage_billing_fixed(actual_cost_f)
-                        elif estimated_cost_f > 0:
-                            cost = estimated_cost_f
-                            billing = usage_billing_fixed(estimated_cost_f)
-                        else:
-                            # Try provider/model first, then bare model
-                            provider_model = f"{provider}/{model}" if provider else str(model or "")
-                            cost = self.pricing_db.get_cost(provider_model, input_t, output_t, cache_r, cache_w)
-                            if cost == 0.0 and provider:
-                                cost = self.pricing_db.get_cost(str(model or ""), input_t, output_t, cache_r, cache_w)
-                            # Same ordered candidates, so a later provider-specific
-                            # rate still shadows the bare key on a reprice.
-                            billing = usage_billing_pricing(
-                                [provider_model] + ([str(model or "")] if provider else []),
-                                input_tokens=input_t,
-                                output_tokens=output_t,
-                                cache_read=cache_r,
-                                cache_write=cache_w,
-                            )
-
-                        out.append({
-                            "source": self.source_name,
-                            "model": str(model or "unknown"),
-                            "provider": provider,
-                            "input": input_t,
-                            "output": output_t,
-                            "cacheRead": cache_r,
-                            "cacheWrite": cache_w,
-                            "reasoning": reasoning,
-                            "cost": cost,
-                            "timestamp": ts_ms,
-                            # Hermes rows are session-level aggregates: one
-                            # entry represents N messages. Propagate the count
-                            # so compute.py credits sessions correctly instead
-                            # of treating each row as a single message.
-                            "messageCount": int(self._i(message_count)),
-                            "entry_id": f"hermes:{row_id}",
-                            "_billing": billing,
-                        })
+                        entry = self._session_row_entry(
+                            sid, sess_model, billing_provider, ts_ms, message_count,
+                            input_t, output_t, cache_r, cache_w, reasoning,
+                            estimated_cost, actual_cost,
+                        )
+                        if entry is not None:
+                            out.append(entry)
                     except Exception:
                         continue
+
+                # Breakdown rows whose session never reached the sessions table.
+                if usage:
+                    for orphan_sid, groups in usage.items():
+                        if orphan_sid in seen_ids:
+                            continue
+                        seen_ids.add(orphan_sid)
+                        out.extend(self._usage_entries(orphan_sid, groups, 0, 0))
             except Exception:
                 continue
+            finally:
+                if conn is not None:
+                    conn.close()
 
         return out
+
+    def _usage_entries(
+        self,
+        sid: str,
+        groups: Dict[Tuple[str, str], Dict[str, Any]],
+        base_ts: int,
+        msg_count: int,
+    ) -> List[Dict[str, Any]]:
+        """One row per non-empty half of each of the session's model groups.
+
+        ``message_count`` counts the session, not any one of these rows, so it
+        rides on exactly one of them -- the first with tokens -- and the rest
+        carry an explicit zero. Omitting it instead charges the session an extra
+        message per row: a row that says nothing about its count is read as one
+        message by every consumer (see entry_message_count in usage_store.py).
+        """
+        emitted = [
+            (group, part)
+            for group in hermes_sorted_usage_groups(groups)
+            for part in hermes_usage_parts(group)
+        ]
+        if not emitted:
+            return []
+        marker = next(
+            (index for index, (_group, part) in enumerate(emitted)
+             if hermes_part_tokens(part) > 0),
+            0,
+        )
+
+        entries: List[Dict[str, Any]] = []
+        for index, (group, part) in enumerate(emitted):
+            if part["name"] == HERMES_PART_RECORDED:
+                # Hermes' own subscription-aware number; never repriced.
+                billing = usage_billing_fixed(part["cost"])
+            else:
+                billing = usage_billing_pricing(
+                    hermes_price_candidates(group["model"], group["provider"]),
+                    input_tokens=part["input"],
+                    output_tokens=part["output"],
+                    cache_read=part["cache_read"],
+                    cache_write=part["cache_write"],
+                )
+            entries.append({
+                "source": self.source_name,
+                "model": group["model"],
+                "provider": group["provider"],
+                "input": part["input"],
+                "output": part["output"],
+                "cacheRead": part["cache_read"],
+                "cacheWrite": part["cache_write"],
+                "reasoning": part["reasoning"],
+                "cost": usage_entry_cost(billing, self.pricing_db),
+                "timestamp": hermes_group_timestamp_ms(group, base_ts),
+                "messageCount": msg_count if index == marker else 0,
+                "entry_id": hermes_group_id(sid, group, part["name"]),
+                "_billing": billing,
+            })
+        return entries
+
+    def _session_row_entry(
+        self,
+        sid: str,
+        sess_model: Any,
+        billing_provider: Any,
+        ts_ms: int,
+        message_count: Any,
+        input_t: Any,
+        output_t: Any,
+        cache_r: Any,
+        cache_w: Any,
+        reasoning: Any,
+        estimated_cost: Any,
+        actual_cost: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """The older database shape: one session row is one entry of session totals."""
+        input_t = hermes_int(input_t)
+        output_t = hermes_int(output_t)
+        cache_r = hermes_int(cache_r)
+        cache_w = hermes_int(cache_w)
+        reasoning = hermes_int(reasoning)
+        actual = hermes_float(actual_cost)
+        estimated = hermes_float(estimated_cost)
+
+        # Skip rows with no tokens AND no recorded cost
+        if (input_t + output_t + cache_r + cache_w + reasoning) <= 0 and not (
+            actual > 0 or estimated > 0
+        ):
+            return None
+
+        provider = hermes_provider(sess_model, billing_provider)
+        if actual > 0:
+            billing = usage_billing_fixed(actual)
+        elif estimated > 0:
+            billing = usage_billing_fixed(estimated)
+        else:
+            # Same ordered candidates the live lookup used, so a later
+            # provider-specific rate still shadows the bare key on a reprice.
+            billing = usage_billing_pricing(
+                hermes_price_candidates(sess_model, provider),
+                input_tokens=input_t,
+                output_tokens=output_t,
+                cache_read=cache_r,
+                cache_write=cache_w,
+            )
+
+        return {
+            "source": self.source_name,
+            "model": str(sess_model or "unknown"),
+            "provider": provider,
+            "input": input_t,
+            "output": output_t,
+            "cacheRead": cache_r,
+            "cacheWrite": cache_w,
+            "reasoning": reasoning,
+            "cost": usage_entry_cost(billing, self.pricing_db),
+            "timestamp": ts_ms,
+            # Hermes rows are session-level aggregates: one entry represents N
+            # messages. Propagate the count so compute.py credits sessions
+            # correctly instead of treating each row as a single message.
+            "messageCount": hermes_int(message_count),
+            "entry_id": f"hermes:{sid}",
+            "_billing": billing,
+        }
 
 
 class MimoParser(BaseParser):

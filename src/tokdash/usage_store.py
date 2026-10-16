@@ -935,6 +935,24 @@ def _float_field(entry: dict[str, Any], key: str) -> float:
         return 0.0
 
 
+def entry_message_count(entry: dict[str, Any]) -> int:
+    """How many messages one entry stands for.
+
+    A parser that has no count for a row is describing a single message, so an
+    absent messageCount means one. An explicit zero is different: it is a parser
+    that knows the real count and put it somewhere else -- Hermes folds an
+    N-message session into one entry and marks the sibling rows it emits for the
+    other models with zero -- so it has to survive here rather than become one.
+    """
+    value = entry.get("messageCount")
+    if value is None or value == "":
+        return 1
+    try:
+        return int(value)
+    except Exception:
+        return 1
+
+
 def _entry_for_storage(entry: dict[str, Any]) -> Optional[dict[str, Any]]:
     source = str(entry.get("source") or "unknown")
     model = str(entry.get("model") or "unknown")
@@ -954,7 +972,7 @@ def _entry_for_storage(entry: dict[str, Any]) -> Optional[dict[str, Any]]:
     raw["reasoning"] = _int_field(raw, "reasoning")
     raw["cost"] = _float_field(raw, "cost")
     raw["timestamp"] = timestamp
-    raw["messageCount"] = _int_field(raw, "messageCount") or 1
+    raw["messageCount"] = entry_message_count(raw)
     raw["entry_key"] = _entry_key(raw)
     raw.pop(SPEED_ENTRY_KEY, None)
     raw.pop('output_speed', None)
@@ -2672,12 +2690,12 @@ class UsageEntryStore:
                     for field in row:
                         if field.endswith("_sum") or field.endswith("_unpriced"):
                             grouped[key][field] += row[field] or 0
-            # Eligibility belongs to the whole selected model, as it did before
-            # bucketing. A tokenless hour/month can still carry its messages or
-            # recorded fees when the model has visible usage elsewhere in range.
+            # Eligibility belongs to the whole selected model. Recorded fees
+            # make a model visible even when it has no token counters in range.
             token_fields = ("input_sum", "output_sum", "cache_read_sum", "cache_write_sum", "reasoning_sum")
             visible = {key for key, row in grouped.items()
-                       if sum(int(row[field] or 0) for field in token_fields) != 0}
+                       if sum(int(row[field] or 0) for field in token_fields) != 0
+                       or float(row["cost_priced_sum"] or 0.0) > 0}
             for row in rows:
                 key = (row["source"], row["provider"], row["model"])
                 if key not in visible or str(row["source"]).lower() == "openclaw":
@@ -2719,7 +2737,7 @@ class UsageEntryStore:
             tokens_in = input_raw + cache_write
             tokens_cache = cache_read
             tokens = tokens_in + output + tokens_cache + reasoning
-            if tokens == 0:
+            if tokens == 0 and cost <= 0:
                 continue
 
             # Recompute the zero-cost rows' share separately. A parser may store
