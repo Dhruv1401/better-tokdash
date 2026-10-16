@@ -1955,9 +1955,13 @@ class UsageEntryStore:
         for start in range(0, len(keys), 500):
             batch = keys[start : start + 500]
             placeholders = ",".join("?" for _ in batch)
+            key_filter = f"source = ? AND entry_key IN ({placeholders})"
+            if "" not in batch:
+                # Match the partial unique index instead of scanning the source.
+                # Legacy empty keys still use the unfiltered lookup and deletion.
+                key_filter += " AND entry_key != ''"
             previous_owners = dict(conn.execute(
-                f"SELECT entry_key, file_path FROM usage_entries "
-                f"WHERE source = ? AND entry_key IN ({placeholders})", [source, *batch]
+                f"SELECT entry_key, file_path FROM usage_entries WHERE {key_filter}", [source, *batch]
             ))
             winners: dict[str, tuple[str, dict[str, Any]]] = {}
             for row in conn.execute(
@@ -1978,7 +1982,7 @@ class UsageEntryStore:
                 if previous != current:
                     changed_owners.update(path for path in (previous, current) if path is not None)
             conn.execute(
-                f"DELETE FROM usage_entries WHERE source = ? AND entry_key IN ({placeholders})",
+                f"DELETE FROM usage_entries WHERE {key_filter}",
                 [source, *batch],
             )
             values = []
