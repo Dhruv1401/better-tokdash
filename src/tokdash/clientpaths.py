@@ -684,9 +684,10 @@ def reasonix_projects_dir() -> Path:
 
 
 def workbuddy_roots() -> List[Path]:
-    """WorkBuddy data roots: ``$WORKBUDDY_DATA_DIR`` (comma-separated) else ``~/.workbuddy-ai``.
+    """WorkBuddy data roots: ``$WORKBUDDY_DATA_DIR`` (comma-separated) else both native stores.
 
-    The native path is the same on macOS, Linux, and Windows. On WSL the user
+    Both ``~/.workbuddy-ai`` and ``~/.workbuddy`` are scanned on macOS,
+    Linux, and Windows. On WSL the user
     points the override at the Windows store (``/mnt/c/Users/<user>/.workbuddy-ai``),
     or at several roots at once, comma-separated.
     """
@@ -703,7 +704,7 @@ def workbuddy_roots() -> List[Path]:
             roots.append(path)
     if roots:
         return roots
-    return [Path.home() / ".workbuddy-ai"]
+    return [Path.home() / ".workbuddy-ai", Path.home() / ".workbuddy"]
 
 
 # --- OpenClaw -----------------------------------------------------------------
