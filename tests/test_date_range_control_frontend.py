@@ -1,3 +1,8 @@
+"""Tests for the date range control in the frontend.
+
+Covers the date-range trigger: label, markup and ARIA, the quick-range overflow
+menu, open/commit wiring, and that state sync never fetches.
+"""
 from __future__ import annotations
 
 import json

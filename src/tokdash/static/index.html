@@ -6389,6 +6389,14 @@
                       <button id="updateSkipBtn" class="update-skip-btn" data-i18n="updateSkip">Skip this version</button>
                     </div>
                   </div>
+                  <section class="servers-settings" style="display:grid;gap:6px">
+                    <strong class="settings-label" data-i18n="usageReportSpeedTitle">Model output speed</strong>
+                    <label class="servers-master-toggle">
+                      <input id="speedIncludeRequestWindows" type="checkbox" onchange="usageReportSpeedSetRequestWindows(this.checked)" aria-describedby="speedTimingHint">
+                      <span data-i18n="usageReportSpeedIncludeRequests">Include whole-request measurements</span>
+                    </label>
+                    <p id="speedTimingHint" style="margin:0;color:var(--color-muted);font-size:11px;line-height:1.6" data-i18n="usageReportSpeedTimingHint">By default, show generation windows that exclude the initial wait. Enable to also include whole requests and show timing labels.</p>
+                  </section>
                   <section id="serversSettings" class="servers-settings">
                     <div class="servers-settings-head">
                       <strong class="settings-label" data-i18n="servers">Servers</strong>
@@ -7684,6 +7692,14 @@
         usageReportSpeedChartEmpty: 'Tick a model in the table below to chart it.',
         usageReportSpeedGapNote: 'A gap in a line means nothing was measured there, which is not a speed of zero.',
         usageReportSpeedSpread: 'Spread',
+        usageReportSpeedIncludeRequests: 'Include whole-request measurements',
+        usageReportSpeedHiddenRequests: 'These measurements include the initial wait and are hidden by your timing setting.',
+        usageReportSpeedOpenTimingSettings: 'Open speed settings',
+        speedKindMethodServerDecode: 'Provider decode',
+        speedKindMethodPostFirstToken: 'After first token',
+        speedKindMethodResponseWindow: 'Model output clocks',
+        speedKindMethodRequestWindow: 'Whole request',
+        usageReportSpeedTimingHint: 'By default, show generation windows that exclude the initial wait. Enable to also include whole requests and show timing labels.',
         usageReportSpeedSpreadHint: 'Shade how individual responses vary around each line',
         usageReportSpeedSpreadNote: 'Shaded: the middle 50% (darker) and middle 80% (lighter) of responses in each period, weighted by how long each ran. Drawn where a period has at least {n} responses.',
         usageReportSpeedSpreadNone: 'No period here has the {n} responses a spread needs, so no shading is drawn.',
@@ -7715,10 +7731,10 @@
         usageReportSpeedRateTitleMerged: 'Combined {combined} · ×{par} in parallel on average, peak {peak}. Its harnesses time responses differently, so there is no pooled per-stream rate: switch to Per stream to see each one.',
         usageReportSpeedParTitle: 'On average {par} responses were generating at once; peak {peak}.',
         usageReportSpeedMethodBuckets: 'A response belongs to the hour, day or week its usage record is stamped on. Combined merges the same model across harnesses, since one backend can serve several of them at once; harnesses time responses differently, so a merged row has no per-stream rate.',
-        speedKindShortServerDecode: 'decode window',
-        speedKindShortPostFirstToken: 'after first token',
-        speedKindShortRequestWindow: 'whole request',
-        speedKindShortResponseWindow: 'response window',
+        speedKindShortServerDecode: 'generation window',
+        speedKindShortPostFirstToken: 'generation window',
+        speedKindShortRequestWindow: 'including initial wait',
+        speedKindShortResponseWindow: 'generation window',
         usageReportSpeedHowCalculated: 'How this is calculated',
         usageReportSpeedMethodSummary: "Per stream divides matched output tokens by the sum of each response's own duration, so responses running at once never add up. Combined divides the same tokens by the wall-clock time at least one response was generating, so they do. The ×N beside a combined rate is the ratio of the two: how many responses were generating at once, on average.",
         usageReportSpeedCompleteness: 'Measured days are not proof of complete logs: an idle day and a missing log look the same from here.',
@@ -7756,7 +7772,7 @@
         speedKindServerDecode: 'provider-reported decode window',
         speedKindPostFirstToken: 'call time after the first token',
         speedKindRequestWindow: 'whole request, from sending it to the last output: includes the wait for the first token, and for some tools awaited tools and retries',
-        speedKindResponseWindow: 'response window',
+        speedKindResponseWindow: 'generation window from recorded model output clocks; excludes the initial wait, but is not necessarily an exact first-token timestamp',
         speedBasisIncluding: 'output including reasoning tokens',
         speedBasisExcluding: 'output excluding reasoning tokens',
         speedBasisUnspecified: 'output, reasoning tokens not separated',
@@ -8469,6 +8485,14 @@
         usageReportSpeedChartEmpty: '在下方表格中勾选模型即可绘制。',
         usageReportSpeedGapNote: '线条中的空缺表示该处没有测量数据，并不代表速度为零。',
         usageReportSpeedSpread: '分布',
+        usageReportSpeedIncludeRequests: '同时显示含首 token 等待的测量',
+        usageReportSpeedHiddenRequests: '这些测量包含首 token 前的等待，已被当前计时设置隐藏。',
+        usageReportSpeedOpenTimingSettings: '打开速度设置',
+        speedKindMethodServerDecode: '服务端解码',
+        speedKindMethodPostFirstToken: '首 token 之后',
+        speedKindMethodResponseWindow: '模型输出时钟',
+        speedKindMethodRequestWindow: '整个请求',
+        usageReportSpeedTimingHint: '默认仅显示不含初始等待的响应窗口。开启后，也显示整个请求的测量，并标注计时方式。',
         usageReportSpeedSpreadHint: '用阴影显示单个响应在每条线周围的分布',
         usageReportSpeedSpreadNote: '阴影：每个时段中间 50%（较深）和中间 80%（较浅）的响应，按各自耗时加权。仅在时段内至少有 {n} 个响应时绘制。',
         usageReportSpeedSpreadNone: '这里没有哪个时段达到绘制分布所需的 {n} 个响应，因此不显示阴影。',
@@ -8500,9 +8524,9 @@
         usageReportSpeedRateTitleMerged: '合并 {combined} · 平均 ×{par} 并行，峰值 {peak}。各工具的计时方式不同，因此没有汇总的单流速度；切换到单流可查看每个工具。',
         usageReportSpeedParTitle: '平均同时有 {par} 个响应在生成；峰值 {peak}。',
         usageReportSpeedMethodBuckets: '每个响应归入其用量记录时间戳所在的小时、天或周。合并会把同一模型在不同工具中的数据合在一起，因为一个后端可能同时服务多个工具；各工具计时方式不同，因此合并行没有单流速度。',
-        speedKindShortServerDecode: '解码窗口',
-        speedKindShortPostFirstToken: '首个 token 之后',
-        speedKindShortRequestWindow: '整个请求',
+        speedKindShortServerDecode: '响应窗口',
+        speedKindShortPostFirstToken: '响应窗口',
+        speedKindShortRequestWindow: '含首 token 等待',
         speedKindShortResponseWindow: '响应窗口',
         usageReportSpeedHowCalculated: '计算方法',
         usageReportSpeedMethodSummary: '单流：匹配的输出 token 数除以每个响应自身耗时之和，因此同时运行的响应不会相加。合并：同样的 token 数除以至少有一个响应在生成的实际时间，因此会相加。合并速度旁的 ×N 是两者之比，即平均有多少个响应同时在生成。',
@@ -8541,7 +8565,7 @@
         speedKindServerDecode: '服务端报告的解码窗口',
         speedKindPostFirstToken: '首 token 之后的调用时间',
         speedKindRequestWindow: '整个请求，从发送到最后一次输出：包含首 token 前的等待，部分工具还包括等待工具和重试',
-        speedKindResponseWindow: '响应窗口',
+        speedKindResponseWindow: '按模型输出时钟记录的生成窗口；不含初始等待，但起点不一定是精确的首 token 时间',
         speedBasisIncluding: '输出含推理 token',
         speedBasisExcluding: '输出不含推理 token',
         speedBasisUnspecified: '输出，未区分推理 token',
@@ -9255,6 +9279,14 @@
         usageReportSpeedChartEmpty: '下の表でモデルにチェックを入れるとグラフに表示されます。',
         usageReportSpeedGapNote: '線の途切れは、そこで何も測定されなかったことを示します。速度ゼロではありません。',
         usageReportSpeedSpread: 'ばらつき',
+        usageReportSpeedIncludeRequests: '初回待機を含む測定も表示',
+        usageReportSpeedHiddenRequests: 'これらの測定は初期待機を含むため、現在の計時設定で非表示になっています。',
+        usageReportSpeedOpenTimingSettings: '速度設定を開く',
+        speedKindMethodServerDecode: 'プロバイダーのデコード',
+        speedKindMethodPostFirstToken: '最初のトークン以降',
+        speedKindMethodResponseWindow: 'モデルの出力時刻',
+        speedKindMethodRequestWindow: 'リクエスト全体',
+        usageReportSpeedTimingHint: '既定では初回待機を除く生成時間のみ表示します。有効にするとリクエスト全体の測定と計時ラベルも表示します。',
         usageReportSpeedSpreadHint: '各線のまわりで個々の応答がどれだけばらつくかを網掛けで示します',
         usageReportSpeedSpreadNote: '網掛け：各期間の応答のうち中央 50%（濃い）と中央 80%（薄い）を、それぞれの所要時間で重み付けして示します。期間内に {n} 件以上の応答がある場合のみ描画します。',
         usageReportSpeedSpreadNone: 'ばらつきの表示に必要な {n} 件の応答がある期間がないため、網掛けは描画されません。',
@@ -9286,10 +9318,10 @@
         usageReportSpeedRateTitleMerged: '統合 {combined} · 平均 ×{par} 並行、ピーク {peak}。ツールごとに応答の計測方法が異なるため、まとめたストリーム単位の速度はありません。ツールごとの値はストリーム単位に切り替えて確認してください。',
         usageReportSpeedParTitle: '平均 {par} 本の応答が同時に生成されていました。ピーク {peak}。',
         usageReportSpeedMethodBuckets: '各応答は、使用量レコードのタイムスタンプがある時間・日・週に入ります。統合では同じモデルをツールをまたいでまとめます。1 つのバックエンドが複数のツールに同時に応答することがあるためです。ツールごとに計測方法が異なるため、統合の行にはストリーム単位の速度がありません。',
-        speedKindShortServerDecode: 'デコード区間',
-        speedKindShortPostFirstToken: '最初のトークン以降',
-        speedKindShortRequestWindow: 'リクエスト全体',
-        speedKindShortResponseWindow: '応答区間',
+        speedKindShortServerDecode: '生成時間',
+        speedKindShortPostFirstToken: '生成時間',
+        speedKindShortRequestWindow: '初回待機を含む',
+        speedKindShortResponseWindow: '生成時間',
         usageReportSpeedHowCalculated: '計算方法',
         usageReportSpeedMethodSummary: 'ストリーム単位は、一致した出力トークン数を各応答自身の所要時間の合計で割ったもので、同時に動いた応答は合算されません。統合は、同じトークン数を少なくとも 1 本の応答が生成していた実時間で割ったもので、合算されます。統合の横の ×N は両者の比で、平均して何本の応答が同時に生成していたかを表します。',
         usageReportSpeedCompleteness: '測定された日数がログの完全性を保証するわけではありません。閑散とした日と欠損したログは、ここでは同じ見た目になります。',
@@ -9327,7 +9359,7 @@
         speedKindServerDecode: 'プロバイダー報告のデコード時間',
         speedKindPostFirstToken: '最初のトークン以降の時間',
         speedKindRequestWindow: 'リクエスト全体（送信から最後の出力まで。最初のトークンまでの待ち時間を含み、ツールによってはツール待機と再試行も含む）',
-        speedKindResponseWindow: '応答時間',
+        speedKindResponseWindow: 'モデルの出力時刻に基づく生成区間。初期待機を除きますが、開始時刻が正確な最初のトークンの時刻とは限りません',
         speedBasisIncluding: '推論トークンを含む出力',
         speedBasisExcluding: '推論トークンを除く出力',
         speedBasisUnspecified: '出力（推論トークン未分離）',
@@ -10041,6 +10073,14 @@
         usageReportSpeedChartEmpty: '아래 표에서 모델을 체크하면 차트에 표시됩니다.',
         usageReportSpeedGapNote: '선이 끊긴 곳은 측정된 것이 없다는 뜻이며, 속도가 0이라는 뜻이 아닙니다.',
         usageReportSpeedSpread: '분포',
+        usageReportSpeedIncludeRequests: '첫 토큰 대기를 포함한 측정도 표시',
+        usageReportSpeedHiddenRequests: '이 측정값은 첫 토큰 전 대기를 포함하므로 현재 시간 측정 설정에서 숨겨져 있습니다.',
+        usageReportSpeedOpenTimingSettings: '속도 설정 열기',
+        speedKindMethodServerDecode: '제공자 디코딩',
+        speedKindMethodPostFirstToken: '첫 토큰 이후',
+        speedKindMethodResponseWindow: '모델 출력 시각',
+        speedKindMethodRequestWindow: '전체 요청',
+        usageReportSpeedTimingHint: '기본적으로 초기 대기를 제외한 생성 구간만 표시합니다. 켜면 전체 요청 측정과 시간 측정 라벨도 표시합니다.',
         usageReportSpeedSpreadHint: '각 선 주변에서 개별 응답이 얼마나 퍼져 있는지 음영으로 표시합니다',
         usageReportSpeedSpreadNote: '음영: 각 기간 응답의 가운데 50%(진하게)와 가운데 80%(연하게)이며, 각 응답의 소요 시간으로 가중합니다. 기간에 응답이 {n}개 이상일 때만 그립니다.',
         usageReportSpeedSpreadNone: '분포에 필요한 응답 {n}개를 채운 기간이 없어 음영을 그리지 않습니다.',
@@ -10072,10 +10112,10 @@
         usageReportSpeedRateTitleMerged: '통합 {combined} · 평균 ×{par} 병렬, 최대 {peak}. 도구마다 응답을 측정하는 방식이 달라 합산한 스트림당 속도는 없습니다. 도구별 값은 스트림당으로 전환해 확인하세요.',
         usageReportSpeedParTitle: '평균 {par}개의 응답이 동시에 생성되었습니다. 최대 {peak}개.',
         usageReportSpeedMethodBuckets: '각 응답은 사용량 기록의 타임스탬프가 속한 시간, 일 또는 주에 들어갑니다. 통합은 같은 모델을 여러 도구에 걸쳐 합칩니다. 백엔드 하나가 여러 도구를 동시에 처리할 수 있기 때문입니다. 도구마다 측정 방식이 달라 통합 행에는 스트림당 속도가 없습니다.',
-        speedKindShortServerDecode: '디코드 구간',
-        speedKindShortPostFirstToken: '첫 토큰 이후',
-        speedKindShortRequestWindow: '요청 전체',
-        speedKindShortResponseWindow: '응답 구간',
+        speedKindShortServerDecode: '생성 구간',
+        speedKindShortPostFirstToken: '생성 구간',
+        speedKindShortRequestWindow: '첫 토큰 대기 포함',
+        speedKindShortResponseWindow: '생성 구간',
         usageReportSpeedHowCalculated: '계산 방법',
         usageReportSpeedMethodSummary: '스트림당은 일치한 출력 토큰 수를 각 응답 자체 소요 시간의 합으로 나눈 값이므로 동시에 실행된 응답이 합산되지 않습니다. 통합은 같은 토큰 수를 응답이 하나 이상 생성되던 실제 시간으로 나누므로 합산됩니다. 통합 속도 옆의 ×N은 둘의 비율로, 평균적으로 몇 개의 응답이 동시에 생성되었는지를 나타냅니다.',
         usageReportSpeedCompleteness: '측정된 날짜는 로그가 완전하다는 증거가 아닙니다. 조용한 날과 없는 로그는 여기서 똑같이 보입니다.',
@@ -10113,7 +10153,7 @@
         speedKindServerDecode: '제공자가 보고한 디코드 시간',
         speedKindPostFirstToken: '첫 토큰 이후 호출 시간',
         speedKindRequestWindow: '전체 요청 시간(전송부터 마지막 출력까지. 첫 토큰까지의 대기를 포함하며, 일부 도구는 도구 대기와 재시도도 포함)',
-        speedKindResponseWindow: '응답 시간',
+        speedKindResponseWindow: '기록된 모델 출력 시각에 따른 생성 구간. 초기 대기를 제외하지만 시작점이 정확한 첫 토큰 시각인 것은 아닙니다',
         speedBasisIncluding: '추론 토큰을 포함하는 출력',
         speedBasisExcluding: '추론 토큰을 제외하는 출력',
         speedBasisUnspecified: '출력(추론 토큰 미분리)',
@@ -10827,6 +10867,14 @@
         usageReportSpeedChartEmpty: 'Marca un modelo en la tabla de abajo para graficarlo.',
         usageReportSpeedGapNote: 'Un hueco en una línea significa que ahí no se midió nada, no una velocidad de cero.',
         usageReportSpeedSpread: 'Dispersión',
+        usageReportSpeedIncludeRequests: 'Incluir mediciones con espera inicial',
+        usageReportSpeedHiddenRequests: 'Estas mediciones incluyen la espera inicial y están ocultas por tu ajuste de medición.',
+        usageReportSpeedOpenTimingSettings: 'Abrir ajustes de velocidad',
+        speedKindMethodServerDecode: 'Decodificación del proveedor',
+        speedKindMethodPostFirstToken: 'Tras el primer token',
+        speedKindMethodResponseWindow: 'Marcas de tiempo del modelo',
+        speedKindMethodRequestWindow: 'Solicitud completa',
+        usageReportSpeedTimingHint: 'Por defecto, muestra ventanas de generación sin la espera inicial. Activa para incluir solicitudes completas y etiquetas del método.',
         usageReportSpeedSpreadHint: 'Sombrea cuánto varían las respuestas individuales alrededor de cada línea',
         usageReportSpeedSpreadNote: 'Sombreado: el 50 % central (más oscuro) y el 80 % central (más claro) de las respuestas de cada periodo, ponderadas por lo que duró cada una. Se dibuja donde un periodo tiene al menos {n} respuestas.',
         usageReportSpeedSpreadNone: 'Ningún periodo de aquí tiene las {n} respuestas que necesita una dispersión, así que no se dibuja sombreado.',
@@ -10858,10 +10906,10 @@
         usageReportSpeedRateTitleMerged: 'Combinado {combined} · ×{par} en paralelo de media, pico {peak}. Sus herramientas miden las respuestas de forma distinta, así que no hay una velocidad por flujo conjunta: cambia a Por flujo para ver cada una.',
         usageReportSpeedParTitle: 'De media había {par} respuestas generándose a la vez; pico {peak}.',
         usageReportSpeedMethodBuckets: 'Cada respuesta pertenece a la hora, el día o la semana de la marca de tiempo de su registro de uso. Combinado une el mismo modelo entre herramientas, porque un mismo backend puede atender a varias a la vez; las herramientas miden las respuestas de forma distinta, así que una fila combinada no tiene velocidad por flujo.',
-        speedKindShortServerDecode: 'ventana de decodificación',
-        speedKindShortPostFirstToken: 'tras el primer token',
-        speedKindShortRequestWindow: 'petición completa',
-        speedKindShortResponseWindow: 'ventana de respuesta',
+        speedKindShortServerDecode: 'ventana de generación',
+        speedKindShortPostFirstToken: 'ventana de generación',
+        speedKindShortRequestWindow: 'incluye espera inicial',
+        speedKindShortResponseWindow: 'ventana de generación',
         usageReportSpeedHowCalculated: 'Cómo se calcula',
         usageReportSpeedMethodSummary: 'Por flujo divide los tokens de salida emparejados entre la suma de la duración de cada respuesta, así que las respuestas simultáneas nunca se suman. Combinado divide los mismos tokens entre el tiempo de reloj en que al menos una respuesta generaba, así que sí se suman. El ×N junto a una velocidad combinada es la proporción entre ambas: cuántas respuestas generaban a la vez, de media.',
         usageReportSpeedCompleteness: 'Los días medidos no prueban registros completos: un día en calma y un registro perdido se ven igual desde aquí.',
@@ -10899,7 +10947,7 @@
         speedKindServerDecode: 'ventana de decodificación informada por el proveedor',
         speedKindPostFirstToken: 'tiempo de llamada tras el primer token',
         speedKindRequestWindow: 'solicitud completa, del envío a la última salida: incluye la espera hasta el primer token y, en algunas herramientas, la espera de herramientas y los reintentos',
-        speedKindResponseWindow: 'ventana de respuesta',
+        speedKindResponseWindow: 'intervalo de generación según las marcas de tiempo de salida del modelo; excluye la espera inicial, pero no empieza necesariamente en el instante exacto del primer token',
         speedBasisIncluding: 'salida incluidos los tokens de razonamiento',
         speedBasisExcluding: 'salida excluidos los tokens de razonamiento',
         speedBasisUnspecified: 'salida, sin separar los tokens de razonamiento',
@@ -11613,6 +11661,14 @@
         usageReportSpeedChartEmpty: 'Marque um modelo na tabela abaixo para exibi-lo no gráfico.',
         usageReportSpeedGapNote: 'Uma lacuna na linha significa que nada foi medido ali, não uma velocidade zero.',
         usageReportSpeedSpread: 'Dispersão',
+        usageReportSpeedIncludeRequests: 'Incluir medições com espera inicial',
+        usageReportSpeedHiddenRequests: 'Estas medições incluem a espera inicial e estão ocultas pela configuração de medição.',
+        usageReportSpeedOpenTimingSettings: 'Abrir configurações de velocidade',
+        speedKindMethodServerDecode: 'Decodificação do provedor',
+        speedKindMethodPostFirstToken: 'Após o primeiro token',
+        speedKindMethodResponseWindow: 'Registros de tempo do modelo',
+        speedKindMethodRequestWindow: 'Solicitação completa',
+        usageReportSpeedTimingHint: 'Por padrão, mostra janelas de geração sem a espera inicial. Ative para incluir solicitações completas e rótulos do método.',
         usageReportSpeedSpreadHint: 'Sombreia quanto as respostas individuais variam em torno de cada linha',
         usageReportSpeedSpreadNote: 'Sombreado: os 50% centrais (mais escuro) e os 80% centrais (mais claro) das respostas de cada período, ponderados pela duração de cada uma. Desenhado quando um período tem pelo menos {n} respostas.',
         usageReportSpeedSpreadNone: 'Nenhum período aqui tem as {n} respostas de que uma dispersão precisa, então nenhum sombreado é desenhado.',
@@ -11644,10 +11700,10 @@
         usageReportSpeedRateTitleMerged: 'Combinado {combined} · ×{par} em paralelo em média, pico {peak}. Suas ferramentas medem as respostas de formas diferentes, então não há velocidade por fluxo conjunta: mude para Por fluxo para ver cada uma.',
         usageReportSpeedParTitle: 'Em média, {par} respostas estavam sendo geradas ao mesmo tempo; pico {peak}.',
         usageReportSpeedMethodBuckets: 'Cada resposta pertence à hora, ao dia ou à semana do carimbo de data do seu registro de uso. Combinado une o mesmo modelo entre ferramentas, porque um mesmo backend pode atender várias ao mesmo tempo; as ferramentas medem as respostas de formas diferentes, então uma linha combinada não tem velocidade por fluxo.',
-        speedKindShortServerDecode: 'janela de decodificação',
-        speedKindShortPostFirstToken: 'após o primeiro token',
-        speedKindShortRequestWindow: 'requisição inteira',
-        speedKindShortResponseWindow: 'janela de resposta',
+        speedKindShortServerDecode: 'janela de geração',
+        speedKindShortPostFirstToken: 'janela de geração',
+        speedKindShortRequestWindow: 'inclui espera inicial',
+        speedKindShortResponseWindow: 'janela de geração',
         usageReportSpeedHowCalculated: 'Como é calculado',
         usageReportSpeedMethodSummary: 'Por fluxo divide os tokens de saída pareados pela soma da duração de cada resposta, então respostas simultâneas nunca se somam. Combinado divide os mesmos tokens pelo tempo de relógio em que pelo menos uma resposta estava sendo gerada, então elas se somam. O ×N ao lado de uma velocidade combinada é a razão entre as duas: quantas respostas eram geradas ao mesmo tempo, em média.',
         usageReportSpeedCompleteness: 'Dias medidos não provam registros completos: um dia parado e um registro perdido parecem iguais daqui.',
@@ -11685,7 +11741,7 @@
         speedKindServerDecode: 'janela de decodificação informada pelo provedor',
         speedKindPostFirstToken: 'tempo da chamada após o primeiro token',
         speedKindRequestWindow: 'solicitação completa, do envio à última saída: inclui a espera até o primeiro token e, em algumas ferramentas, a espera por ferramentas e as novas tentativas',
-        speedKindResponseWindow: 'janela de resposta',
+        speedKindResponseWindow: 'intervalo de geração baseado nos registros de tempo de saída do modelo; exclui a espera inicial, mas não começa necessariamente no instante exato do primeiro token',
         speedBasisIncluding: 'saída incluindo tokens de raciocínio',
         speedBasisExcluding: 'saída excluindo tokens de raciocínio',
         speedBasisUnspecified: 'saída, sem separar tokens de raciocínio',
@@ -12351,6 +12407,11 @@
       const expanded = Boolean(open);
       panel.hidden = !expanded;
       backdrop.hidden = !expanded;
+      if (expanded) {
+        usageReportSpeedReadPrefs();
+        const timingToggle = document.getElementById('speedIncludeRequestWindows');
+        if (timingToggle) timingToggle.checked = usageReportSpeedState.includeRequestWindows;
+      }
       if (expanded) requestAnimationFrame(() => backdrop.classList.add('open'));
       else backdrop.classList.remove('open');
       if (trigger) trigger.setAttribute('aria-expanded', String(expanded));
@@ -14178,7 +14239,7 @@
       kilocode: { icon: '/static/icons/agents/kilocode.png', color: '#FAF74F', fallback: 'K' },
       cline: { icon: '/static/icons/agents/cline.png', color: '#24292F', fallback: 'C', darkInvert: true },
       copilot_cli: { icon: '/static/icons/agents/copilot.svg', color: '#6E40C9', fallback: 'C' },
-      hermes: { icon: '/static/icons/agents/hermes.png', color: '#111111', fallback: 'H', darkInvert: true },
+      hermes: { icon: '/static/icons/agents/hermes.png', color: '#111111', fallback: 'H', darkInvert: false },
       mimo: { icon: '/static/icons/agents/mimo.svg', color: '#FF6900', fallback: 'M', logoKind: 'wordmark' },
       dsh: { icon: '/static/icons/agents/dsh.svg', color: '#4D6BFE', fallback: 'D' },
       reasonix: { icon: '/static/icons/agents/reasonix.svg', color: '#0153E5', fallback: 'R' },
@@ -21382,6 +21443,8 @@
       serverId: 'local',
       // 'combined' or 'stream'. Combined is the default: it is what a workload got.
       lens: 'combined',
+      includeRequestWindows: false,
+      prefsRead: false,
       // The period the stepper walks when the range is one; the range itself is
       // always the shared one.
       period: 'month',
@@ -21425,6 +21488,8 @@
     };
 
     function usageReportSpeedReadPrefs() {
+      if (usageReportSpeedState.prefsRead) return;
+      usageReportSpeedState.prefsRead = true;
       try {
         const raw = JSON.parse(localStorage.getItem(USAGE_REPORT_SPEED_PREFS_KEY) || '{}');
         if (!raw || typeof raw !== 'object') return;
@@ -21433,12 +21498,21 @@
         if (raw.lens === 'combined' || raw.lens === 'stream') state.lens = raw.lens;
         if (raw.view === 'time' || raw.view === 'hour') state.view = raw.view;
         if (typeof raw.spread === 'boolean') state.spread = raw.spread;
+        state.includeRequestWindows = raw.includeRequestWindows === true;
         if (USAGE_REPORT_SPEED_PERIODS.includes(raw.period)) state.period = raw.period;
         if (Array.isArray(raw.selected)) {
           usageReportSpeedSetSelection(raw.selected.filter((id) => typeof id === 'string' && id),
             raw.slots && typeof raw.slots === 'object' ? raw.slots : {});
         }
       } catch (_error) { /* a bad blob is no prefs */ }
+    }
+
+    function usageReportSpeedSetRequestWindows(enabled) {
+      usageReportSpeedReadPrefs();
+      usageReportSpeedState.includeRequestWindows = !!enabled;
+      usageReportSpeedWritePrefs();
+      usageReportSpeedInvalidate();
+      if (usageReportSpeedIsVisible()) usageReportLoadSpeed();
     }
 
     function usageReportSpeedWritePrefs() {
@@ -21449,6 +21523,7 @@
           lens: state.lens,
           view: state.view,
           spread: state.spread,
+          includeRequestWindows: state.includeRequestWindows,
           period: state.period,
           selected: state.selected,
           slots: state.slots,
@@ -21516,7 +21591,7 @@
     function usageReportSpeedKey() {
       const server = outputSpeedServer();
       const { date_from, date_to } = usageReportSpeedWindow();
-      return `${server ? server.id : 'local'}|${date_from}|${date_to}`;
+      return `${server ? server.id : 'local'}|${date_from}|${date_to}|${!!usageReportSpeedState.includeRequestWindows}`;
     }
 
     // A report navigation invalidates the speed view: the rows were read for the
@@ -21643,6 +21718,16 @@
     }
 
     // The few words a row has room for; the full definition is its tooltip.
+    function usageReportSpeedKindMethod(kind) {
+      const keys = {
+        server_decode: 'speedKindMethodServerDecode',
+        post_first_token: 'speedKindMethodPostFirstToken',
+        request_window: 'speedKindMethodRequestWindow',
+        response_window: 'speedKindMethodResponseWindow',
+      };
+      return keys[kind] ? t(keys[kind]) : (kind || '—');
+    }
+
     function usageReportSpeedKindShort(kind) {
       const keys = {
         server_decode: 'speedKindShortServerDecode',
@@ -21925,7 +22010,8 @@
 
     function usageReportSpeedQuery(extra) {
       const { date_from, date_to } = usageReportSpeedWindow();
-      const params = new URLSearchParams({ date_from, date_to });
+      const params = new URLSearchParams({ date_from, date_to,
+        include_request_windows: String(!!usageReportSpeedState.includeRequestWindows) });
       Object.entries(extra || {}).forEach(([key, value]) => {
         if (value !== null && value !== undefined && value !== '') params.set(key, String(value));
       });
@@ -22109,12 +22195,22 @@
       events.onerror = () => { events.close(); if (usageReportSpeedState.jobEvents === events) usageReportSpeedState.jobEvents = null; };
     }
 
+    function usageReportSpeedHiddenRequests() {
+      const state = usageReportSpeedState;
+      if (state.includeRequestWindows) return [];
+      const hidden = state.payload?.hidden_request_windows;
+      return (Array.isArray(hidden) ? hidden : [])
+        .filter((row) => !state.tool || row.source === state.tool);
+    }
+
     function usageReportSpeedTools() {
       const rows = usageReportSpeedState.rows || [];
       const totals = new Map();
       rows.forEach((row) => {
         totals.set(row.source, (totals.get(row.source) || 0) + Number(row.speed_calls || 0));
       });
+      const hidden = usageReportSpeedState.payload?.hidden_request_windows || [];
+      hidden.forEach((row) => { if (!totals.has(row.source)) totals.set(row.source, 0); });
       const statuses = (usageReportSpeedState.payload && usageReportSpeedState.payload.source_status) || [];
       statuses.forEach((row) => {
         if (!totals.has(row.source)) totals.set(row.source, 0);
@@ -22377,7 +22473,8 @@
       const method = usageReportSpeedText(kinds.length === 1 ? usageReportSpeedKindShort(kinds[0])
         : t('usageReportSpeedMethods', { n: kinds.length }), 'speed-why');
       method.title = usageReportSpeedMethodTitle(row);
-      meta.append(document.createTextNode(`${harness} · `), method);
+      meta.append(document.createTextNode(harness));
+      if (state.includeRequestWindows) meta.append(document.createTextNode(' · '), method);
       names.appendChild(meta);
       model.append(logos, names);
       modelCell.appendChild(model);
@@ -22442,6 +22539,14 @@
         button.addEventListener('click', action);
         host.appendChild(button);
       };
+      if (usageReportSpeedHiddenRequests().length) {
+        addButton('usageReportSpeedOpenTimingSettings', (event) => {
+          event.stopPropagation();
+          setSettingsPanelOpen(true);
+        });
+        host.hidden = false;
+        return;
+      }
       if (usageReportSpeedState.rows.length) {
         addButton('usageReportSpeedShowTools', usageReportSpeedShowMeasuredTools);
         host.hidden = false;
@@ -22520,6 +22625,7 @@
           && payload.source_status.some((row) => !usageReportSpeedState.tool || row.source === usageReportSpeedState.tool);
         const searched = String(usageReportSpeedState.query || '').trim() && usageReportSpeedVisibleRows().length;
         body.replaceChildren(usageReportSpeedMessageRow(searched ? t('usageReportSpeedNoMatch')
+          : usageReportSpeedHiddenRequests().length ? t('usageReportSpeedHiddenRequests')
           : known ? t('usageReportSpeedEmptyKnown') : t('usageReportSpeedEmpty')));
         usageReportRenderSpeedSources();
         return;
@@ -22538,7 +22644,8 @@
       const state = usageReportSpeedState;
       const counts = new Map();
       (state.rows || []).forEach((row) => counts.set(row.source, (counts.get(row.source) || 0) + 1));
-      const tools = usageReportSpeedTools().filter((tool) => tool.calls > 0 || tool.source === state.tool);
+      const hiddenSources = new Set((state.payload?.hidden_request_windows || []).map((row) => row.source));
+      const tools = usageReportSpeedTools().filter((tool) => tool.calls > 0 || tool.source === state.tool || hiddenSources.has(tool.source));
       if (state.tool && !tools.some((tool) => tool.source === state.tool)) tools.unshift({ source: state.tool, calls: 0 });
       const lens = usageReportSpeedLens();
       const all = lens === 'combined' ? usageReportSpeedModelRows().length : (state.rows || []).length;
@@ -23095,14 +23202,14 @@
       if (!mixed) return;
       const kinds = [...new Set(state.selected.map((id) => usageReportSpeedName(id).row)
         .filter(Boolean).flatMap(usageReportSpeedKinds))];
-      mixed.hidden = kinds.length < 2;
-      if (kinds.length < 2) { mixed.replaceChildren(); return; }
+      mixed.hidden = !state.includeRequestWindows || kinds.length < 2;
+      if (mixed.hidden) { mixed.replaceChildren(); return; }
       const lead = document.createElement('b');
       lead.textContent = t('usageReportSpeedMixedLead');
       const parts = [lead, document.createTextNode(' ')];
       kinds.forEach((kind, index) => {
         if (index) parts.push(document.createTextNode(' · '));
-        const name = usageReportSpeedText(usageReportSpeedKindShort(kind), 'speed-why');
+        const name = usageReportSpeedText(usageReportSpeedKindMethod(kind), 'speed-why');
         name.title = usageReportSpeedKindLabel(kind);
         parts.push(name);
       });

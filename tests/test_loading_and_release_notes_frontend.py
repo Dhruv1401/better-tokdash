@@ -1,3 +1,8 @@
+"""Tests for page background, loading placeholders, and release notes frontend.
+
+Covers full-page themed background styling, shimmer loading placeholders,
+release-notes version matching, and accessible dialog drawer interactions.
+"""
 from __future__ import annotations
 
 import json

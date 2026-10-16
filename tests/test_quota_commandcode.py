@@ -1,3 +1,8 @@
+"""Tests for CommandCode quota collection logic.
+
+Covers collector logic, credit and subscription parsing, window limit
+calculations, error recovery, and snapshot emission using mocked endpoints.
+"""
 from __future__ import annotations
 
 import json

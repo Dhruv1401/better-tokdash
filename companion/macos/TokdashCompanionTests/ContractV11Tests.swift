@@ -1132,7 +1132,7 @@ final class ContractV11Tests: XCTestCase {
         }
         // Dark-ink marks ship a dark-appearance variant in the imageset (the AgentZai
         // pattern) - the same pre-inverted pixels the Windows *-dark.png copies carry.
-        for mark in ["AgentCline", "AgentHermes", "AgentOmp", "AgentZed", "AgentCursor"] {
+        for mark in ["AgentCline", "AgentOmp", "AgentZed", "AgentCursor"] {
             XCTAssertTrue(fm.fileExists(atPath: "\(assets)/\(mark).imageset")
                           && (try? String(contentsOfFile: "\(assets)/\(mark).imageset/Contents.json"))?.contains("luminosity") == true,
                           "\(mark) must carry a dark-appearance variant")

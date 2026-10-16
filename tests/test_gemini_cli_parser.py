@@ -1,3 +1,8 @@
+"""Tests for the Gemini CLI parser.
+
+Covers reading JSONL chat sessions and splitting cached tokens out of Gemini's
+cache-inclusive input.
+"""
 from datetime import datetime, timezone
 from pathlib import Path
 

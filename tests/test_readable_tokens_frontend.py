@@ -1,3 +1,7 @@
+"""Tests for the readable tokens frontend.
+
+Covers the human-readable token formatting in the dashboard.
+"""
 from __future__ import annotations
 
 import json

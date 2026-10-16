@@ -164,10 +164,10 @@ def test_workbuddy_declares_persistent_parser_identity(monkeypatch, tmp_path):
     _isolate_home(monkeypatch, tmp_path)
     parser = WorkBuddyParser(PricingDatabase())
 
-    assert parser.persistent_parser_version == 1
+    assert parser.persistent_parser_version == 2
     signature = parser.persistent_parser_signature()
     assert signature["object"].endswith("WorkBuddyParser")
-    assert signature["version"] == 1
+    assert signature["version"] == 2
     assert signature["entry_format"] >= 1
 
 
@@ -793,3 +793,44 @@ def test_workbuddy_append_tail_ingests_only_new_rows(monkeypatch, tmp_path):
         f"workbuddy:{'a' * 32}",
         f"workbuddy:{'b' * 32}",
     ]
+
+
+@pytest.mark.parametrize("row_type,role", [("function_call", None), ("message", "user"), ("other", None)])
+@pytest.mark.parametrize("fallback", [False, True])
+def test_workbuddy_usage_independent_of_row_type(monkeypatch, tmp_path, row_type, role, fallback):
+    from tokdash import sessions
+
+    home = _isolate_home(monkeypatch, tmp_path)
+    monkeypatch.delenv("WORKBUDDY_DATA_DIR", raising=False)
+    row = _assistant_row("call-1", 1787314800000, "gpt-5.5",
+                         **({"usage": _fallback_usage(1000, 100, 400, reasoning=20)} if fallback else
+                            {"raw_usage": _raw_usage(1000, 100, 400, 600, reasoning=20)}))
+    row["type"] = row_type
+    row.pop("role")
+    if role is not None:
+        row["role"] = role
+    # A final assistant message repeats the same provider message ID.
+    duplicate = dict(row, type="message", role="assistant", id="different-row-id")
+    path = _write_transcript(home / ".workbuddy", "slug", "s1", [row, duplicate])
+    parser = WorkBuddyParser(PricingDatabase())
+    entries = _collect(parser)
+    assert len(entries) == 1
+    entry = entries["workbuddy:call-1"]
+    assert (entry["input"], entry["cacheRead"], entry["output"], entry["reasoning"]) == (600, 400, 80, 20)
+    raw = sessions._parse_workbuddy_session_file(str(path), path.stat().st_mtime_ns, path.stat().st_size)
+    assert len(raw["turns"]) == 1
+    assert raw["turns"][0]["tokens_in"] == 600
+    assert raw["turns"][0]["tokens_out"] == 80
+    tail_entries, offset = _collect_parser_tail(parser, (str(path), path.stat().st_mtime_ns, path.stat().st_size), 0)
+    assert [e["entry_id"] for e in tail_entries] == ["workbuddy:call-1"]
+    assert offset == path.stat().st_size
+
+
+def test_workbuddy_default_roots_and_explicit_override(monkeypatch, tmp_path):
+    from tokdash import clientpaths
+
+    home = _isolate_home(monkeypatch, tmp_path)
+    monkeypatch.delenv("WORKBUDDY_DATA_DIR", raising=False)
+    assert clientpaths.workbuddy_roots() == [home / ".workbuddy-ai", home / ".workbuddy"]
+    monkeypatch.setenv("WORKBUDDY_DATA_DIR", str(home / "custom"))
+    assert clientpaths.workbuddy_roots() == [home / "custom"]

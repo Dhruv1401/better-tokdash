@@ -1,3 +1,8 @@
+"""Tests for frontend normalizer sync and quota-card display helpers.
+
+Covers JS/Python model name normalization sync, quota provider plan and window
+labels, reset countdown formatting, and unlimited bucket visibility.
+"""
 from __future__ import annotations
 
 import json

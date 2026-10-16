@@ -1,3 +1,8 @@
+"""Tests for quota snapshot storage and history derivation.
+
+Covers snapshot persistence, schema repairs, and quota-history derivation,
+including consumption deltas, window resets, and time-series downsampling.
+"""
 from __future__ import annotations
 
 import json

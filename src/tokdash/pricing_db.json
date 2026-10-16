@@ -1,6 +1,6 @@
 {
-  "version": "2.0.35",
-  "lastUpdated": "2026-10-13T14:06:35Z",
+  "version": "2.0.36",
+  "lastUpdated": "2026-10-16T11:17:37Z",
   "note": "Comprehensive pricing database with all Moonshot, MiniMax, GLM, and OpenAI models from OpenRouter. Cache pricing estimated at 10% of input for cache_read, 100% of input for cache_write.",
   "aliases": {
     "Qwen/Qwen3.8-Flash-Next": "qwen3.8-flash",
@@ -3204,6 +3204,15 @@
       "unit": "per_million_tokens",
       "source": "openrouter.ai/google/gemini-nano-banana-2.1"
     },
+    "gemini-4-argon": {
+      "provider": "google",
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.1,
+      "cache_write": 0.1875,
+      "unit": "per_million_tokens",
+      "source": "openrouter.ai/google/gemini-4-argon"
+    },
     "_comment_meta": "=== Meta Models ===",
     "llama-3.1-70b-instruct": {
       "provider": "meta",
@@ -3340,6 +3349,15 @@
       "unit": "per_million_tokens",
       "source": "openrouter.ai/meta/muse-wonder"
     },
+    "muse-spark-open": {
+      "provider": "meta",
+      "input": 1.25,
+      "output": 4.25,
+      "cache_read": 0.15,
+      "cache_write": 1.25,
+      "unit": "per_million_tokens",
+      "source": "openrouter.ai/meta/muse-spark-open"
+    },
     "_comment_nvidia": "=== NVIDIA Models ===",
     "nemotron-3-nano-30b-a3b": {
       "provider": "nvidia",
@@ -3385,6 +3403,15 @@
       "cache_write": 0.2,
       "unit": "per_million_tokens",
       "source": "openrouter.ai/nvidia/nemotron-3.5-content-safety"
+    },
+    "nemotron-3.5-super-vl": {
+      "provider": "nvidia",
+      "input": 0.15,
+      "output": 0.5,
+      "cache_read": 0.02,
+      "cache_write": 0.15,
+      "unit": "per_million_tokens",
+      "source": "openrouter.ai/nvidia/nemotron-3.5-super-vl"
     },
     "_comment_microsoft": "=== Microsoft Models ===",
     "phi-4": {

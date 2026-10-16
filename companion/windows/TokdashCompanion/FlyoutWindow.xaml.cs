@@ -595,7 +595,7 @@ public partial class FlyoutWindow : Window
     /// {name}-dark copy, mirroring the web dashboard's darkInvert rule (the same set the
     /// macOS asset catalog carries as dark-appearance imageset variants).</summary>
     private static readonly HashSet<string> DarkInvertAssets =
-        new() { "codex", "grok", "zcode", "cline", "hermes", "omp", "zed", "cursor" };
+        new() { "codex", "grok", "zcode", "cline", "omp", "zed", "cursor" };
 
     /// <summary>
     /// Load a harness mark from the packaged Assets\Agents resources. A missing asset

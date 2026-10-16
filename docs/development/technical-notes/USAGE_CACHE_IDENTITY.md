@@ -7,6 +7,34 @@ Applies to `usage_entries` in `~/.tokdash/usage.sqlite3` — the persistent cach
 behind Overview, Stats, `/api/usage`, `/api/tools` and `tokdash export`. Session
 records are a separate cache with its own contract (`sessions.py`).
 
+## Cross-file ownership
+
+Parsers with `cross_file_stable_keys` resolve an entry id shared by several
+files to one billed row. The default winner is the earliest
+`(timestamp, file_path)`, after any file-context `dedup_priority`. Removing or
+rewriting an owner reparses surviving files when it drops a key or moves its
+timestamp behind another copy. Crush uses this rule for copied project databases.
+
+Claude instead keeps the largest streaming snapshot. Equal totals with a changed
+cache split take the later split in file/line scan order; identical snapshots
+keep their first occurrence. Its `cross_file_entry_supersedes` callback folds
+file-local winners in path order. Schema 14 retains those candidates in
+`usage_entry_candidates`, including private billing inputs and a reclassification
+marker, so updates and deletions reconsider only affected keys without rereading
+unchanged transcripts. A rewrite replaces that file's candidates; durable missing
+files keep theirs. Promotion reprices the winner using the same pricing snapshot
+as the sync. Candidate metadata stays out of public usage rows.
+
+Candidate publication also advances the file state of former and new owners.
+This invalidates derived timing even when two files exchange messages without
+changing their row counts, including successive syncs in the same clock tick.
+The timing worker reuses an unchanged file's measurements only when they cover
+all of its current canonical rows; newly acquired calls require a timing read.
+
+The schema upgrade seeds previously stored Claude rows as candidates, preserving
+archived usage. Claude parser version 4 and Crush version 2 rebuild surviving
+files to establish the corrected ownership.
+
 ## The problem this replaced
 
 Through 2.0.0 a cached row was validated against one signature built from:

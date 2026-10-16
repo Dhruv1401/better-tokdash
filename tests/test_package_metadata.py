@@ -1,3 +1,7 @@
+"""Tests for package metadata and version configuration.
+
+Tests that pyproject.toml's version matches tokdash.__version__.
+"""
 import re
 from pathlib import Path
 

@@ -102,8 +102,8 @@ def _rows(store, source="demo"):
 # --------------------------------------------------------------------------
 
 
-def test_schema_version_bumped_for_the_new_columns():
-    assert SCHEMA_VERSION == 13
+def test_schema_version_includes_separate_timing_and_entry_candidates():
+    assert SCHEMA_VERSION >= 14
 
 
 def test_fresh_database_carries_the_speed_columns_with_unmeasured_defaults(tmp_path):

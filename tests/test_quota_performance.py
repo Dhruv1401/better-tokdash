@@ -1,3 +1,7 @@
+"""Performance guards for quota reads over 100k stored snapshots.
+
+Covers timing and bounded execution for /api/quota/history and quota_state().
+"""
 from __future__ import annotations
 
 import time

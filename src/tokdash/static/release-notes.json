@@ -1,6 +1,37 @@
 {
-  "current": "2.6.17",
+  "current": "2.6.18",
   "releases": [
+    {
+      "version": "2.6.18",
+      "date": "2026-10-16",
+      "sections": [
+        {
+          "type": "added",
+          "items": [
+            "A new end-user troubleshooting guide covers the eight problems that used to mean opening an issue: port conflicts, a database too new for the installed version, SQLite WAL locks, macOS Keychain prompts, WSL2 localhost binding, Copilot token tracking, an empty dashboard and failed update checks.",
+            "The API reference documents the three endpoints that were missing, including activity insights and the two PWA endpoints, and the supported-clients list now carries Amp alongside two previously unlinked specs.",
+            "37 test modules now say what they cover in a module docstring, so a file's scope is readable before its assertions.",
+            "Pricing DB 2.0.35 adds muse-wonder at $4.00 in / $20.00 out per MTok, cache $0.20 read and $4.00 write. The scan's 90 price changes stay in the updater's diff report for a manual pass."
+          ]
+        },
+        {
+          "type": "changed",
+          "items": [
+            "Model output speed now measures generation windows by default instead of whole requests, so every figure on the page answers the same question. A Settings toggle brings whole requests back and reveals the timing labels, and API defaults are unchanged."
+          ]
+        },
+        {
+          "type": "fixed",
+          "items": [
+            "Claude messages copied between transcripts no longer lose usage or keep a smaller snapshot when the owning file is rewritten or deleted, and a Crush session copied into two databases is no longer counted twice in the live view.",
+            "Codex rollouts are read whether they are stored plain or Zstandard-compressed, in both active and archived session directories, and a corrupt compressed frame no longer blocks the other rollouts.",
+            "WorkBuddy now counts its function-call usage once per provider message, and finds both the current ~/.workbuddy directory and the legacy ~/.workbuddy-ai.",
+            "The Hermes agent mark is the official icon on the web, macOS and Windows, with the old dark variant removed.",
+            "The GitHub Actions artifacts move to download-artifact 8.0.2 and upload-artifact 7.0.2 in the PyPI publish and companion release workflows."
+          ]
+        }
+      ]
+    },
     {
       "version": "2.6.17",
       "date": "2026-10-13",
