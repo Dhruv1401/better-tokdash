@@ -21,7 +21,7 @@ from .usage_buckets import add_bucket, sql_bucket_expression, sql_bucket_key, sq
 logger = logging.getLogger(__name__)
 
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 SIGNATURE_VERSION = 3
 
 
@@ -177,8 +177,9 @@ SPEED_ENTRY_KEY = "_speed"
 # Private keys stripped from a stored row before it is serialized into
 # raw_json, so /api/usage, /api/tools, `tokdash export` and query_entries()
 # never see them. Billing provenance lives in its own column instead, and
-# output-speed timing lives in a separate disposable database.
-PRIVATE_ENTRY_KEYS = ("_billing", SPEED_ENTRY_KEY, "_session_id")
+# output-speed timing lives in a separate disposable database. Deduplication
+# metadata remains in the per-file candidate table.
+PRIVATE_ENTRY_KEYS = ("_billing", SPEED_ENTRY_KEY, "_session_id", "_dedup")
 
 #: The six flat fields a parser may hand in instead of the nested private key.
 #: Read by :func:`_speed_for_storage`, then removed from the stored blob.
@@ -1281,6 +1282,15 @@ class UsageEntryStore:
                 source TEXT NOT NULL, session_id TEXT NOT NULL, file_path TEXT NOT NULL,
                 PRIMARY KEY(source, session_id, file_path)
             );
+            CREATE TABLE IF NOT EXISTS usage_entry_candidates (
+                source TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                entry_key TEXT NOT NULL,
+                raw_json TEXT NOT NULL,
+                PRIMARY KEY (source, file_path, entry_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_usage_entry_candidates_key
+            ON usage_entry_candidates(source, entry_key, file_path);
             CREATE TABLE IF NOT EXISTS session_records (
                 tool TEXT NOT NULL,
                 session_id TEXT NOT NULL,
@@ -1502,6 +1512,32 @@ class UsageEntryStore:
                             updates.append((stable_json(raw),row['repair_rowid']))
                     conn.executemany(f'UPDATE {table} SET raw_json=? WHERE rowid=?',updates)
             conn.execute('CREATE INDEX IF NOT EXISTS idx_usage_session_inputs_file ON usage_session_inputs(source,file_path,session_id)')
+        if current < 14:
+            # Seed the old canonical Claude rows before per-file candidates
+            # exist. In particular, retain durable rows whose logs have gone.
+            # The parser version bump rebuilds every surviving file on sync.
+            cursor = conn.execute(
+                "SELECT source, file_path, entry_key, raw_json, billing_json "
+                "FROM usage_entries WHERE source = 'claude' AND file_path != ''"
+            )
+            while True:
+                batch = cursor.fetchmany(256)
+                if not batch:
+                    break
+                candidates = []
+                for row in batch:
+                    try:
+                        entry = json.loads(row["raw_json"])
+                        if not isinstance(entry, dict):
+                            continue
+                        if row["billing_json"]:
+                            entry["_billing"] = json.loads(row["billing_json"])
+                    except (TypeError, ValueError):
+                        continue
+                    candidates.append((row["source"], row["file_path"], row["entry_key"], stable_json(entry)))
+                conn.executemany(
+                    "INSERT OR IGNORE INTO usage_entry_candidates VALUES (?, ?, ?, ?)", candidates
+                )
         conn.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
             (str(SCHEMA_VERSION),),
@@ -1801,6 +1837,7 @@ class UsageEntryStore:
                 self._drop_stale_pricing_identity(conn, pricing_identity)
                 conn.execute("DELETE FROM usage_entries WHERE source = ?", (source,))
                 conn.execute("DELETE FROM file_state WHERE source = ?", (source,))
+                conn.execute("DELETE FROM usage_entry_candidates WHERE source = ?", (source,))
                 conn.executemany(
                     """
                     INSERT INTO usage_entries (
@@ -1868,6 +1905,109 @@ class UsageEntryStore:
                 contexts[str(row["path"])] = context
         return contexts
 
+    @staticmethod
+    def _update_entry_candidates(
+        conn: sqlite3.Connection,
+        source: str,
+        parsed: list[tuple[tuple[str, int, int], list[dict[str, Any]], int, bool]],
+        removed_paths: list[str],
+        keep_missing: bool,
+    ) -> set[str]:
+        """Replace file-local candidates and name every key to reconsider."""
+        replaced_paths = {sig[0] for sig, _entries, _offset, appended in parsed if not appended}
+        if not keep_missing:
+            replaced_paths.update(removed_paths)
+        affected: set[str] = set()
+        paths = sorted(replaced_paths)
+        for start in range(0, len(paths), 500):
+            batch = paths[start : start + 500]
+            placeholders = ",".join("?" for _ in batch)
+            affected.update(
+                str(row[0]) for row in conn.execute(
+                    f"SELECT entry_key FROM usage_entry_candidates WHERE source = ? "
+                    f"AND file_path IN ({placeholders})", [source, *batch]
+                )
+            )
+            conn.execute(
+                f"DELETE FROM usage_entry_candidates WHERE source = ? AND file_path IN ({placeholders})",
+                [source, *batch],
+            )
+        for sig, entries, _offset, _appended in parsed:
+            affected.update(entry["entry_key"] for entry in entries)
+            conn.executemany(
+                "INSERT OR REPLACE INTO usage_entry_candidates VALUES (?, ?, ?, ?)",
+                [(source, sig[0], entry["entry_key"], stable_json(entry)) for entry in entries],
+            )
+        return affected
+
+    def _resolve_entry_candidates(
+        self,
+        conn: sqlite3.Connection,
+        source: str,
+        affected: set[str],
+        supersedes: Callable[[dict[str, Any], dict[str, Any]], bool],
+        insert_sql: str,
+        pricing_db: Optional[PricingDatabase],
+    ) -> None:
+        """Publish the path-ordered fold for changed keys in the same transaction."""
+        keys = sorted(affected)
+        changed_owners: set[str] = set()
+        for start in range(0, len(keys), 500):
+            batch = keys[start : start + 500]
+            placeholders = ",".join("?" for _ in batch)
+            key_filter = f"source = ? AND entry_key IN ({placeholders})"
+            if "" not in batch:
+                # Match the partial unique index instead of scanning the source.
+                # Legacy empty keys still use the unfiltered lookup and deletion.
+                key_filter += " AND entry_key != ''"
+            previous_owners = dict(conn.execute(
+                f"SELECT entry_key, file_path FROM usage_entries WHERE {key_filter}", [source, *batch]
+            ))
+            winners: dict[str, tuple[str, dict[str, Any]]] = {}
+            for row in conn.execute(
+                f"SELECT entry_key, file_path, raw_json FROM usage_entry_candidates "
+                f"WHERE source = ? AND entry_key IN ({placeholders}) ORDER BY entry_key, file_path",
+                [source, *batch],
+            ):
+                entry = _entry_for_storage(json.loads(row["raw_json"]))
+                if entry is None:
+                    continue
+                best = winners.get(row["entry_key"])
+                if best is None or supersedes(entry, best[1]):
+                    winners[row["entry_key"]] = (row["file_path"], entry)
+            for key in batch:
+                previous = previous_owners.get(key)
+                winner = winners.get(key)
+                current = winner[0] if winner is not None else None
+                if previous != current:
+                    changed_owners.update(path for path in (previous, current) if path is not None)
+            conn.execute(
+                f"DELETE FROM usage_entries WHERE {key_filter}",
+                [source, *batch],
+            )
+            values = []
+            for path, entry in winners.values():
+                # Candidates can predate a pricing edit. Reprice the winner's
+                # billing inputs on promotion, without reading its source log.
+                if isinstance(entry.get("_billing"), dict):
+                    entry["cost"] = usage_entry_cost(entry["_billing"], pricing_db or self._pricing_db())
+                values.append((
+                    entry["source"], path, entry["entry_key"], entry["model"], entry["provider"],
+                    entry["timestamp"], entry["input"], entry["output"], entry["cacheRead"],
+                    entry["cacheWrite"], entry["reasoning"], entry["cost"], entry["messageCount"],
+                    stable_json(public_usage_entry(entry)), _billing_json(entry), _entry_cost_authoritative(entry),
+                ))
+            conn.executemany(insert_sql, values)
+        # A swap can leave both owners' row counts unchanged. Stamp both sides
+        # so timing invalidation sees their changed populations without parsing
+        # unchanged source logs during accounting. Advance even in one clock tick.
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        conn.executemany(
+            "UPDATE file_state SET updated_at_ms = MAX(updated_at_ms + 1, ?) "
+            "WHERE source = ? AND path = ?",
+            [(now_ms, source, path) for path in sorted(changed_owners)],
+        )
+
     def sync_files(
         self,
         source: str,
@@ -1875,12 +2015,14 @@ class UsageEntryStore:
         *,
         parser: Any = None,
         pricing_identity: Any = None,
+        pricing_db: Optional[PricingDatabase] = None,
         parse_file_entries: Callable[[tuple[str, int, int]], Iterable[dict[str, Any]]],
         parse_file_tail_entries: Optional[
             Callable[[tuple[str, int, int], int], tuple[Iterable[dict[str, Any]], int]]
         ] = None,
         durable: Optional[bool] = None,
         cross_file_stable_keys: bool = False,
+        entry_supersedes: Optional[Callable[[dict[str, Any], dict[str, Any]], bool]] = None,
         file_context: Optional[dict[str, Any]] = None,
     ) -> bool:
         """:meth:`_sync_files_now`, one in flight per source (see ``_single_flight_sync``)."""
@@ -1893,10 +2035,12 @@ class UsageEntryStore:
                 file_signatures,
                 parser=parser,
                 pricing_identity=pricing_identity,
+                pricing_db=pricing_db,
                 parse_file_entries=parse_file_entries,
                 parse_file_tail_entries=parse_file_tail_entries,
                 durable=durable,
                 cross_file_stable_keys=cross_file_stable_keys,
+                entry_supersedes=entry_supersedes,
                 file_context=file_context,
             ),
         )
@@ -1908,12 +2052,14 @@ class UsageEntryStore:
         *,
         parser: Any = None,
         pricing_identity: Any = None,
+        pricing_db: Optional[PricingDatabase] = None,
         parse_file_entries: Callable[[tuple[str, int, int]], Iterable[dict[str, Any]]],
         parse_file_tail_entries: Optional[
             Callable[[tuple[str, int, int], int], tuple[Iterable[dict[str, Any]], int]]
         ] = None,
         durable: Optional[bool] = None,
         cross_file_stable_keys: bool = False,
+        entry_supersedes: Optional[Callable[[dict[str, Any], dict[str, Any]], bool]] = None,
         file_context: Optional[dict[str, Any]] = None,
     ) -> bool:
         """Sync a file-backed source by replacing only changed files.
@@ -1941,10 +2087,9 @@ class UsageEntryStore:
         parser's own source-wide dedup no matter which copy parses first
         (entry timestamps are milliseconds, so fork copies stamped less than a
         millisecond apart genuinely tie). The upsert below only moves a key to
-        a later position, or to the same position from a smaller-or-equal path
-        when the owner was deleted or rewritten, and the reparse-survivors
-        paths promote a surviving copy) instead of letting whichever file
-        parsed last own the key.
+        an earlier position; survivor reparses promote a later copy when the
+        owner is deleted, drops the key, or moves behind that copy. Ownership
+        therefore does not depend on which file parsed last.
 
         ``file_context`` stores parser-supplied dependencies in each file's
         signature. Its optional integer ``dedup_priority`` precedes the
@@ -1952,6 +2097,13 @@ class UsageEntryStore:
         original session owns copied billing even if a fork sorts first.
         Previously indexed contexts remain available through ``file_contexts``
         for durable files whose logs have disappeared.
+
+        ``entry_supersedes`` opts into retaining each file's candidates. For
+        each affected key, candidates are folded in path order through that
+        callback. This supports Claude's largest streaming snapshot and cache
+        reclassification rules, which are not an earliest-position ordering.
+        Replacing or removing a file then promotes unchanged candidates without
+        rereading their logs. Durable missing files keep their candidates.
         """
         files = _normalize_file_signatures(file_signatures)
         # Cross-file metadata can change a file's event identities without
@@ -2005,7 +2157,7 @@ class UsageEntryStore:
             if stored.get(file_sig[0], {}).get("signature") != file_sig_by_path[file_sig[0]]
             or int(stored.get(file_sig[0], {}).get("missing") or 0)
         ]
-        if cross_file_stable_keys and removed_paths and not keep_missing:
+        if cross_file_stable_keys and entry_supersedes is None and removed_paths and not keep_missing:
             # Cross-file stable keys (Codex resumed rollouts, Cline forks): a
             # removed file can own a key whose surviving copies live in other
             # files. Reparse the remaining files so one surviving occurrence
@@ -2067,7 +2219,7 @@ class UsageEntryStore:
         # unreadable in the same sync -- an accepted wart of key-granular holding.
         unresolved_keys: list[str] = []
 
-        if cross_file_stable_keys:
+        if cross_file_stable_keys and entry_supersedes is None:
             # A full replacement can remove a stable key currently owned by this
             # file while an unchanged copy-bearing file still contains a later
             # copy. Reparse survivors only in that uncommon case so the copy
@@ -2078,6 +2230,7 @@ class UsageEntryStore:
                 if not appended and file_sig[0] in stored
             ]
             owned_keys: dict[str, set[str]] = {}
+            owned_timestamps: dict[tuple[str, str], int] = {}
             if full_replaced_paths:
                 with closing(self._connect()) as conn:
                     for start in range(0, len(full_replaced_paths), 500):
@@ -2085,7 +2238,7 @@ class UsageEntryStore:
                         placeholders = ",".join("?" for _ in path_batch)
                         rows = conn.execute(
                             f"""
-                            SELECT file_path, entry_key
+                            SELECT file_path, entry_key, timestamp
                             FROM usage_entries
                             WHERE source = ?
                               AND entry_key != ''
@@ -2095,6 +2248,7 @@ class UsageEntryStore:
                         ).fetchall()
                         for row in rows:
                             owned_keys.setdefault(str(row["file_path"]), set()).add(str(row["entry_key"]))
+                            owned_timestamps[(str(row["file_path"]), str(row["entry_key"]))] = int(row["timestamp"])
 
             replacement_lost_owned_keys = any(
                 owned_keys.get(file_sig[0], set())
@@ -2102,7 +2256,15 @@ class UsageEntryStore:
                 for file_sig, entries, _safe_offset, appended in parsed
                 if not appended
             )
-            if replacement_lost_owned_keys:
+            # Mutable snapshots (Crush session.updated_at) can retain a key
+            # while moving it behind an unchanged copy. Reconsider survivors
+            # then too; stable event timestamps do not incur this reparse.
+            replacement_moved_owned_keys = any(
+                entry["timestamp"] > owned_timestamps.get((sig[0], entry["entry_key"]), entry["timestamp"])
+                for sig, entries, _offset, appended in parsed if not appended
+                for entry in entries
+            )
+            if replacement_lost_owned_keys or replacement_moved_owned_keys:
                 # NOTE: a UsageFileVanished here is deliberately NOT caught. A
                 # survivor re-parsed here holds none of the rows in question — the
                 # old canonical owner does — so skipping it and committing would let
@@ -2204,6 +2366,10 @@ class UsageEntryStore:
                 conn.create_function("usage_file_priority", 1, lambda path: priorities.get(path, 0))
                 conn.execute("BEGIN IMMEDIATE")
                 self._drop_stale_pricing_identity(conn, pricing_identity)
+                affected_keys = (
+                    self._update_entry_candidates(conn, source, parsed, removed_paths, keep_missing)
+                    if entry_supersedes is not None else set()
+                )
                 for path in removed_paths:
                     if keep_missing:
                         conn.execute(
@@ -2211,17 +2377,18 @@ class UsageEntryStore:
                             (int(datetime.now(timezone.utc).timestamp() * 1000), source, path),
                         )
                     else:
-                        conn.execute(
-                            "DELETE FROM usage_entries WHERE source = ? AND file_path = ?",
-                            (source, path),
-                        )
+                        if entry_supersedes is None:
+                            conn.execute(
+                                "DELETE FROM usage_entries WHERE source = ? AND file_path = ?",
+                                (source, path),
+                            )
                         conn.execute(
                             "DELETE FROM file_state WHERE source = ? AND path = ?",
                             (source, path),
                         )
 
                 total_changed_entries = 0
-                if cross_file_stable_keys:
+                if cross_file_stable_keys and entry_supersedes is None:
                     # Earliest (timestamp, file_path) position owns the key:
                     # a copy restamped by a resumed/forked file must not
                     # replace the canonical row, and two copies stamped in
@@ -2270,7 +2437,10 @@ class UsageEntryStore:
                     conn.executemany("INSERT OR IGNORE INTO usage_session_inputs VALUES (?,?,?)",
                                      ((source,str(sid),path) for sid in {e.get('_session_id') for e in entries} if sid))
                     total_changed_entries += len(entries)
-                    if not appended:
+                    # Candidate resolution publishes canonical rows once, after
+                    # every file's candidates and state are ready. Retain the old
+                    # rows until then so it can invalidate their former owners.
+                    if not appended and entry_supersedes is None:
                         if unresolved_keys:
                             # Hold, not heal. These keys keep the row they already
                             # had instead of losing it with the replaced owner, and
@@ -2297,30 +2467,31 @@ class UsageEntryStore:
                                 "DELETE FROM usage_entries WHERE source = ? AND file_path = ?",
                                 (source, path),
                             )
-                    conn.executemany(
-                        insert_sql,
-                        [
-                            (
-                                e["source"],
-                                path,
-                                e["entry_key"],
-                                e["model"],
-                                e["provider"],
-                                e["timestamp"],
-                                e["input"],
-                                e["output"],
-                                e["cacheRead"],
-                                e["cacheWrite"],
-                                e["reasoning"],
-                                e["cost"],
-                                e["messageCount"],
-                                stable_json(public_usage_entry(e)),
-                                _billing_json(e),
-                                _entry_cost_authoritative(e),
-                            )
-                            for e in entries
-                        ],
-                    )
+                    if entry_supersedes is None:
+                        conn.executemany(
+                            insert_sql,
+                            [
+                                (
+                                    e["source"],
+                                    path,
+                                    e["entry_key"],
+                                    e["model"],
+                                    e["provider"],
+                                    e["timestamp"],
+                                    e["input"],
+                                    e["output"],
+                                    e["cacheRead"],
+                                    e["cacheWrite"],
+                                    e["reasoning"],
+                                    e["cost"],
+                                    e["messageCount"],
+                                    stable_json(public_usage_entry(e)),
+                                    _billing_json(e),
+                                    _entry_cost_authoritative(e),
+                                )
+                                for e in entries
+                            ],
+                        )
                     conn.execute(
                         """
                         INSERT INTO file_state(
@@ -2334,7 +2505,7 @@ class UsageEntryStore:
                             safe_offset = excluded.safe_offset,
                             missing = excluded.missing,
                             signature = excluded.signature,
-                            updated_at_ms = excluded.updated_at_ms,
+                            updated_at_ms = MAX(file_state.updated_at_ms + 1, excluded.updated_at_ms),
                             entry_count = excluded.entry_count
                         """,
                         (
@@ -2353,6 +2524,9 @@ class UsageEntryStore:
                             len(entries),
                         ),
                     )
+
+                if entry_supersedes is not None:
+                    self._resolve_entry_candidates(conn, source, affected_keys, entry_supersedes, insert_sql, pricing_db)
 
                 conn.execute(
                     """

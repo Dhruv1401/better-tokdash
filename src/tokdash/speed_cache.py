@@ -271,8 +271,8 @@ def usage_token(kind=UNTRACKED):
     A file's token is the usage store's own state for that file plus the timing
     contract, built by SQLite in usage_tokens so both sides compare it as one
     string. The store stamps updated_at_ms whenever it rewrites a file's rows or
-    marks it missing, and recounts entry_count when a copy elsewhere takes over
-    one of the file's keys, so an unchanged token means unchanged rows. Only
+    marks it missing. Candidate ownership changes also stamp former and new
+    owners, even when exchanging keys leaves entry_count unchanged. Only
     those integers are read, because a request checks every file. The store
     keeps a state for every file it bills from; UNTRACKED covers a row without
     one, so it settles instead of being read on every build.

@@ -233,6 +233,7 @@ def _sync_usage_store(tracker: CodingToolsUsageTracker) -> tuple[UsageEntryStore
                 files,
                 parser=parser_sig,
                 pricing_identity=pricing,
+                pricing_db=tracker.pricing_db,
                 parse_file_entries=lambda file_sig, parser=parser, context=file_context: _collect_parser_file(
                     parser, file_sig, file_context=context,
                 ),
@@ -242,6 +243,7 @@ def _sync_usage_store(tracker: CodingToolsUsageTracker) -> tuple[UsageEntryStore
                     else None
                 ),
                 cross_file_stable_keys=capability.cross_file_stable_keys,
+                entry_supersedes=getattr(parser, "cross_file_entry_supersedes", None),
                 file_context=file_context,
             )
             continue

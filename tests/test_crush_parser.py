@@ -5,13 +5,16 @@ is_summary_message guard, and the comma-separated data-dir list."""
 import sqlite3
 from pathlib import Path
 
-from tokdash import clientpaths
+import pytest
+
+from tokdash import clientpaths, compute
 from tokdash.compute import _collect_parser_file
 from tokdash.pricing import PricingDatabase
 from tokdash.sources import coding_tools as ct
 from tokdash.sources.coding_tools import (
     BaseParser,
     CrushParser,
+    CodingToolsUsageTracker,
     ZCodeSnapshotError,
     _crush_ts_to_ms,
     _sig_cache,
@@ -332,3 +335,68 @@ def test_crush_all_dbs_failing_is_an_empty_parse(monkeypatch, tmp_path):
 
     assert parser._parse_all() == []
     assert parser.collect(None, None) == []
+
+
+def _assert_cross_file_parity(monkeypatch, data_dirs, expected):
+    parser = _fresh(data_dirs, monkeypatch)
+    live = parser.collect(None, None)
+    tracker = CodingToolsUsageTracker()
+    tracker.parsers = {"crush": CrushParser(tracker.pricing_db)}
+    store, _ = compute._sync_usage_store(tracker)
+    stored = store.query_entries(sources=["crush"])
+    fields = ("entry_id", "input", "output", "timestamp", "model", "cost")
+    assert sorted(tuple(row[field] for field in fields) for row in live) == sorted(
+        tuple(row[field] for field in fields) for row in stored
+    )
+    assert {row["entry_id"]: row["input"] for row in stored} == expected
+    with sqlite3.connect(clientpaths.usage_db_path()) as conn:
+        return {key: Path(path).parent.name for key, path in conn.execute(
+            "SELECT entry_key, file_path FROM usage_entries WHERE source = 'crush'"
+        )}
+
+
+@pytest.mark.parametrize("timestamps", [(T0, T0), (T0 + 100, T0), (T0, T0 + 100)])
+def test_crush_copied_session_bills_once_with_earliest_timestamp_path_owner(monkeypatch, tmp_path, timestamps):
+    a, b = tmp_path / "a", tmp_path / "b"
+    for directory, tokens, timestamp in zip((a, b), (100, 200), timestamps):
+        _make_db(directory, sessions=[("s1", None, tokens, 5, timestamp, 0.0)],
+                 messages=[("s1", "assistant", "gpt-5.5", "openai", T0, 0)])
+    owner, tokens = ("b", 200) if timestamps[1] < timestamps[0] else ("a", 100)
+    # Discovery is deliberately reversed; ties still belong to the smaller path.
+    owners = _assert_cross_file_parity(monkeypatch, [b, a], {"crush:s1": tokens})
+    assert owners == {"crush:s1": owner}
+
+
+@pytest.mark.parametrize("durable", ["0", "1"])
+def test_crush_rewritten_owner_promotes_unchanged_copy(monkeypatch, tmp_path, durable):
+    monkeypatch.setenv("TOKDASH_USAGE_DB_DURABLE", durable)
+    a, b = tmp_path / "a", tmp_path / "b"
+    db = _make_db(a, sessions=[("s1", None, 100, 5, T0, 0.0)], messages=[])
+    _make_db(b, sessions=[("s1", None, 200, 5, T0, 0.0)], messages=[])
+    assert _assert_cross_file_parity(monkeypatch, [a, b], {"crush:s1": 100}) == {"crush:s1": "a"}
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE sessions SET id = 's2', prompt_tokens = 7")
+    owners = _assert_cross_file_parity(monkeypatch, [a, b], {"crush:s1": 200, "crush:s2": 7})
+    assert owners == {"crush:s1": "b", "crush:s2": "a"}
+
+
+def test_crush_deleting_owner_promotes_copy_without_durability(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKDASH_USAGE_DB_DURABLE", "0")
+    a, b = tmp_path / "a", tmp_path / "b"
+    db = _make_db(a, sessions=[("s1", None, 100, 5, T0, 0.0)], messages=[])
+    _make_db(b, sessions=[("s1", None, 200, 5, T0, 0.0), ("s2", None, 300, 5, T0, 0.0)], messages=[])
+    _assert_cross_file_parity(monkeypatch, [a, b], {"crush:s1": 100, "crush:s2": 300})
+    db.unlink()
+    owners = _assert_cross_file_parity(monkeypatch, [a, b], {"crush:s1": 200, "crush:s2": 300})
+    assert owners == {"crush:s1": "b", "crush:s2": "b"}
+
+
+def test_crush_updated_owner_can_move_behind_unchanged_copy(monkeypatch, tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    db = _make_db(a, sessions=[("s1", None, 100, 5, T0, 0.0)], messages=[])
+    _make_db(b, sessions=[("s1", None, 200, 5, T0 + 10, 0.0)], messages=[])
+    _assert_cross_file_parity(monkeypatch, [a, b], {"crush:s1": 100})
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE sessions SET updated_at = ?, prompt_tokens = 300", (T0 + 20,))
+    owners = _assert_cross_file_parity(monkeypatch, [a, b], {"crush:s1": 200})
+    assert owners == {"crush:s1": "b"}
