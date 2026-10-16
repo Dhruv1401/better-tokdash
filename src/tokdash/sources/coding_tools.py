@@ -7,6 +7,7 @@ These parsers emit tokscale-compatible `entries[]` rows and are used by
 import argparse
 import glob
 import hashlib
+import io
 import json
 import logging
 import math
@@ -115,6 +116,32 @@ class SourceSyncCapability:
     # and fold them in path order instead (Claude's streaming snapshots).
     cross_file_stable_keys: bool = False
     reason: str = ""
+
+
+def open_codex_rollout(path: Path):
+    """Open plain or Zstandard-compressed Codex JSONL as a text stream."""
+    if path.suffix == ".zst":
+        raw = path.open("rb")
+        try:
+            reader = zstandard.ZstdDecompressor().stream_reader(raw, read_across_frames=True)
+            return io.TextIOWrapper(reader, encoding="utf-8")
+        except Exception:
+            raw.close()
+            raise
+    return path.open(encoding="utf-8")
+
+
+def codex_rollout_lines(handle) -> Iterator[str]:
+    """Keep other rollouts readable when one archive has a bad frame."""
+    try:
+        yield from handle
+    except zstandard.ZstdError:
+        logger.warning("codex: skipping corrupt compressed rollout")
+
+
+def _iter_codex_rollout_lines(path: Path) -> Iterator[str]:
+    with open_codex_rollout(path) as handle:
+        yield from codex_rollout_lines(handle)
 
 
 def _iter_jsonl_lines(path: Path) -> Iterator[str]:
@@ -1237,7 +1264,8 @@ class CodexParser(BaseParser):
     # 2: explicit response-owned item clocks and verified tool interval union.
     # 4: a compaction request no token_count carries is billed as its own row
     #    (issue #222).
-    persistent_parser_version = 4
+    # 5: discover and stream compressed rollout archives (issue #245).
+    persistent_parser_version = 5
 
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)
@@ -1260,7 +1288,12 @@ class CodexParser(BaseParser):
         # Both roots: archived rollouts keep their content, so stable event keys
         # collapse any overlap with sessions/ instead of double-counting.
         def _scan() -> tuple:
-            sigs = list(_rglob_sigs(self.sessions_dir)) + list(_rglob_sigs(self.archived_sessions_dir))
+            sigs = [
+                sig
+                for root in (self.sessions_dir, self.archived_sessions_dir)
+                for pattern in ("*.jsonl", "*.jsonl.zst")
+                for sig in _rglob_sigs(root, pattern)
+            ]
             sigs.sort()
             return tuple(sigs)
 
@@ -1318,7 +1351,7 @@ class CodexParser(BaseParser):
                         "cost": self.pricing_db.get_cost(billed_model, input_t, output_t, cache_read, 0),
                         "timestamp": ts_ms,
                         "entry_id": entry_id,
-                        "_session_id": own_session_id or current_session_id or Path(session_file).stem,
+                        "_session_id": own_session_id or current_session_id or Path(session_file).name.removesuffix(".zst").removesuffix(".jsonl"),
                         # Codex logs no cache writes, so the billed cache-write
                         # bucket is 0 rather than the entry's cacheWrite field.
                         "_billing": usage_billing_pricing(
@@ -1347,7 +1380,7 @@ class CodexParser(BaseParser):
                     file_entry_indices.add(len(out))
                     out.append(entry)
 
-                for line_no, line in enumerate(_iter_jsonl_lines(session_file), start=1):
+                for line_no, line in enumerate(_iter_codex_rollout_lines(session_file), start=1):
                     try:
                         msg = json.loads(line)
                     except Exception:
@@ -6000,9 +6033,10 @@ class WorkBuddyParser(BaseParser):
     """Parse WorkBuddy (Tencent AI assistant) desktop transcripts.
 
     WorkBuddy appends one JSON row per event to
-    ``~/.workbuddy-ai/projects/<cwd-slug>/<sessionId>.jsonl`` (same layout on
+    ``~/.workbuddy/projects/<cwd-slug>/<sessionId>.jsonl`` (also
+    ``~/.workbuddy-ai`` on older builds; same layout on
     Windows, macOS, and Linux; ``$WORKBUDDY_DATA_DIR`` points the reader at
-    other stores, e.g. a Windows dir from WSL). Assistant message rows carry
+    other stores, e.g. a Windows dir from WSL). Message and function-call rows carry
     the per-call usage in ``providerData``:
 
       {"id": <chat.completion id>, "timestamp": <epoch ms>,
@@ -6048,7 +6082,8 @@ class WorkBuddyParser(BaseParser):
     #    prompt split into fresh input / cacheRead, reasoning split out for
     #    display while billing uses the full completion, cache writes held at 0
     #    until the vendor's write-slice semantics are verified.
-    persistent_parser_version = 1
+    # 2: include usage-bearing function calls and other row types (#246).
+    persistent_parser_version = 2
 
     def __init__(self, pricing_db: PricingDatabase):
         super().__init__(pricing_db)
@@ -6178,8 +6213,6 @@ class WorkBuddyParser(BaseParser):
         }
 
     def _entry_from_row(self, record: Dict[str, Any], seen_call_ids: set) -> Optional[Dict[str, Any]]:
-        if record.get("type") != "message" or record.get("role") != "assistant":
-            return None
         pd = record.get("providerData")
         if not isinstance(pd, dict):
             return None
