@@ -60,6 +60,8 @@ from .sources.coding_tools import (
     codex_replay_key_session_id,
     codex_token_event_key,
     connect_sqlite_readonly,
+    codex_rollout_lines,
+    open_codex_rollout,
     iter_grok_usage_rows,
     parse_cline_message_file,
     qoder_cli_effective_rate,
@@ -132,7 +134,8 @@ _SESSION_FILE_PARSER_VERSIONS = {
     #    replay dedup; stored v1 keys/rows predate both.
     # 3: response-owned speed measurements from the shared usage reader.
     # 4: a compaction request no token_count carries is its own turn (issue #222).
-    "_parse_codex_session_file": 4,
+    # 5: stream compressed archives with the same fallback session identity.
+    "_parse_codex_session_file": 5,
     # 2: turns carry _stream_id so subagents are timed separately from the main agent.
     # 3: streaming snapshots collapse per claude_usage_supersedes rather than
     #    keeping the first write, for role-bearing rows too; stored v2 turns
@@ -1564,12 +1567,12 @@ def _file_signature(path: Path) -> tuple[str, int, int]:
     return str(path), int(stat.st_mtime_ns), int(stat.st_size)
 
 
-def _iter_file_signatures(root: Path) -> tuple[tuple[str, int, int], ...]:
+def _iter_file_signatures(root: Path, pattern: str = "*.jsonl") -> tuple[tuple[str, int, int], ...]:
     if not root.exists():
         return ()
     items = []
     try:
-        for path in root.rglob("*.jsonl"):
+        for path in root.rglob(pattern):
             try:
                 items.append(_file_signature(path))
             except OSError:
@@ -1588,8 +1591,12 @@ def _codex_file_signatures() -> tuple[tuple[str, int, int], ...]:
     """Signatures from both Codex rollout roots (``sessions/`` and
     ``archived_sessions/``). Archived files keep their content, so the stable
     event key collapses any overlap instead of double-counting."""
-    items = list(_iter_file_signatures(clientpaths.codex_sessions_dir()))
-    items.extend(_iter_file_signatures(clientpaths.codex_archived_sessions_dir()))
+    items = [
+        sig
+        for root in (clientpaths.codex_sessions_dir(), clientpaths.codex_archived_sessions_dir())
+        for pattern in ("*.jsonl", "*.jsonl.zst")
+        for sig in _iter_file_signatures(root, pattern)
+    ]
     items.sort(key=lambda item: item[0])
     return tuple(items)
 
@@ -1699,7 +1706,7 @@ def _parse_codex_session_file(path_str: str, _mtime_ns: int, _size: int, _pricin
     if not session_path.exists():
         return None
 
-    session_id = session_path.stem
+    session_id = session_path.name.removesuffix(".zst").removesuffix(".jsonl")
     own_session_id = None
     subagent_parent_id = None
     is_subagent_file = False
@@ -1722,7 +1729,7 @@ def _parse_codex_session_file(path_str: str, _mtime_ns: int, _size: int, _pricin
     activity = new_activity_record(is_primary=True, has_explicit_session_id=False)
 
     try:
-        handle = session_path.open("r", encoding="utf-8")
+        handle = open_codex_rollout(session_path)
     except OSError as exc:
         # A file held without share-read (the client itself, AV, a search indexer)
         # raises PermissionError on Windows; drop this file rather than erroring
@@ -1730,7 +1737,7 @@ def _parse_codex_session_file(path_str: str, _mtime_ns: int, _size: int, _pricin
         # not cached against a signature that will never change again.
         raise _SessionFileUnavailable(path_str) from exc
     with handle:
-        for line_no, line in enumerate(handle, start=1):
+        for line_no, line in enumerate(codex_rollout_lines(handle), start=1):
             try:
                 obj = json.loads(line)
             except Exception:
@@ -4811,7 +4818,7 @@ def _parse_workbuddy_session_file(path_str: str, _mtime_ns: int, _size: int, _pr
 
     Raises _SessionFileUnavailable on open failure (mirror the claude file
     parser's raise) so a locked file is retried, not cached; None when no
-    usage rows survive. One turn per billed model call (assistant row): an
+    usage rows survive. One turn per billed model call (including function-call rows): an
     N-step tool loop yields N turns, matching the N entries the parser
     bills.
     """
