@@ -26,6 +26,7 @@ from .usage_store import (
     UsageDatabaseSchemaTooNewError,
     UsageEntryStore,
     build_source_signature,
+    entry_message_count,
     model_cost_rank_key,
     model_rank_key,
     persistent_pricing_signature,
@@ -528,7 +529,7 @@ def parse_entries_json(data: Dict[str, Any], *, granularity: Optional[str] = Non
             if pricing_db is None:
                 pricing_db = PricingDatabase()
             cost = pricing_db.get_cost(full_model_name, input_raw, tokens_out, cache_read, cache_write)
-        messages = int(entry.get("messageCount", 0) or 1)
+        messages = entry_message_count(entry)
         if granularity and source.lower() != "openclaw":
             stamp = int(entry.get("timestamp", 0) or 0)
             if stamp > 0:

@@ -818,7 +818,6 @@ def usage_billing_pricing(
     """Billing inputs for a row Tokdash prices itself."""
     record: dict[str, Any] = {
         "kind": "pricing",
-        "rule": "split-cache-write",
         "models": [str(model or "") for model in models],
         "input": int(input_tokens or 0),
         "output": int(output_tokens or 0),
@@ -935,6 +934,24 @@ def _float_field(entry: dict[str, Any], key: str) -> float:
         return 0.0
 
 
+def entry_message_count(entry: dict[str, Any]) -> int:
+    """How many messages one entry stands for.
+
+    A parser that has no count for a row is describing a single message, so an
+    absent messageCount means one. An explicit zero is different: it is a parser
+    that knows the real count and put it somewhere else -- Hermes folds an
+    N-message session into one entry and marks the sibling rows it emits for the
+    other models with zero -- so it has to survive here rather than become one.
+    """
+    value = entry.get("messageCount")
+    if value is None or value == "":
+        return 1
+    try:
+        return int(value)
+    except Exception:
+        return 1
+
+
 def _entry_for_storage(entry: dict[str, Any]) -> Optional[dict[str, Any]]:
     source = str(entry.get("source") or "unknown")
     model = str(entry.get("model") or "unknown")
@@ -954,7 +971,7 @@ def _entry_for_storage(entry: dict[str, Any]) -> Optional[dict[str, Any]]:
     raw["reasoning"] = _int_field(raw, "reasoning")
     raw["cost"] = _float_field(raw, "cost")
     raw["timestamp"] = timestamp
-    raw["messageCount"] = _int_field(raw, "messageCount") or 1
+    raw["messageCount"] = entry_message_count(raw)
     raw["entry_key"] = _entry_key(raw)
     raw.pop(SPEED_ENTRY_KEY, None)
     raw.pop('output_speed', None)
