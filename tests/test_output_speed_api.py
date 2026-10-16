@@ -876,11 +876,12 @@ def test_a_commit_between_the_two_reads_cannot_join_the_response(client, monkeyp
     real = speed_report.across_model_rows
     state = {"inserted": False}
 
-    def racing(conn, day_from, day_to, *, source=""):
+    def racing(conn, day_from, day_to, *, source="", include_request_windows=True):
         if not state["inserted"]:
             state["inserted"] = True
             _commit_a_second_file(first, late, "/fixture/kimi-late.jsonl")
-        return real(conn, day_from, day_to, source=source)
+        return real(conn, day_from, day_to, source=source,
+                    include_request_windows=include_request_windows)
 
     monkeypatch.setattr(speed_report, "across_model_rows", racing)
     payload = _across(client)
@@ -1012,3 +1013,72 @@ def test_london_owns_the_first_hour_of_the_first_of_july(client, monkeypatch):
     finally:
         monkeypatch.undo()
         time.tzset()
+
+
+def test_generation_filter_recomputes_combined_and_trend_without_changing_coverage(client):
+    # The whole request overlaps one generation window but also adds ten seconds
+    # of busy time. Hiding only its table row would leave the merged rate wrong.
+    start = _ms(DAY_FROM, 12)
+    _seed([
+        _measured(_entry(source='codex', model='m', ts=start + 10000), 100, 10000,
+                  kind='response_window', basis=BASIS_INCLUDING),
+        _measured(_entry(source='omp', model='m', ts=start + 10000), 100, 10000,
+                  kind=KIND_POST_FIRST_TOKEN, basis=BASIS_INCLUDING),
+        _measured(_entry(source='codex', model='m', ts=start + 20000), 600, 20000,
+                  kind='request_window', basis=BASIS_INCLUDING),
+    ])
+    with closing(speed_cache.connect()) as conn:
+        speed_cache.put_meta(conn, publication_revision='1', instance_id='filter-test')
+        conn.commit()
+    for include, expected_tokens, expected_rate, expected_peak in [
+        (True, 800, 40, 3), (False, 200, 20, 2), (True, 800, 40, 3),
+    ]:
+        report = _across(client, include_request_windows=include)
+        merged = report['models'][0]
+        assert merged['speed_tokens'] == expected_tokens
+        assert merged['combined_tok_per_s'] == pytest.approx(expected_rate)
+        assert merged['peak_in_flight'] == expected_peak
+        codex = next(r for r in report['rows'] if r['source'] == 'codex'
+                     and r['measurement_kind'] == 'response_window')
+        assert codex['eligible_calls'] == 2
+        assert codex['coverage'] == 0.5
+        if not include:
+            assert all(r['measurement_kind'] != 'request_window' for r in report['rows'])
+        trend = _get(client, view='trend', date_from=DAY_FROM, date_to=DAY_TO,
+                     include_request_windows=include)
+        measured = [v for v in trend['model_series'][0]['combined'] if v is not None]
+        assert measured == [pytest.approx(expected_rate)]
+        assert sum(trend['model_series'][0]['calls']) == (3 if include else 2)
+
+
+def test_generation_coverage_keeps_a_request_only_harness_in_model_population(client):
+    _seed([
+        _measured(_entry(source='codex', model='m', ts=_ms(DAY_FROM, 12)), 100, 1000,
+                  kind='response_window', basis=BASIS_INCLUDING),
+        _measured(_entry(source='opencode', model='m', ts=_ms(DAY_FROM, 13)), 200, 2000,
+                  kind='request_window', basis=BASIS_INCLUDING),
+    ])
+    filtered = _across(client, include_request_windows=False)
+    assert filtered['models'][0]['speed_calls'] == 1
+    assert filtered['models'][0]['eligible_calls'] == 2
+    assert filtered['models'][0]['coverage'] == 0.5
+    assert filtered['rows'][0]['coverage'] == 1
+    assert filtered['hidden_request_windows'] == [{'source': 'opencode', 'model': 'm', 'speed_calls': 1}]
+    scoped = _across(client, source='codex', include_request_windows=False)
+    assert scoped['models'][0]['eligible_calls'] == 1
+    assert scoped['models'][0]['coverage'] == 1
+    assert scoped['hidden_request_windows'] == []
+    both = _across(client, include_request_windows=True)
+    assert both['models'][0]['eligible_calls'] == 2
+    assert both['models'][0]['coverage'] == 1
+    assert both['hidden_request_windows'] == []
+
+
+def test_request_only_population_is_hidden_rather_than_reported_as_missing(client):
+    _seed([_measured(_entry(source='opencode', model='m', ts=_ms(DAY_FROM, 12)), 100, 1000,
+                     kind='request_window', basis=BASIS_INCLUDING)])
+    filtered = _across(client, include_request_windows=False)
+    assert filtered['rows'] == filtered['models'] == []
+    assert filtered['hidden_request_windows'] == [{'source': 'opencode', 'model': 'm', 'speed_calls': 1}]
+    assert not any(r['source'] == 'opencode' for r in filtered['source_status'])
+    assert _across(client, include_request_windows=True)['rows'][0]['speed_calls'] == 1

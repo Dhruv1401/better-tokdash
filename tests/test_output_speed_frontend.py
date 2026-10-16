@@ -1045,6 +1045,7 @@ usageReportSpeedState.lens = 'combined';
 usageReportSpeedState.payload = {models: []};
 out.below = render(harness(1.14));
 out.at = render(harness(1.16));
+usageReportSpeedState.includeRequestWindows = true;
 out.merged = render({...base, sources: ['omp', 'opencode'], measurement_kinds: ['post_first_token', 'request_window'],
                      parallelism: 2.5});
 usageReportSpeedState.lens = 'stream';
@@ -1058,6 +1059,7 @@ console.log(JSON.stringify(out));
     assert out["below"]["par"] is None, "×1.1 on every row is noise"
     assert out["at"]["par"] == "×1.2"
     assert out["at"]["rate"] == "30.0", "Combined shows the combined rate"
+    assert out["below"]["meta"] == "codex", "default rows omit timing annotations"
     assert out["merged"]["meta"].startswith("omp + opencode · ")
     assert "usageReportSpeedMethods" in out["merged"]["meta"], "two methods are named as two"
     assert "usageReportSpeedRateTitleMerged" in out["merged"]["title"]
@@ -1986,3 +1988,35 @@ console.log(JSON.stringify(out));
     assert out["streamHidden"] is False
     assert out["pressedOn"] == "true" and out["pressedOff"] == "false"
     assert out["remembered"] is False, "turning the spread off survives a reload"
+
+
+def test_generation_default_and_opt_in_survive_reload_and_change_request_scope(tmp_path):
+    script = '\n'.join([
+        'let saved = {}; const localStorage = {getItem: () => JSON.stringify(saved), setItem: (k,v) => saved = JSON.parse(v)};',
+        _line('    const USAGE_REPORT_SPEED_PREFS_KEY'),
+        _line('    const USAGE_REPORT_SPEED_PERIODS'),
+        _extract('const usageReportSpeedState ='),
+        _extract('function usageReportSpeedReadPrefs()'),
+        _extract('function usageReportSpeedWritePrefs()'),
+        _extract('function usageReportSpeedSetRequestWindows('),
+        _extract('function usageReportSpeedQuery('),
+        _extract('function usageReportSpeedKey()'),
+        'function usageReportSpeedWindow(){return {date_from:"2026-10-01",date_to:"2026-10-16"};}',
+        'function outputSpeedServer(){return {id:"local"};}',
+        'let invalidations=0, loads=0;',
+        'function usageReportSpeedInvalidate(){invalidations++;}',
+        'function usageReportSpeedIsVisible(){return true;}',
+        'function usageReportLoadSpeed(){loads++;}',
+        'function usageReportSpeedSetSelection(ids,slots){usageReportSpeedState.selected=ids;usageReportSpeedState.slots=slots;}',
+        'const initial = usageReportSpeedQuery(), firstKey = usageReportSpeedKey();',
+        'usageReportSpeedSetRequestWindows(true);',
+        'const enabled = usageReportSpeedQuery(), nextKey = usageReportSpeedKey();',
+        'usageReportSpeedState.includeRequestWindows=false; usageReportSpeedState.prefsRead=false;',
+        'usageReportSpeedReadPrefs();',
+        'console.log(JSON.stringify({initial,enabled,changed:firstKey!==nextKey,restored:usageReportSpeedState.includeRequestWindows,invalidations,loads}));',
+    ])
+    out = _run_node(tmp_path, 'generation_preference', script)
+    assert 'include_request_windows=false' in out['initial']
+    assert 'include_request_windows=true' in out['enabled']
+    assert out['changed'] and out['restored']
+    assert out['invalidations'] == out['loads'] == 1

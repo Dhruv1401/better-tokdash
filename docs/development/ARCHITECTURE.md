@@ -60,6 +60,12 @@ only a per-transcript uuid map. Codex's reader times a response from its marker'
 model-item clocks, and falls back to the rollout's line stamps when the marker has
 nothing to time: a response that ends in a tool call, or a log before 0.153.
 
+The model speed page defaults to measurements that omit the initial wait:
+provider decode, post-first-token, and recorded response windows. A browser
+setting includes whole-request windows and reveals timing labels. Its API filter
+applies before busy-time unions and trend aggregation; coverage retains the full
+eligible population. Timing extraction and session speed APIs retain every kind.
+
 Model and session rates divide summed measured tokens by summed matched duration.
 Groups retain source, model, measurement kind and token basis so incompatible
 timing windows are not combined. That per-stream rate sits beside a combined one,
