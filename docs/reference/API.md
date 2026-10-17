@@ -658,6 +658,7 @@ range controls. Opening Overview or Usage Report does not request this endpoint.
 | `bucket` | `auto` | `trend` only: `auto`, `hour`, `day`, `week`, `month` or `quarter`. A size the window does not offer falls back to `auto` |
 | `refresh` | `false` | Queue a lightweight usage/ownership synchronization followed by a timing build; avoids full usage-report aggregation |
 | `cache_only` | `false` | Read the published snapshot without queuing work, even if inputs changed; takes precedence over `refresh` |
+| `include_request_windows` | `true` | Include measurements containing the initial wait. The dashboard sends `false` by default; its Settings toggle opts in. Applies to all speed views and combined totals. The API default preserves existing clients. |
 
 Across-model responses contain `rows`, grouped by source, normalized model, measurement kind
 and token basis, and `source_status` for tools with usage but no measured speed.
@@ -666,6 +667,21 @@ Each measured row includes additive `speed_tokens`, `speed_ms`, `speed_calls`,
 The rate is `1000 * SUM(speed_tokens) / SUM(speed_ms)`. Rates from individual calls
 are never averaged. Unmeasured throughput is absent or `null`, and empty hours are
 `null`, rather than zero.
+
+The dashboard defaults to **generation windows** (响应窗口): `server_decode`,
+`post_first_token`, and `response_window`. These omit the initial wait, though
+their clocks differ: a provider decode clock, a duration minus TTFT, and recorded
+model-output clocks remain separate measurement kinds. In Settings, **Include
+whole-request measurements** also shows `request_window`, which includes the
+initial wait, and reveals timing labels. This preference is saved in the browser.
+Filtering happens before combined busy-time unions and trend aggregation;
+eligible-call counts still include all eligible responses, so coverage does not
+increase merely because a measurement kind is hidden. A harness with only
+whole-request timing has no default speed row; enabling the setting reveals it.
+Across-model payloads list filtered measurements in `hidden_request_windows`
+(`source`, `model`, `speed_calls`), separately from missing-timing statuses. The
+dashboard retains their harness pills and offers a localized settings action
+when those hidden measurements explain an empty view.
 
 That rate is **per stream**: each response contributes its own duration, so responses
 running at the same time never add up. Every row also carries the **combined** rate,

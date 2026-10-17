@@ -105,6 +105,31 @@ def test_empty_and_recorded_cost_usage_never_loads_pricing(monkeypatch, raw):
     assert sum(row["messages"] for row in data["sparkline"]["buckets"]) == data["total_messages"]
 
 
+def test_tokenless_charges_are_visible_but_empty_models_stay_suppressed(monkeypatch, tmp_path):
+    from tokdash import compute
+
+    def unexpected_pricing_load():
+        raise AssertionError("tokenless rows need no pricing file read")
+
+    monkeypatch.setattr(compute, "PricingDatabase", unexpected_pricing_load)
+    raw = [
+        {"source": "hermes", "model": model, "timestamp": 1_779_395_293_000,
+         "input": 0, "output": 0, "cost": cost, "messageCount": messages}
+        for model, cost, messages in (("charged", 0.01, 6), ("empty", 0.0, 9))
+    ]
+    store = UsageEntryStore(tmp_path / "usage.sqlite3")
+    store.sync_source("hermes", build_source_signature(files=[["fixture", 1, 1]], parser={"v": 1}), lambda: raw)
+    live = parse_entries_json({"entries": raw}, granularity="hour")
+    stored = store.aggregate_entries(sources=["hermes"], bucket_granularity="hour")
+    for data in (live, stored, compute._merge_parsed_usage([live])):
+        assert data["total_tokens"] == 0
+        assert data["total_cost"] == pytest.approx(0.01)
+        assert data["total_messages"] == 6
+        assert [row["name"] for row in data["all_models"]] == ["charged"]
+        assert sum(row["cost"] for row in data["sparkline"]["buckets"]) == pytest.approx(0.01)
+        assert sum(row["messages"] for row in data["sparkline"]["buckets"]) == 6
+
+
 def test_native_bucket_optimization_preserves_model_order_and_independent_payloads():
     raw = [{**entries()[0], "source": source, "model": model}
            for source, model in (("codex", "model-z"), ("claude", "model-a"), ("codex", "model-a"))]
@@ -352,7 +377,7 @@ def test_tokenless_buckets_keep_fees_and_messages_of_visible_models(tmp_path, gr
     base = {**entries()[0], "source": source, "model": "model-a"}
     raw = [{**base, **empty, "timestamp": first, "cost": .03, "messageCount": 7},
            {**base, "timestamp": int((since+offset).timestamp()*1000)},
-           {**base, **empty, "model": "unused-model", "timestamp": first, "cost": .9, "messageCount": 20}]
+           {**base, **empty, "model": "fee-only-model", "timestamp": first, "cost": .9, "messageCount": 20}]
     store = UsageEntryStore(tmp_path / "usage.sqlite3")
     store.sync_source(source, build_source_signature(files=[[source, 1, 1]], parser={"v":1}), lambda: raw)
     if source == "codex":
@@ -362,11 +387,15 @@ def test_tokenless_buckets_keep_fees_and_messages_of_visible_models(tmp_path, gr
     else:
         actual = _openclaw_usage_from_store(store, since, until)
         assert set(actual["models"]) == {"model-a"}
-    assert actual["total_messages"] == 11
-    assert actual["total_cost"] == pytest.approx(.23)
+    # Coding-tool aggregation keeps a model's recorded fees even when it has
+    # no tokens. OpenClaw has its own adapter and retains its existing policy.
+    fee_messages, fee_cost = (20, .9) if source == "codex" else (0, 0)
+    assert actual["total_messages"] == 11 + fee_messages
+    assert actual["total_cost"] == pytest.approx(.23 + fee_cost)
     buckets = actual["sparkline"]["buckets"]
     assert len(buckets) == 2
     assert buckets[0]["tokens"] == 0
-    assert buckets[0]["messages"] == 7 and buckets[0]["cost"] == pytest.approx(.03)
+    assert buckets[0]["messages"] == 7 + fee_messages
+    assert buckets[0]["cost"] == pytest.approx(.03 + fee_cost)
     assert sum(row["messages"] for row in buckets) == actual["total_messages"]
     assert sum(row["cost"] for row in buckets) == pytest.approx(actual["total_cost"])

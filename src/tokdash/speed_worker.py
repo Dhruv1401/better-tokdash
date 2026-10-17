@@ -93,6 +93,16 @@ def native_rows(source, session_id=''):
                 yield row,member
 
 
+def _can_reuse_file_timing(conn, source, owner):
+    """An unchanged file may have acquired calls absent from its last publication."""
+    return bool(conn.execute('''SELECT NOT EXISTS (
+        SELECT 1 FROM speed_stage s WHERE s.source=? AND s.input_owner=?
+        AND NOT EXISTS (SELECT 1 FROM speed_responses p
+            WHERE p.source=s.source AND p.entry_key=s.entry_key AND p.input_owner=s.input_owner
+              AND p.timestamp=s.timestamp AND p.model=s.model
+              AND p.output=s.output AND p.reasoning=s.reasoning))''', (source, owner)).fetchone()[0])
+
+
 def _reuse_file_timing(conn,source,owner):
     conn.execute('''UPDATE speed_stage AS s SET (session_id,speed_tokens,speed_ms,speed_calls,speed_kind,speed_token_basis,speed_status)=
        (SELECT session_id,speed_tokens,speed_ms,speed_calls,speed_kind,speed_token_basis,speed_status FROM speed_responses p
@@ -289,7 +299,8 @@ def build(conn, job, request, *, sync=True, failure_context=None):
             completed+=1; _progress(conn,job,completed,total); continue
         identities[(source,owner)]=observed
         failure_context['signature']=observed
-        if old and old['signature']==observed and old['reader_version']==cache.READER_VERSIONS[source] and old['state']=='ready':
+        if old and old['signature']==observed and old['reader_version']==cache.READER_VERSIONS[source] and old['state']=='ready' \
+                and _can_reuse_file_timing(conn,source,owner):
             reused_files+=1
             _reuse_file_timing(conn,source,owner)
         elif (request.get('session_id') or request.get('sessions')) and (source,owner) not in requested_inputs:

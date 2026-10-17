@@ -255,3 +255,37 @@ def test_compaction_key_is_scoped_to_the_session_and_the_usage_it_leaves():
     assert key != codex_compaction_event_key("sess", {**record, "thread_token_usage": _add(BEFORE)})
     assert codex_compaction_event_key("sess", {"usage": COMPACTION}) is None
     assert codex_compaction_event_key(None, record) is None
+
+
+@pytest.mark.parametrize("root", ["sessions", "archived_sessions"])
+@pytest.mark.parametrize("keep_plain", [False, True])
+def test_compressed_rollouts_agree_across_views(_isolated_home, monkeypatch, root, keep_plain):
+    """Compressed-only history and overlapping plain copies bill exactly once."""
+    import zstandard
+
+    _write_pricing()
+    path = _write(_isolated_home, "compressed", _rollout("sess-compressed", shape="uncarried"))
+    archive = _isolated_home / ".codex" / root / "rollout-compressed.jsonl.zst"
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    # Frames without declared content sizes also occur in streaming archives.
+    compressor = zstandard.ZstdCompressor(write_content_size=False)
+    lines = path.read_bytes().splitlines(keepends=True)
+    archive.write_bytes(compressor.compress(b"".join(lines[:2])) + compressor.compress(b"".join(lines[2:])))
+    if not keep_plain:
+        path.unlink()
+    expected = sorted(_tokens(u) for u in (BEFORE, COMPACTION, AFTER))
+    assert _overview_live() == expected
+    assert _overview_stored() == expected
+    assert _sessions(monkeypatch, False) == expected
+    assert _sessions(monkeypatch, True) == expected
+
+
+def test_corrupt_compressed_rollout_does_not_hide_other_files(_isolated_home, monkeypatch):
+    _write_pricing()
+    path = _write(_isolated_home, "healthy", _rollout("sess-healthy", shape="uncarried"))
+    path.with_name("bad.jsonl.zst").write_bytes(b"invalid zstandard frame")
+    expected = sorted(_tokens(u) for u in (BEFORE, COMPACTION, AFTER))
+    assert _overview_live() == expected
+    assert _overview_stored() == expected
+    assert _sessions(monkeypatch, False) == expected
+    assert _sessions(monkeypatch, True) == expected

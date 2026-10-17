@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 2.6.18 - 2026-10-16
+
+### Added
+
+- An end-user troubleshooting guide. `docs/guides/TROUBLESHOOTING.md` covers the eight problems that used to mean opening an issue: a port already in use, a usage database too new for the installed version, a SQLite WAL lock and when to reach for `db resync` against `db repair`, macOS Keychain prompts, binding localhost from WSL2, GitHub Copilot's OTel exports reporting no tokens, a dashboard with no data, and a failed update check. `docs/README.md` and the onboarding guide link it. (#187, thanks @Dhruv1401)
+- Three endpoints that existed in `api.py` but not in the reference: `GET /api/activity-insights` with its `refresh` parameter and per-day caching, the PWA `GET /manifest.webmanifest`, and the `GET /sw.js` service worker. Amp joins the supported-client matrix, marked as a placeholder because `AmpParser._parse_all` returns no rows yet, with its real `~/.amp/` log path recorded. Two specs that were on disk but unlinked -- the TUI spec and the OpenClaw reporting agent guide -- are indexed from `docs/README.md`. (#183, thanks @Dhruv1401)
+- 37 test modules now carry a docstring describing what they cover, so the scope of a file is readable before its assertions. Test logic is unchanged, checked by comparing Python ASTs against the previous main with the docstrings removed. (#199, thanks @Dhruv1401)
+- `src/tokdash/pricing_db.json` moves from 2.0.34 to 2.0.35 (`lastUpdated: 2026-10-13T14:06:35Z`) with the auto-approved results of the 2026-10-13 scan: one addition and no repricings. `muse-wonder` (meta) joins at $4.00 input / $20.00 output per MTok, cache at $0.20 read / $4.00 write. The scan's 90 price changes are review-required and stay in the updater's diff report for a manual pass. (#237)
+
+### Changed
+
+- Model output speed now defaults to generation windows rather than whole requests. The page mixed the two definitions, and a whole-request window includes the initial wait for the first token, so two rows could be comparing different work. The timing filter is applied before the comparison table, the combined-throughput figure, concurrency, the trend and the hourly buckets, so every number on the page answers the same question; API defaults are untouched, so existing clients keep their behaviour. A Settings toggle persists the choice and reveals the timing labels, a harness with only whole-request timing stays eligible for the model, and the measurements such a harness does contribute are explained by that action instead of being reported as missing data. The terminology and the detailed timing explanations follow across all six dashboard locales, and the mixed-method notice keeps distinct method names rather than collapsing them. (#250)
+
+### Fixed
+
+- Claude messages copied across transcripts no longer leave the stored view on a smaller snapshot or losing usage when the owning file was rewritten or deleted. Claude keeps its file-local candidates and selects the same streaming winner as the live parser, and Crush resolves one deterministic owner per session across databases, so a session copied into two stores is no longer counted twice in the live view while the stored view counted it once. `ClaudeParser` moves to `persistent_parser_version` 4 and `CrushParser` to 2, and the store's `SCHEMA_VERSION` moves from 13 to 14, so the migration rebuilds surviving inputs while preserving durable archived usage. An ownership change also invalidates timing for both the former and the new owner even when the two files exchange messages without changing their row counts, and the timing worker reads newly acquired calls instead of treating an incomplete cached measurement as a complete result. (#247, closes #170)
+- Codex rollouts are read whether they are stored plain or Zstandard-compressed, in both the active and the archived session directories, and the existing event keys deduplicate the overlapping copies that leaves behind in the usage and session views. A corrupt compressed frame is isolated, so the other rollouts stay readable instead of failing the sync. `CodexParser` moves to `persistent_parser_version` 5. (#248, closes #245)
+- WorkBuddy counts its usage-bearing `providerData` rows, including function calls, once per provider message id. Both `~/.workbuddy` and the legacy `~/.workbuddy-ai` are discovered by default, with `WORKBUDDY_DATA_DIR` overrides preserved, and `WorkBuddyParser` moves to `persistent_parser_version` 2. (#248, closes #246)
+- The Hermes mark is the official icon on the web, macOS and Windows rather than a black circle and triangle. The official portrait is used consistently and the old inverted and dark variants are gone, with the two companion contract tests updated to stop expecting a dark-appearance copy for Hermes. (#204, #242, thanks @Dhruv1401)
+- The GitHub Actions artifacts move to `download-artifact` 8.0.2 and `upload-artifact` 7.0.2 in the PyPI publish and companion release workflows. (#243, #244)
+
 ## 2.6.17 - 2026-10-13
 
 ### Added

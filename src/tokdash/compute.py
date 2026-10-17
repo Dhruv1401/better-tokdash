@@ -26,6 +26,7 @@ from .usage_store import (
     UsageDatabaseSchemaTooNewError,
     UsageEntryStore,
     build_source_signature,
+    entry_message_count,
     model_cost_rank_key,
     model_rank_key,
     persistent_pricing_signature,
@@ -254,6 +255,7 @@ def _sync_usage_store(tracker: CodingToolsUsageTracker) -> tuple[UsageEntryStore
                 files,
                 parser=parser_sig,
                 pricing_identity=pricing,
+                pricing_db=tracker.pricing_db,
                 parse_file_entries=lambda file_sig, parser=parser, context=file_context: _collect_parser_file(
                     parser, file_sig, file_context=context,
                 ),
@@ -263,6 +265,7 @@ def _sync_usage_store(tracker: CodingToolsUsageTracker) -> tuple[UsageEntryStore
                     else None
                 ),
                 cross_file_stable_keys=capability.cross_file_stable_keys,
+                entry_supersedes=getattr(parser, "cross_file_entry_supersedes", None),
                 file_context=file_context,
             )
             return
@@ -332,12 +335,12 @@ def _merge_parsed_usage(parts: list[Dict[str, Any]]) -> Dict[str, Any]:
             source = str(row.get("source") or "unknown")
             name = str(row.get("name") or "unknown")
             tokens = int(row.get("tokens", 0) or 0)
-            if tokens == 0:
+            cost = float(row.get("cost", 0.0) or 0.0)
+            if tokens == 0 and cost <= 0:
                 continue
             tokens_in = int(row.get("tokens_in", 0) or 0)
             tokens_out = int(row.get("tokens_out", 0) or 0)
             tokens_cache = int(row.get("tokens_cache", 0) or 0)
-            cost = float(row.get("cost", 0.0) or 0.0)
             messages = int(row.get("messages", 0) or 0)
 
             app_ref = apps.setdefault(
@@ -552,8 +555,10 @@ def parse_entries_json(data: Dict[str, Any], *, granularity: Optional[str] = Non
         # `totalTokens` definition and keeps Overview consistent with Stats).
         total_tokens = tokens_in + tokens_out + tokens_cache + reasoning
 
-        # Suppress fully empty rows.
-        if total_tokens == 0:
+        # A recorded charge can have no token counters (for example a Hermes
+        # fixed billing half). Suppress only rows with neither usage nor a fee.
+        entry_cost = float(entry.get("cost") or 0.0)
+        if total_tokens == 0 and entry_cost <= 0:
             continue
 
         # Prefer parser-provided cost when present (pi-agent ships per-message
@@ -562,7 +567,6 @@ def parse_entries_json(data: Dict[str, Any], *, granularity: Optional[str] = Non
         # only when the parser couldn't determine cost keeps Overview/API costs
         # aligned with the per-source semantics and with the Stats tab, which
         # already trusts entry["cost"].
-        entry_cost = float(entry.get("cost") or 0.0)
         # costAuthoritative marks a recorded zero as the source's own
         # billing decision (a free request): accept it instead of
         # guessing a price from the token buckets.
@@ -572,7 +576,7 @@ def parse_entries_json(data: Dict[str, Any], *, granularity: Optional[str] = Non
             if pricing_db is None:
                 pricing_db = PricingDatabase()
             cost = pricing_db.get_cost(full_model_name, input_raw, tokens_out, cache_read, cache_write)
-        messages = int(entry.get("messageCount", 0) or 1)
+        messages = entry_message_count(entry)
         if granularity and source.lower() != "openclaw":
             stamp = int(entry.get("timestamp", 0) or 0)
             if stamp > 0:
@@ -816,8 +820,8 @@ def get_openclaw_data_for_range(date_from: str, date_to: str) -> Dict[str, Any]:
     return get_session_usage_range(since, until)
 
 
-def _has_visible_token_usage(row: Dict[str, Any]) -> bool:
-    """A row is visible if any of input/output/cacheRead/cacheWrite token dimensions are non-zero."""
+def _has_visible_usage(row: Dict[str, Any]) -> bool:
+    """Token usage or a positive recorded cost makes a model visible."""
     tokens_in = int(row.get("tokens_in", row.get("input", 0)) or 0)
     tokens_out = int(row.get("tokens_out", row.get("output", 0)) or 0)
     cache_read = int(row.get("cache_read", row.get("cacheRead", 0)) or 0)
@@ -828,7 +832,7 @@ def _has_visible_token_usage(row: Dict[str, Any]) -> bool:
         cache_total = int(row.get("tokens_cache", 0) or 0)
         cache_read = cache_total
 
-    return (tokens_in + tokens_out + cache_read + cache_write) > 0
+    return (tokens_in + tokens_out + cache_read + cache_write) > 0 or float(row.get("cost", 0.0) or 0.0) > 0
 
 
 def _normalize_model_name(name: str) -> str:
@@ -1034,7 +1038,7 @@ def compute_usage(period: str, date_from: Optional[str] = None, date_to: Optiona
     coding_models = [
         m
         for m in coding_data.get("all_models", [])
-        if (m.get("source") or "").lower() != "openclaw" and _has_visible_token_usage(m)
+        if (m.get("source") or "").lower() != "openclaw" and _has_visible_usage(m)
     ]
 
     total_tokens = openclaw_data["total_tokens"] + sum(v.get("tokens", 0) for v in coding_apps.values())
@@ -1067,14 +1071,14 @@ def compute_usage(period: str, date_from: Optional[str] = None, date_to: Optiona
     }
 
     openclaw_models = sorted(
-        [{"name": k, **v} for k, v in openclaw_data["models"].items() if _has_visible_token_usage(v)],
+        [{"name": k, **v} for k, v in openclaw_data["models"].items() if _has_visible_usage(v)],
         key=model_rank_key,
     )
 
     combined_by_model: Dict[str, dict] = {}
 
     def add_row(row: dict):
-        if not _has_visible_token_usage(row):
+        if not _has_visible_usage(row):
             return
         key = _normalize_model_name(row.get("name", "unknown"))
         cur = combined_by_model.setdefault(

@@ -2444,6 +2444,7 @@ def get_output_speed(
     bucket: str = "auto",
     refresh: bool = False,
     cache_only: bool = False,
+    include_request_windows: bool = True,
 ) -> Dict[str, Any]:
     """Model output throughput, for the standalone Model output speed page.
 
@@ -2489,7 +2490,8 @@ def get_output_speed(
         from .speed_cache import payload
         return payload(str(resolved['from']), str(resolved['to']), view=view,
                        source=source or '', model=model or '', kind=measurement_kind or '',
-                       basis=token_basis or '', bucket=bucket, refresh=refresh, cache_only=cache_only)
+                       basis=token_basis or '', bucket=bucket, refresh=refresh, cache_only=cache_only,
+                       include_request_windows=include_request_windows)
     except UsageDatabaseSchemaTooNewError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except UsageDatabaseNeedsMigrationError as e:

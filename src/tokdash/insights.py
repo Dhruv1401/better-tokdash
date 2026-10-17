@@ -27,7 +27,7 @@ from .compute import (
 )
 from .dateutil import parse_date_range
 from .sources.coding_tools import CodingToolsUsageTracker
-from .usage_store import UsageEntryStore, persistent_usage_db_enabled
+from .usage_store import UsageEntryStore, entry_message_count, persistent_usage_db_enabled
 
 INSIGHTS_SCHEMA_VERSION = 1
 
@@ -136,7 +136,7 @@ def _live_insight_rows(
             }
         bucket["tokens"] += sum(int(entry.get(field, 0) or 0) for field in _TOKEN_FIELDS)
         bucket["cost"] += float(entry.get("cost", 0.0) or 0.0)
-        bucket["messages"] += int(entry.get("messageCount", 1) or 1)
+        bucket["messages"] += entry_message_count(entry)
         bucket["entries"] += 1
 
     return list(grouped.values()), sorted({str(e.get("source") or "unknown") for e in entries})

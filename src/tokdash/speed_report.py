@@ -207,7 +207,8 @@ def _eligible_rows(conn, since_ms, until_ms, sources):
 
 
 def across_model_rows(
-    conn: sqlite3.Connection, day_from: str, day_to: str, *, source: str = ""
+    conn: sqlite3.Connection, day_from: str, day_to: str, *, source: str = "",
+    include_request_windows: bool = True,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Rows for the Across models table, plus the range metadata.
 
@@ -230,10 +231,20 @@ def across_model_rows(
     # without a measurement has no measurement kind to group by, so these are
     # gathered by model and reported against the model's measured rows.
     unmeasured_by_model: dict[tuple[str, str], dict[str, Any]] = {}
+    population_sources: set[str] = set()
+    hidden_request_windows: list[dict[str, Any]] = []
 
 
     for row in _group_rows(conn, since_ms, until_ms):
         if wanted and str(row["source"]).lower() != wanted:
+            continue
+        population_sources.add(str(row["source"]))
+        if not include_request_windows and row["speed_kind"] == "request_window":
+            if row["speed_calls"]:
+                hidden_request_windows.append({
+                    "source": str(row["source"]), "model": _speed_model(row["model"]),
+                    "speed_calls": int(row["speed_calls"]),
+                })
             continue
         key = (row["source"], _speed_model(row["model"]), row["speed_kind"], row["speed_token_basis"])
         entry = groups.setdefault(
@@ -288,8 +299,11 @@ def across_model_rows(
             unmeasured["missing_timing_calls"] += int(row["rows_seen"] or 0)
 
     eligible = _eligible_rows(conn, since_ms, until_ms,
+                             population_sources if not include_request_windows else
                              {key[0] for key, entry in groups.items() if entry['speed_calls']})
     measured_days = _measured_day_map(conn, since_ms, until_ms, date_of_local)
+    if not include_request_windows:
+        measured_days = {key: days for key, days in measured_days.items() if key[2] != "request_window"}
     # Distinct local days each source measured SOMETHING on, unioned across the
     # models, kinds and bases under it. Neither the maximum nor the sum of the
     # per-row counts can recover this: a source with model A measured on day 1 and
@@ -352,7 +366,17 @@ def across_model_rows(
     # rather than the additive columns this function sums.
     from .speed_trend import attach_combined
     # ``source`` was reused as a loop variable above; ``wanted`` is the caller's filter.
-    models = attach_combined(conn, rows, day_from, day_to, measured_days, source=wanted)
+    models = attach_combined(conn, rows, day_from, day_to, measured_days, source=wanted,
+                             include_request_windows=include_request_windows)
+    if not include_request_windows:
+        # A harness can disappear entirely under this filter. Its eligible calls
+        # still belong to the model's population, even though it adds no speed.
+        eligible_by_model: dict[str, int] = {}
+        for (_source, model), count in eligible.items():
+            eligible_by_model[model] = eligible_by_model.get(model, 0) + count
+        for model in models:
+            model["eligible_calls"] = eligible_by_model.get(model["model"])
+            model["coverage"] = coverage_for(model["speed_calls"], model["eligible_calls"])
 
     # Deterministic: measured-call count first (the sample size is what a reader
     # needs to judge a rate by), then the rate, then the key for stability.
@@ -372,6 +396,7 @@ def across_model_rows(
         "days_with_measurements": len(population_days),
         "_days": population_days,
         "models": models,
+        "hidden_request_windows": hidden_request_windows,
     }
     return rows, meta
 
@@ -434,6 +459,7 @@ def temporal_rows(
     model: str,
     measurement_kind: str,
     token_basis: str,
+    include_request_windows: bool = True,
     hour_of_local: Callable[[int], int],
     date_of_local: Callable[[int], str],
 ) -> dict[str, Any]:
@@ -462,9 +488,10 @@ def temporal_rows(
               AND speed_calls > 0
               AND (speed_calls > 0 OR speed_status != 'unknown')
               AND speed_kind = ? AND speed_token_basis = ?
+              AND (? OR speed_kind != 'request_window')
             ORDER BY timestamp
             """,
-            (since_ms, until_ms, source, model, measurement_kind, token_basis),
+            (since_ms, until_ms, source, model, measurement_kind, token_basis, include_request_windows),
         )
     )
     unmeasured_rows = list(
